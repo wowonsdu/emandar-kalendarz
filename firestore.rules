@@ -1,0 +1,216 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function hasUserDocument() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function currentUserRole() {
+      return hasUserDocument() ? currentUser().role : null;
+    }
+
+    function isAdmin() {
+      return (isSignedIn() && request.auth.token.admin == true) ||
+        (hasUserDocument() && currentUserRole() == "admin");
+    }
+
+    function isOwnUser(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isTrainerUser(userId) {
+      return isSignedIn() && userId == request.auth.uid;
+    }
+
+    function isOrganizerUser(userId) {
+      return isSignedIn() && userId == request.auth.uid;
+    }
+
+    function isParticipantUser(trainerUserId, organizerUserId) {
+      return isAdmin() ||
+        isTrainerUser(trainerUserId) ||
+        isOrganizerUser(organizerUserId);
+    }
+
+    function eventDoc(eventId) {
+      return get(/databases/$(database)/documents/trainingEvents/$(eventId));
+    }
+
+    function eventExistsAndPublished(eventId) {
+      return exists(/databases/$(database)/documents/trainingEvents/$(eventId)) &&
+        eventDoc(eventId).data.isPublished == true;
+    }
+
+    function relationReceiverCanUpdate() {
+      return (resource.data.requestedBy == "organizer" &&
+          resource.data.trainerUserId == request.auth.uid) ||
+        (resource.data.requestedBy == "trainer" &&
+          resource.data.organizerUserId == request.auth.uid);
+    }
+
+    function canReadRelation() {
+      return isParticipantUser(resource.data.trainerUserId, resource.data.organizerUserId);
+    }
+
+    match /users/{userId} {
+      allow read: if isAdmin() || isOwnUser(userId);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isOwnUser(userId) &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.profileId == resource.data.profileId
+      );
+    }
+
+    match /trainers/{trainerId} {
+      allow read: if resource.data.isVisible == true || isSignedIn();
+      allow create, update, delete: if isAdmin() || (
+        hasUserDocument() &&
+        currentUserRole() == "trainer" &&
+        request.auth.uid == request.resource.data.userId &&
+        (
+          !exists(/databases/$(database)/documents/trainers/$(trainerId)) ||
+          resource.data.userId == request.auth.uid
+        )
+      );
+    }
+
+    match /organizers/{organizerId} {
+      allow read: if resource.data.isVisible == true || isSignedIn();
+      allow create, update, delete: if isAdmin() || (
+        hasUserDocument() &&
+        currentUserRole() == "organizer" &&
+        request.auth.uid == request.resource.data.userId &&
+        (
+          !exists(/databases/$(database)/documents/organizers/$(organizerId)) ||
+          resource.data.userId == request.auth.uid
+        )
+      );
+    }
+
+    match /trainingEvents/{eventId} {
+      allow read: if resource.data.isPublished == true ||
+        isParticipantUser(resource.data.trainerUserId, resource.data.organizerUserId);
+      allow create, update, delete: if isAdmin() ||
+        isParticipantUser(
+          request.resource.data.trainerUserId,
+          request.resource.data.organizerUserId
+        );
+    }
+
+    match /trainerOrganizerRelations/{relationId} {
+      allow read: if canReadRelation();
+      allow create: if isAdmin() || (
+        hasUserDocument() &&
+        request.resource.data.status == "pending" &&
+        (
+          (
+            currentUserRole() == "organizer" &&
+            request.resource.data.requestedBy == "organizer" &&
+            request.resource.data.organizerUserId == request.auth.uid
+          ) ||
+          (
+            currentUserRole() == "trainer" &&
+            request.resource.data.requestedBy == "trainer" &&
+            request.resource.data.trainerUserId == request.auth.uid
+          )
+        )
+      );
+      allow update: if isAdmin() || (
+        isSignedIn() &&
+        relationReceiverCanUpdate() &&
+        request.resource.data.trainerId == resource.data.trainerId &&
+        request.resource.data.organizerId == resource.data.organizerId &&
+        request.resource.data.trainerUserId == resource.data.trainerUserId &&
+        request.resource.data.organizerUserId == resource.data.organizerUserId &&
+        request.resource.data.requestedBy == resource.data.requestedBy
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /groups/{groupId} {
+      allow read: if resource.data.visibility == "public" ||
+        isParticipantUser(resource.data.trainerUserId, resource.data.organizerUserId);
+      allow create, update, delete: if isAdmin() ||
+        (isSignedIn() && request.resource.data.organizerUserId == request.auth.uid);
+    }
+
+    match /availabilitySlots/{slotId} {
+      allow read: if isAdmin() ||
+        resource.data.trainerUserId == request.auth.uid ||
+        (
+          hasUserDocument() &&
+          currentUserRole() == "organizer" &&
+          resource.data.visibleToOrganizerIds != null &&
+          currentUser().profileId in resource.data.visibleToOrganizerIds
+        );
+      allow create, update, delete: if isAdmin() ||
+        (isSignedIn() && request.resource.data.trainerUserId == request.auth.uid);
+    }
+
+    match /enrollmentRequests/{requestId} {
+      allow read: if isParticipantUser(resource.data.trainerUserId, resource.data.organizerUserId) ||
+        (isSignedIn() && resource.data.submitterUid == request.auth.uid);
+      allow create: if isSignedIn() &&
+        request.resource.data.submitterUid == request.auth.uid &&
+        request.resource.data.photoStatus == "pending" &&
+        eventExistsAndPublished(request.resource.data.eventId) &&
+        request.resource.data.trainerId == eventDoc(request.resource.data.eventId).data.trainerId &&
+        request.resource.data.organizerId == eventDoc(request.resource.data.eventId).data.organizerId;
+      allow update: if isAdmin() ||
+        isParticipantUser(resource.data.trainerUserId, resource.data.organizerUserId) ||
+        (
+          isSignedIn() &&
+          resource.data.submitterUid == request.auth.uid &&
+          request.resource.data.submitterUid == resource.data.submitterUid &&
+          request.resource.data.eventId == resource.data.eventId &&
+          request.resource.data.trainerId == resource.data.trainerId &&
+          request.resource.data.organizerId == resource.data.organizerId &&
+          request.resource.data.trainerUserId == resource.data.trainerUserId &&
+          request.resource.data.organizerUserId == resource.data.organizerUserId &&
+          request.resource.data.imieNazwisko == resource.data.imieNazwisko &&
+          request.resource.data.telefon == resource.data.telefon &&
+          request.resource.data.polecenieOdKogo == resource.data.polecenieOdKogo &&
+          request.resource.data.wiadomosc == resource.data.wiadomosc &&
+          request.resource.data.trainerDecision == resource.data.trainerDecision &&
+          request.resource.data.organizerDecision == resource.data.organizerDecision &&
+          request.resource.data.finalStatus == resource.data.finalStatus
+        );
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /accountRequests/{requestId} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /app_meta/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /app_state/{docId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

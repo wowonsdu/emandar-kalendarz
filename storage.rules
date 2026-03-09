@@ -1,0 +1,68 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function hasUserDocument() {
+      return isSignedIn() &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function currentUser() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return (isSignedIn() && request.auth.token.admin == true) ||
+        (hasUserDocument() && currentUser().role == "admin");
+    }
+
+    function enrollmentRequestDoc(requestId) {
+      return firestore.get(/databases/(default)/documents/enrollmentRequests/$(requestId)).data;
+    }
+
+    function enrollmentRequestExists(requestId) {
+      return firestore.exists(/databases/(default)/documents/enrollmentRequests/$(requestId));
+    }
+
+    function isEnrollmentParticipant(requestId) {
+      return enrollmentRequestExists(requestId) && (
+        isAdmin() ||
+        enrollmentRequestDoc(requestId).trainerUserId == request.auth.uid ||
+        enrollmentRequestDoc(requestId).organizerUserId == request.auth.uid
+      );
+    }
+
+    match /enrollment-photos/{requestId}/original {
+      allow read: if isSignedIn() && isEnrollmentParticipant(requestId);
+      allow write: if isSignedIn() &&
+        request.resource.size < 5 * 1024 * 1024 &&
+        request.resource.contentType.matches("image/(jpeg|png|webp)");
+      allow delete: if isAdmin();
+    }
+
+    function ownsTrainerProfile(ownerUid) {
+      return isSignedIn() && request.auth.uid == ownerUid;
+    }
+
+    function canManageTrainerAvatar(ownerUid) {
+      return ownsTrainerProfile(ownerUid) || isAdmin();
+    }
+
+    match /profile-photos/trainers/{ownerUid}/{fileName} {
+      allow read: if true;
+      allow write: if fileName == "avatar" &&
+        canManageTrainerAvatar(ownerUid) &&
+        request.resource.size < 5 * 1024 * 1024 &&
+        request.resource.contentType.matches("image/(jpeg|png|webp)");
+      allow delete: if fileName == "avatar" && canManageTrainerAvatar(ownerUid);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

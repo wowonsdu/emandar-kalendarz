@@ -719,6 +719,7 @@ export async function decideRelation(
     query(
       collection(db, collections.availabilitySlots),
       where("trainerId", "==", relation.trainerId),
+      where("trainerUserId", "==", relation.trainerUserId),
     ),
   );
 
@@ -762,6 +763,7 @@ export async function createGroup(input: GroupInput, actor: AppUser) {
           query(
             collection(db, collections.relations),
             where("organizerId", "==", actor.profileId),
+            where("organizerUserId", "==", actor.id),
           ),
         ),
       ))
@@ -804,6 +806,7 @@ export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUs
     query(
       collection(db, collections.relations),
       where("trainerId", "==", trainer.id),
+      where("trainerUserId", "==", trainer.userId),
       where("status", "==", "approved"),
     ),
   );
@@ -835,6 +838,7 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
       collection(db, collections.relations),
       where("trainerId", "==", trainer.id),
       where("organizerId", "==", organizer.id),
+      where("trainerUserId", "==", trainer.userId),
       where("status", "==", "approved"),
     ),
   );

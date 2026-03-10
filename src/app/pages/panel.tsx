@@ -37,6 +37,8 @@ import {
   getAvailablePlaces,
   getEventFillRate,
   getRoleLabel,
+  getTrainingEventScheduleBounds,
+  getTrainingEventScheduleDays,
   getTrainingEventStatusLabel,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
@@ -49,8 +51,10 @@ import {
 } from "@/domain/utils";
 import type {
   EmandarBrandStatus,
+  EnrollmentFinalStatus,
   EnrollmentRequest,
   TrainingEvent,
+  TrainingEventScheduleDay,
   TrainingEventStatus,
 } from "@/domain/types";
 
@@ -96,6 +100,236 @@ function getEventOwnerLabel(
       ? trainer?.displayName ?? "Przekazujący Wiedzę"
       : organizer?.displayName ?? "Organizator",
   };
+}
+
+function getEventLocationParts(location: string) {
+  const [rawPrimaryLocation, ...rawExtras] = location
+    .split("+")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const primaryLocation = rawPrimaryLocation ?? location.trim();
+  const [city, ...regionParts] = primaryLocation
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return {
+    primaryLocation,
+    city: city ?? primaryLocation,
+    region: regionParts.length > 0 ? regionParts.join(", ") : null,
+    extraLocationLabel: rawExtras.length > 0 ? rawExtras.join(" + ") : null,
+  };
+}
+
+function getEventCardTitle(
+  event: TrainingEvent,
+  currentUser: ReturnType<typeof useAppState>["currentUser"],
+  store: ReturnType<typeof useAppState>["store"],
+) {
+  const ownerLabels = getEventOwnerLabel(event, store);
+  const locationParts = getEventLocationParts(event.location);
+
+  if (currentUser?.role === "organizer") {
+    const locationLabel = locationParts.region
+      ? `${locationParts.city}, ${locationParts.region}`
+      : locationParts.city;
+    return `${ownerLabels.trainerName}, ${locationLabel}`;
+  }
+
+  return locationParts.primaryLocation;
+}
+
+function getEventCollaborationNotice(event: TrainingEvent) {
+  const trainerStatus = resolveTrainerCollaborationStatus(event);
+  const organizerStatus = resolveOrganizerCollaborationStatus(event);
+
+  if (
+    trainerStatus === "rejected" ||
+    organizerStatus === "rejected"
+  ) {
+    return "Współpraca przy tym szkoleniu została odrzucona i wymaga poprawy po stronie zaproszonych osób.";
+  }
+
+  if (
+    !isSelfManagedTrainingEvent(event) &&
+    (trainerStatus === "pending" || organizerStatus === "pending")
+  ) {
+    return "To szkolenie czeka jeszcze na akceptację współpracy drugiej strony.";
+  }
+
+  return null;
+}
+
+function parseEventTags(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+type ScheduleDayDraft = {
+  startTime: string;
+  endTime: string;
+};
+
+function getDefaultScheduleDayDraft(index: number): ScheduleDayDraft {
+  if (index === 0) {
+    return {
+      startTime: "15:00",
+      endTime: "21:00",
+    };
+  }
+
+  return {
+    startTime: "09:00",
+    endTime: "14:00",
+  };
+}
+
+function resizeScheduleDayDrafts(
+  nextDayCount: number,
+  currentDrafts: ScheduleDayDraft[],
+) {
+  return Array.from({ length: Math.max(1, nextDayCount) }, (_, index) => ({
+    ...(currentDrafts[index] ?? getDefaultScheduleDayDraft(index)),
+  }));
+}
+
+function formatDateInputValue(date: string) {
+  const parsedDate = new Date(date);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "";
+  }
+
+  const localDate = new Date(parsedDate.getTime() - parsedDate.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
+}
+
+function formatTimeInputValue(date: string) {
+  const parsedDate = new Date(date);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "";
+  }
+
+  const localDate = new Date(parsedDate.getTime() - parsedDate.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(11, 16);
+}
+
+function buildScheduleDaysFromDrafts(
+  firstDayDate: string,
+  drafts: ScheduleDayDraft[],
+): TrainingEventScheduleDay[] {
+  if (!firstDayDate) {
+    return [];
+  }
+
+  return drafts.map((draft, index) => {
+    const nextDate = new Date(`${firstDayDate}T00:00`);
+    nextDate.setDate(nextDate.getDate() + index);
+    const localDate = new Date(nextDate.getTime() - nextDate.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 10);
+
+    return {
+      startsAt: new Date(`${localDate}T${draft.startTime}`).toISOString(),
+      endsAt: new Date(`${localDate}T${draft.endTime}`).toISOString(),
+    };
+  });
+}
+
+function getScheduleDraftsFromEvent(event: TrainingEvent) {
+  const scheduleDays = getTrainingEventScheduleDays(event);
+
+  return {
+    firstDayDate: formatDateInputValue(scheduleDays[0]?.startsAt ?? event.startsAt),
+    scheduleDays: scheduleDays.map((day) => ({
+      startTime: formatTimeInputValue(day.startsAt),
+      endTime: formatTimeInputValue(day.endsAt),
+    })),
+  };
+}
+
+function getPanelScheduleRangeLabel(event: TrainingEvent) {
+  const bounds = getTrainingEventScheduleBounds(event);
+
+  if (bounds.dayCount <= 1) {
+    return formatDate(bounds.startsAt);
+  }
+
+  return `od ${formatDate(bounds.startsAt)} do ${formatDate(bounds.endsAt)}`;
+}
+
+function formatMonthLabel(date: Date) {
+  return new Intl.DateTimeFormat("pl-PL", {
+    month: "short",
+    year: "numeric",
+  }).format(date);
+}
+
+function getMonthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getDashboardMonthBuckets(now: Date) {
+  const firstVisibleMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  return Array.from({ length: 3 }, (_, index) => {
+    const start = new Date(firstVisibleMonth.getFullYear(), firstVisibleMonth.getMonth() + index, 1);
+    const end = new Date(
+      firstVisibleMonth.getFullYear(),
+      firstVisibleMonth.getMonth() + index + 1,
+      0,
+      23,
+      59,
+      59,
+      999,
+    );
+
+    return {
+      key: getMonthKey(start),
+      label: formatMonthLabel(start),
+      start,
+      end,
+    };
+  });
+}
+
+function isDateWithinRange(date: string, startsAt: Date, endsAt: Date) {
+  const timestamp = new Date(date).getTime();
+  return timestamp >= startsAt.getTime() && timestamp <= endsAt.getTime();
+}
+
+function getDashboardEventLabel(
+  event: TrainingEvent,
+  currentUser: ReturnType<typeof useAppState>["currentUser"],
+  store: ReturnType<typeof useAppState>["store"],
+) {
+  const title = getEventCardTitle(event, currentUser, store) || event.title;
+  const bounds = getTrainingEventScheduleBounds(event);
+  return `${title} • ${formatDate(bounds.startsAt)}`;
+}
+
+function getDashboardChartHeight(itemCount: number) {
+  return Math.max(240, itemCount * 56);
+}
+
+function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
+  switch (status) {
+    case "accepted":
+      return "Przyjete";
+    case "rejected":
+      return "Odrzucone";
+    case "partial":
+      return "Czesciowe";
+    default:
+      return "Oczekujace";
+  }
 }
 
 function isCommunityTrainerProfile(status: EmandarBrandStatus | undefined) {
@@ -268,6 +502,261 @@ function CommunityPerformanceTooltip({
   );
 }
 
+function DashboardChartCard({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <article className="rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft">
+      <div>
+        <h3 className="text-2xl font-semibold text-brand-navy">{title}</h3>
+        <p className="mt-2 text-sm text-brand-muted">{description}</p>
+      </div>
+      <div className="mt-5">{children}</div>
+    </article>
+  );
+}
+
+function DashboardChartEmptyState({ message }: { message: string }) {
+  return (
+    <div className="flex min-h-[240px] items-center justify-center rounded-[1.5rem] border border-dashed border-brand-line bg-brand-shell px-5 text-center text-sm text-brand-muted">
+      {message}
+    </div>
+  );
+}
+
+function DashboardLegend({
+  items,
+}: {
+  items: Array<{ label: string; color: string }>;
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-[0.18em]">
+      {items.map((item) => (
+        <span
+          key={item.label}
+          className="inline-flex items-center gap-2 rounded-full bg-brand-shell px-3 py-1 text-brand-navy"
+        >
+          <span
+            className="h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: item.color }}
+          />
+          {item.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+type DashboardEventBarDatum = {
+  id: string;
+  label: string;
+  startsAt: string;
+  statusLabel: string;
+  status: TrainingEventStatus;
+  fillRate: number;
+  missingPeople: number;
+  occupiedPlaces: number;
+  capacity: number;
+  availablePlaces: number;
+};
+
+type DashboardMonthCapacityDatum = {
+  key: string;
+  label: string;
+  totalCapacity: number;
+  enrolledCount: number;
+  availablePlaces: number;
+};
+
+type DashboardMonthRequestsDatum = {
+  key: string;
+  label: string;
+  total: number;
+};
+
+type DashboardMonthDecisionDatum = {
+  key: string;
+  label: string;
+  accepted: number;
+  pending: number;
+  rejected: number;
+  partial: number;
+};
+
+type DashboardMonthOutcomeDatum = {
+  key: string;
+  label: string;
+  confirmed: number;
+  cancelled: number;
+};
+
+function MissingPeopleTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardEventBarDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
+      <p className="mt-2 text-sm text-brand-navy">Brakuje: {item.missingPeople} osob</p>
+      <p className="text-sm text-brand-navy">Zapisani: {item.occupiedPlaces}/{item.capacity}</p>
+    </div>
+  );
+}
+
+function FillRateTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardEventBarDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
+      <p className="mt-2 text-sm text-brand-navy">Zapelnienie: {item.fillRate}%</p>
+      <p className="text-sm text-brand-navy">Wolne miejsca: {item.availablePlaces}</p>
+    </div>
+  );
+}
+
+function CapacityByMonthTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardMonthCapacityDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <p className="mt-2 text-sm text-brand-navy">Zapisani: {item.enrolledCount}</p>
+      <p className="text-sm text-brand-navy">Liczba miejsc: {item.totalCapacity}</p>
+      <p className="text-sm text-brand-navy">Wolne miejsca: {item.availablePlaces}</p>
+    </div>
+  );
+}
+
+function RequestsByMonthTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardMonthRequestsDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <p className="mt-2 text-sm text-brand-navy">Nowe zgloszenia: {item.total}</p>
+    </div>
+  );
+}
+
+function RequestDecisionsTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardMonthDecisionDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <div className="mt-2 space-y-1 text-sm text-brand-navy">
+        <p>{getEnrollmentFinalStatusLabel("accepted")}: {item.accepted}</p>
+        <p>{getEnrollmentFinalStatusLabel("pending")}: {item.pending}</p>
+        <p>{getEnrollmentFinalStatusLabel("partial")}: {item.partial}</p>
+        <p>{getEnrollmentFinalStatusLabel("rejected")}: {item.rejected}</p>
+      </div>
+    </div>
+  );
+}
+
+function EventOutcomesTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardMonthOutcomeDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <p className="mt-2 text-sm text-brand-navy">Potwierdzone: {item.confirmed}</p>
+      <p className="text-sm text-brand-navy">Anulowane: {item.cancelled}</p>
+    </div>
+  );
+}
+
+function CancelledEventsTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardEventBarDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
+      <p className="mt-2 text-sm text-brand-navy">Liczba miejsc: {item.capacity}</p>
+      <p className="text-sm text-brand-navy">Zapisani przed anulacja: {item.occupiedPlaces}</p>
+    </div>
+  );
+}
+
 function EnrollmentPhotoCard({ request }: { request: EnrollmentRequest }) {
   const { resolveEnrollmentPhoto } = useAppState();
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -406,6 +895,166 @@ export function DashboardPage() {
     [activeCommunityEvents, confirmedCommunityEvents],
   );
   const hasCommunityKpiData = communityPerformanceData.length > 0;
+  const dashboardMonthBuckets = useMemo(() => getDashboardMonthBuckets(new Date()), []);
+  const dashboardWindow = dashboardMonthBuckets.at(-1);
+  const analyticsEventsInRange = useMemo(() => {
+    if (!dashboardWindow || (currentUser.role !== "trainer" && currentUser.role !== "organizer")) {
+      return [];
+    }
+
+    const windowStart = new Date();
+    return relevantEvents.filter((event) => isDateWithinRange(event.startsAt, windowStart, dashboardWindow.end));
+  }, [currentUser.role, dashboardWindow, relevantEvents]);
+  const analyticsActiveEvents = useMemo(
+    () =>
+      analyticsEventsInRange.filter((event) => {
+        const status = resolveTrainingEventStatus(event.status);
+        return status === "active" || status === "confirmed";
+      }),
+    [analyticsEventsInRange],
+  );
+  const analyticsCancelledEvents = useMemo(
+    () =>
+      analyticsEventsInRange.filter(
+        (event) => resolveTrainingEventStatus(event.status) === "cancelled",
+      ),
+    [analyticsEventsInRange],
+  );
+  const dashboardEventData = useMemo(
+    () =>
+      analyticsActiveEvents.map((event) => ({
+        id: event.id,
+        label: getDashboardEventLabel(event, currentUser, store),
+        startsAt: event.startsAt,
+        statusLabel: getTrainingEventStatusLabel(event.status),
+        status: resolveTrainingEventStatus(event.status),
+        fillRate: getEventFillRate(event),
+        missingPeople: getAvailablePlaces(event),
+        occupiedPlaces: event.enrolledCount,
+        capacity: event.capacity,
+        availablePlaces: getAvailablePlaces(event),
+      })),
+    [analyticsActiveEvents, currentUser, store],
+  );
+  const missingPeopleData = useMemo(
+    () =>
+      [...dashboardEventData].sort((left, right) => {
+        if (right.missingPeople !== left.missingPeople) {
+          return right.missingPeople - left.missingPeople;
+        }
+
+        return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+      }),
+    [dashboardEventData],
+  );
+  const fillRateData = useMemo(
+    () =>
+      sortEventsByFillRate(analyticsActiveEvents).map((event) => ({
+        id: event.id,
+        label: getDashboardEventLabel(event, currentUser, store),
+        startsAt: event.startsAt,
+        statusLabel: getTrainingEventStatusLabel(event.status),
+        status: resolveTrainingEventStatus(event.status),
+        fillRate: getEventFillRate(event),
+        missingPeople: getAvailablePlaces(event),
+        occupiedPlaces: event.enrolledCount,
+        capacity: event.capacity,
+        availablePlaces: getAvailablePlaces(event),
+      })),
+    [analyticsActiveEvents, currentUser, store],
+  );
+  const capacityByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => {
+        const monthEvents = analyticsActiveEvents.filter((event) =>
+          isDateWithinRange(event.startsAt, bucket.start, bucket.end),
+        );
+
+        return {
+          key: bucket.key,
+          label: bucket.label,
+          totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
+          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
+        };
+      }),
+    [analyticsActiveEvents, dashboardMonthBuckets],
+  );
+  const cancelledEventsData = useMemo(
+    () =>
+      sortEventsByDate(analyticsCancelledEvents).map((event) => ({
+        id: event.id,
+        label: getDashboardEventLabel(event, currentUser, store),
+        startsAt: event.startsAt,
+        statusLabel: getTrainingEventStatusLabel(event.status),
+        status: resolveTrainingEventStatus(event.status),
+        fillRate: getEventFillRate(event),
+        missingPeople: getAvailablePlaces(event),
+        occupiedPlaces: event.enrolledCount,
+        capacity: event.capacity,
+        availablePlaces: getAvailablePlaces(event),
+      })),
+    [analyticsCancelledEvents, currentUser, store],
+  );
+  const analyticsRequestsInRange = useMemo(() => {
+    if (!dashboardWindow || (currentUser.role !== "trainer" && currentUser.role !== "organizer")) {
+      return [];
+    }
+
+    const rangeStart = dashboardMonthBuckets[0]?.start ?? new Date();
+    return relevantRequests.filter((request) =>
+      isDateWithinRange(request.createdAt, rangeStart, dashboardWindow.end),
+    );
+  }, [currentUser.role, dashboardMonthBuckets, dashboardWindow, relevantRequests]);
+  const requestsByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => ({
+        key: bucket.key,
+        label: bucket.label,
+        total: analyticsRequestsInRange.filter((request) =>
+          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
+        ).length,
+      })),
+    [analyticsRequestsInRange, dashboardMonthBuckets],
+  );
+  const requestDecisionsByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => {
+        const monthRequests = analyticsRequestsInRange.filter((request) =>
+          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
+        );
+
+        return {
+          key: bucket.key,
+          label: bucket.label,
+          accepted: monthRequests.filter((request) => request.finalStatus === "accepted").length,
+          pending: monthRequests.filter((request) => request.finalStatus === "pending").length,
+          rejected: monthRequests.filter((request) => request.finalStatus === "rejected").length,
+          partial: monthRequests.filter((request) => request.finalStatus === "partial").length,
+        };
+      }),
+    [analyticsRequestsInRange, dashboardMonthBuckets],
+  );
+  const eventOutcomesByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => ({
+        key: bucket.key,
+        label: bucket.label,
+        confirmed: analyticsEventsInRange.filter(
+          (event) =>
+            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
+            resolveTrainingEventStatus(event.status) === "confirmed",
+        ).length,
+        cancelled: analyticsEventsInRange.filter(
+          (event) =>
+            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
+            resolveTrainingEventStatus(event.status) === "cancelled",
+        ).length,
+      })),
+    [analyticsEventsInRange, dashboardMonthBuckets],
+  );
+  const shouldShowRoleAnalytics =
+    currentUser.role === "trainer" || currentUser.role === "organizer";
 
   return (
     <PanelSection
@@ -429,6 +1078,242 @@ export function DashboardPage() {
           icon={Users}
         />
       </div>
+
+      {shouldShowRoleAnalytics && (
+        <>
+          <section className="space-y-4">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                Oblozenie na najblizsze miesiace
+              </p>
+              <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
+                Nadchodzace szkolenia i ile osob jeszcze brakuje
+              </h3>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-4">
+              <DashboardChartCard
+                title="Brakuje osob do domkniecia"
+                description="Szybki podglad, ile miejsc trzeba jeszcze dopelnic w najblizszych terminach."
+              >
+                {missingPeopleData.length === 0 ? (
+                  <DashboardChartEmptyState message="Brak aktywnych albo potwierdzonych wydarzen w najblizszych 3 miesiacach." />
+                ) : (
+                  <div style={{ height: `${getDashboardChartHeight(missingPeopleData.length)}px` }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={missingPeopleData}
+                        layout="vertical"
+                        margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                      >
+                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                        <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
+                        <YAxis
+                          type="category"
+                          dataKey="label"
+                          width={190}
+                          tick={{ fill: "#123e78", fontSize: 12 }}
+                        />
+                        <Tooltip content={<MissingPeopleTooltip />} />
+                        <Bar dataKey="missingPeople" fill="#174f9a" radius={[0, 14, 14, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </DashboardChartCard>
+
+              <DashboardChartCard
+                title="Zapelnienie terminow"
+                description="Porownanie wydarzen wedlug procentu zajetych miejsc."
+              >
+                {fillRateData.length === 0 ? (
+                  <DashboardChartEmptyState message="Brak wydarzen do porownania w tym oknie czasu." />
+                ) : (
+                  <div style={{ height: `${getDashboardChartHeight(fillRateData.length)}px` }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={fillRateData}
+                        layout="vertical"
+                        margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                      >
+                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                        <XAxis
+                          type="number"
+                          domain={[0, 100]}
+                          tickFormatter={(value) => `${value}%`}
+                          stroke="#6982a0"
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="label"
+                          width={190}
+                          tick={{ fill: "#123e78", fontSize: 12 }}
+                        />
+                        <Tooltip content={<CancelledEventsTooltip />} />
+                        <Bar dataKey="fillRate" radius={[0, 14, 14, 0]}>
+                          {fillRateData.map((item) => (
+                            <Cell key={item.id} fill={getCommunityChartColor(item.status)} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </DashboardChartCard>
+
+              <DashboardChartCard
+                title="Oblozenie w miesiacach"
+                description="Laczna liczba zapisanych osob versus cala pula miejsc w nadchodzacych miesiacach."
+              >
+                <DashboardLegend
+                  items={[
+                    { label: "Zapisani", color: "#174f9a" },
+                    { label: "Liczba miejsc", color: "#88aee0" },
+                  ]}
+                />
+                <div className="h-[280px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={capacityByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis dataKey="label" stroke="#6982a0" />
+                      <YAxis allowDecimals={false} stroke="#6982a0" />
+                      <Tooltip content={<CapacityByMonthTooltip />} />
+                      <Bar dataKey="enrolledCount" fill="#174f9a" radius={[10, 10, 0, 0]} />
+                      <Bar dataKey="totalCapacity" fill="#88aee0" radius={[10, 10, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </DashboardChartCard>
+
+              <DashboardChartCard
+                title="Anulowane grupy w okresie"
+                description="Lista anulowanych terminow z tego samego okna czasowego."
+              >
+                {cancelledEventsData.length === 0 ? (
+                  <DashboardChartEmptyState message="Brak anulowanych wydarzen w najblizszych 3 miesiacach." />
+                ) : (
+                  <div style={{ height: `${getDashboardChartHeight(cancelledEventsData.length)}px` }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={cancelledEventsData}
+                        layout="vertical"
+                        margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                      >
+                        <CartesianGrid stroke="#f1d5d5" strokeDasharray="3 3" />
+                        <XAxis type="number" allowDecimals={false} stroke="#b35a5a" />
+                        <YAxis
+                          type="category"
+                          dataKey="label"
+                          width={190}
+                          tick={{ fill: "#123e78", fontSize: 12 }}
+                        />
+                        <Tooltip content={<FillRateTooltip />} />
+                        <Bar dataKey="capacity" fill="#c84b4b" radius={[0, 14, 14, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </DashboardChartCard>
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                Operacyjnie
+              </p>
+              <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
+                Jak splywaja zgloszenia i czym koncza sie terminy
+              </h3>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-3">
+              <DashboardChartCard
+                title="Zgloszenia w miesiacach"
+                description="Nowe prosby o dolaczenie policzone po miesiacu utworzenia zgloszenia."
+              >
+                {analyticsRequestsInRange.length === 0 ? (
+                  <DashboardChartEmptyState message="Brak zgloszen w biezacym oknie 3 miesiecy." />
+                ) : (
+                  <div className="h-[280px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={requestsByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                        <XAxis dataKey="label" stroke="#6982a0" />
+                        <YAxis allowDecimals={false} stroke="#6982a0" />
+                        <Tooltip content={<RequestsByMonthTooltip />} />
+                        <Bar dataKey="total" fill="#174f9a" radius={[10, 10, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+              </DashboardChartCard>
+
+              <DashboardChartCard
+                title="Statusy decyzji w miesiacach"
+                description="Widac, ile zgloszen nadal czeka, a ile jest juz rozstrzygnietych."
+              >
+                {analyticsRequestsInRange.length === 0 ? (
+                  <DashboardChartEmptyState message="Brak zgloszen do pokazania w tym okresie." />
+                ) : (
+                  <>
+                    <DashboardLegend
+                      items={[
+                        { label: "Przyjete", color: "#0ea5a4" },
+                        { label: "Oczekujace", color: "#174f9a" },
+                        { label: "Czesciowe", color: "#f59e0b" },
+                        { label: "Odrzucone", color: "#c84b4b" },
+                      ]}
+                    />
+                    <div className="h-[280px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={requestDecisionsByMonthData}
+                          margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+                        >
+                          <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                          <XAxis dataKey="label" stroke="#6982a0" />
+                          <YAxis allowDecimals={false} stroke="#6982a0" />
+                          <Tooltip content={<RequestDecisionsTooltip />} />
+                          <Bar dataKey="accepted" stackId="status" fill="#0ea5a4" />
+                          <Bar dataKey="pending" stackId="status" fill="#174f9a" />
+                          <Bar dataKey="partial" stackId="status" fill="#f59e0b" />
+                          <Bar dataKey="rejected" stackId="status" fill="#c84b4b" radius={[10, 10, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </>
+                )}
+              </DashboardChartCard>
+
+              <DashboardChartCard
+                title="Potwierdzenia i anulacje"
+                description="Miesieczny wynik wydarzen, ktore doszly do skutku albo wypadly z kalendarza."
+              >
+                <DashboardLegend
+                  items={[
+                    { label: "Potwierdzone", color: "#0ea5a4" },
+                    { label: "Anulowane", color: "#c84b4b" },
+                  ]}
+                />
+                <div className="h-[280px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={eventOutcomesByMonthData}
+                      margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+                    >
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis dataKey="label" stroke="#6982a0" />
+                      <YAxis allowDecimals={false} stroke="#6982a0" />
+                      <Tooltip content={<EventOutcomesTooltip />} />
+                      <Bar dataKey="confirmed" fill="#0ea5a4" radius={[10, 10, 0, 0]} />
+                      <Bar dataKey="cancelled" fill="#c84b4b" radius={[10, 10, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </DashboardChartCard>
+            </div>
+          </section>
+        </>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
@@ -1330,8 +2215,6 @@ export function EventsPage() {
     currentUser,
     decideTrainingEventCollaboration,
     store,
-    updateTrainingEventBrandStatus,
-    updateTrainingEventManagement,
   } = useAppState();
 
   if (!currentUser) {
@@ -1397,31 +2280,19 @@ export function EventsPage() {
     selfManagedByTrainer: false,
     summary: "",
     description: "",
+    tags: "",
     type: "Warsztat stacjonarny",
     status: "active" as TrainingEventStatus,
-    startsAt: "",
-    endsAt: "",
-    dayTwoStartsAt: "",
-    dayTwoEndsAt: "",
+    firstDayDate: "",
+    scheduleDays: resizeScheduleDayDrafts(2, []),
     location: "",
     capacity: "20",
     minimumParticipants: "10",
     isPublished: true,
   });
+  const selfManagedOrganizerPlaceholder = "-";
   const [creatingEvent, setCreatingEvent] = useState(false);
-  const [eventManagementDrafts, setEventManagementDrafts] = useState<
-    Record<
-      string,
-      {
-        status: TrainingEventStatus;
-        capacity: string;
-        minimumParticipants: string;
-        transferTargetEventId: string;
-      }
-    >
-  >({});
   const [savingEventId, setSavingEventId] = useState<string | null>(null);
-  const [transferringEventId, setTransferringEventId] = useState<string | null>(null);
 
   if (
     isCreatorView &&
@@ -1429,49 +2300,6 @@ export function EventsPage() {
     currentUser.role !== "organizer"
   ) {
     return <Navigate to="/panel/szkolenia" replace />;
-  }
-
-  function getEventManagementDraft(event: TrainingEvent) {
-    return (
-      eventManagementDrafts[event.id] ?? {
-        status: resolveTrainingEventStatus(event.status),
-        capacity: String(event.capacity),
-        minimumParticipants: String(resolveMinimumParticipants(event)),
-        transferTargetEventId: "",
-      }
-    );
-  }
-
-  function updateEventManagementDraft(
-    event: TrainingEvent,
-    patch: Partial<ReturnType<typeof getEventManagementDraft>>,
-  ) {
-    const fallbackDraft = {
-      status: resolveTrainingEventStatus(event.status),
-      capacity: String(event.capacity),
-      minimumParticipants: String(resolveMinimumParticipants(event)),
-      transferTargetEventId: "",
-    };
-
-    setEventManagementDrafts((previous) => ({
-      ...previous,
-      [event.id]: {
-        ...(previous[event.id] ?? fallbackDraft),
-        ...patch,
-      },
-    }));
-  }
-
-  function clearEventManagementDraft(eventId: string) {
-    setEventManagementDrafts((previous) => {
-      if (!(eventId in previous)) {
-        return previous;
-      }
-
-      const next = { ...previous };
-      delete next[eventId];
-      return next;
-    });
   }
 
   useEffect(() => {
@@ -1557,14 +2385,15 @@ export function EventsPage() {
                       : undefined,
                   summary: trainerEventForm.summary,
                   description: trainerEventForm.description,
+                  tags: parseEventTags(trainerEventForm.tags),
+                  scheduleDays: buildScheduleDaysFromDrafts(
+                    trainerEventForm.firstDayDate,
+                    trainerEventForm.scheduleDays,
+                  ),
                   type: isCommunityTrainer
                     ? "Wydarzenie społeczności"
                     : trainerEventForm.type,
                   status: trainerEventForm.status,
-                  startsAt: trainerEventForm.startsAt,
-                  endsAt: trainerEventForm.endsAt,
-                  dayTwoStartsAt: trainerEventForm.dayTwoStartsAt,
-                  dayTwoEndsAt: trainerEventForm.dayTwoEndsAt,
                   location: trainerEventForm.location,
                   capacity: Number(trainerEventForm.capacity),
                   minimumParticipants: Number(trainerEventForm.minimumParticipants),
@@ -1583,11 +2412,10 @@ export function EventsPage() {
                       : previous.trainerId,
                   summary: "",
                   description: "",
+                  tags: "",
                   status: "active",
-                  startsAt: "",
-                  endsAt: "",
-                  dayTwoStartsAt: "",
-                  dayTwoEndsAt: "",
+                  firstDayDate: "",
+                  scheduleDays: resizeScheduleDayDrafts(2, []),
                   location: "",
                   capacity: "20",
                   minimumParticipants: "10",
@@ -1652,7 +2480,11 @@ export function EventsPage() {
                   <select
                     required={!trainerEventForm.selfManagedByTrainer}
                     disabled={trainerEventForm.selfManagedByTrainer}
-                    value={trainerEventForm.organizerId}
+                    value={
+                      trainerEventForm.selfManagedByTrainer
+                        ? selfManagedOrganizerPlaceholder
+                        : trainerEventForm.organizerId
+                    }
                     onChange={(event) =>
                       setTrainerEventForm((previous) => ({
                         ...previous,
@@ -1661,6 +2493,7 @@ export function EventsPage() {
                     }
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                   >
+                    <option value={selfManagedOrganizerPlaceholder}>-</option>
                     {availableOrganizers.map((organizer) => (
                       <option key={organizer.id} value={organizer.id}>
                         {organizer.displayName}
@@ -1671,19 +2504,22 @@ export function EventsPage() {
               )}
 
               {!isCommunityTrainer && currentUser.role === "trainer" && (
-                <label className="flex items-center gap-3 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy">
-                  <input
-                    type="checkbox"
-                    checked={trainerEventForm.selfManagedByTrainer}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        selfManagedByTrainer: event.target.checked,
-                      }))
-                    }
-                  />
-                  <span className="text-sm font-semibold">
-                    Sam organizuję to szkolenie
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Tryb organizacji</span>
+                  <span className="flex min-h-[54px] items-center rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy">
+                    <input
+                      type="checkbox"
+                      checked={trainerEventForm.selfManagedByTrainer}
+                      onChange={(event) =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          selfManagedByTrainer: event.target.checked,
+                        }))
+                      }
+                    />
+                    <span className="ml-3 text-sm font-semibold">
+                      Sam organizuje to szkolenie
+                    </span>
                   </span>
                 </label>
               )}
@@ -1764,6 +2600,26 @@ export function EventsPage() {
 
               <label className="grid gap-2 xl:col-span-2">
                 <span className="text-sm font-semibold text-brand-navy">
+                  Tagi wydarzenia
+                </span>
+                <input
+                  value={trainerEventForm.tags}
+                  onChange={(event) =>
+                    setTrainerEventForm((previous) => ({
+                      ...previous,
+                      tags: event.target.value,
+                    }))
+                  }
+                  placeholder="np. ognisko, pozywienie, nocleg, samodzielna kuchnia"
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+                <span className="text-sm text-brand-muted">
+                  Oddziel tagi przecinkami. Pokaza sie publicznie jako chmura tagow.
+                </span>
+              </label>
+
+              <label className="grid gap-2 xl:col-span-2">
+                <span className="text-sm font-semibold text-brand-navy">
                   {isCommunityTrainer
                     ? "Informacja do prośby o dołączenie"
                     : "Dłuższy opis na widoku szczegółowym"}
@@ -1788,15 +2644,15 @@ export function EventsPage() {
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Dzień 1: start</span>
+                <span className="text-sm font-semibold text-brand-navy">Pierwszy dzien szkolenia</span>
                 <input
                   required
-                  type="datetime-local"
-                  value={trainerEventForm.startsAt}
+                  type="date"
+                  value={trainerEventForm.firstDayDate}
                   onChange={(event) =>
                     setTrainerEventForm((previous) => ({
                       ...previous,
-                      startsAt: event.target.value,
+                      firstDayDate: event.target.value,
                     }))
                   }
                   className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
@@ -1804,53 +2660,98 @@ export function EventsPage() {
               </label>
 
               <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Dzień 1: koniec</span>
+                <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
                 <input
                   required
-                  type="datetime-local"
-                  value={trainerEventForm.endsAt}
-                  onChange={(event) =>
+                  min={1}
+                  type="number"
+                  value={trainerEventForm.scheduleDays.length}
+                  onChange={(event) => {
+                    const nextDayCount = Math.max(1, Number(event.target.value) || 1);
                     setTrainerEventForm((previous) => ({
                       ...previous,
-                      endsAt: event.target.value,
-                    }))
-                  }
+                      scheduleDays: resizeScheduleDayDrafts(
+                        nextDayCount,
+                        previous.scheduleDays,
+                      ),
+                    }));
+                  }}
                   className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
               </label>
 
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Dzień 2: start</span>
-                <input
-                  required
-                  type="datetime-local"
-                  value={trainerEventForm.dayTwoStartsAt}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      dayTwoStartsAt: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
+              <div className="grid gap-4 xl:col-span-2">
+                {trainerEventForm.scheduleDays.map((day, index) => {
+                  const draftScheduleDays = buildScheduleDaysFromDrafts(
+                    trainerEventForm.firstDayDate,
+                    trainerEventForm.scheduleDays,
+                  );
 
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Dzień 2: koniec</span>
-                <input
-                  required
-                  type="datetime-local"
-                  value={trainerEventForm.dayTwoEndsAt}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      dayTwoEndsAt: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
+                  return (
+                    <div
+                      key={`creator-day-${index + 1}`}
+                      className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+                    >
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                          Dzien {index + 1}
+                        </p>
+                        <p className="text-sm text-brand-muted">
+                          {draftScheduleDays[index]?.startsAt
+                            ? formatDate(draftScheduleDays[index].startsAt)
+                            : "Wybierz pierwszy dzien"}
+                        </p>
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <label className="grid gap-2">
+                          <span className="text-sm font-semibold text-brand-navy">Godzina startu</span>
+                          <input
+                            required
+                            type="time"
+                            value={day.startTime}
+                            onChange={(event) =>
+                              setTrainerEventForm((previous) => ({
+                                ...previous,
+                                scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? {
+                                        ...item,
+                                        startTime: event.target.value,
+                                      }
+                                    : item,
+                                ),
+                              }))
+                            }
+                            className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
+                          />
+                        </label>
+                        <label className="grid gap-2">
+                          <span className="text-sm font-semibold text-brand-navy">Godzina konca</span>
+                          <input
+                            required
+                            type="time"
+                            value={day.endTime}
+                            onChange={(event) =>
+                              setTrainerEventForm((previous) => ({
+                                ...previous,
+                                scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? {
+                                        ...item,
+                                        endTime: event.target.value,
+                                      }
+                                    : item,
+                                ),
+                              }))
+                            }
+                            className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Limit miejsc</span>
                 <input
@@ -1920,288 +2821,122 @@ export function EventsPage() {
           />
         )}
         {sortEventsByDate(events).map((event) => {
-          const managementDraft = getEventManagementDraft(event);
-          const ownerLabels = getEventOwnerLabel(event, store);
           const eventRequests = store.enrollmentRequests.filter(
             (item) => item.eventId === event.id,
           );
           const activeRequestsCount = eventRequests.filter(
             (item) => item.finalStatus !== "rejected",
           ).length;
-          const canManageEvent = canManageTrainingEvent(event, currentUser);
           const canDecideCollaboration = canDecideTrainingEventCollaboration(
             event,
             currentUser,
           );
-          const trainerCollaborationStatus = resolveTrainerCollaborationStatus(event);
-          const organizerCollaborationStatus = resolveOrganizerCollaborationStatus(event);
-          const transferOptions = sortEventsByDate(
-            events.filter((item) => {
-              if (item.id === event.id) {
-                return false;
-              }
-
-              if (currentUser.role === "trainer") {
-                return item.trainerId === event.trainerId;
-              }
-
-              if (currentUser.role === "organizer") {
-                return item.organizerId === event.organizerId;
-              }
-
-              return true;
-            }),
-          );
+          const ownerLabels = getEventOwnerLabel(event, store);
+          const listTitle = getEventCardTitle(event, currentUser, store);
+          const locationParts = getEventLocationParts(event.location);
+          const collaborationNotice = getEventCollaborationNotice(event);
+          const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
+          const scheduleDays = getTrainingEventScheduleDays(event);
 
           return (
-          <article
-            key={event.id}
-            className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <h3 className="text-2xl font-semibold text-brand-navy">{event.location}</h3>
-                <p className="mt-2 text-brand-muted">{event.summary}</p>
+            <article
+              key={event.id}
+              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="max-w-3xl">
+                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                    {event.title}
+                  </p>
+                  <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
+                    {listTitle}
+                  </h3>
+                  <p className="mt-2 text-brand-muted">{event.summary}</p>
+                </div>
+                <div className="flex flex-col items-start gap-3 sm:items-end">
+                  <Link
+                    to={`/panel/szkolenia/${event.id}`}
+                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                  >
+                    Otworz szkolenie
+                  </Link>
+                  <div className="flex flex-wrap gap-2 sm:justify-end">
+                    <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                      {event.isPublished ? "opublikowane" : "ukryte"}
+                    </span>
+                    <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                      {getTrainingEventStatusLabel(event.status)}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                  {event.isPublished ? "opublikowane" : "ukryte"}
-                </span>
-                <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                  {getBrandStatusLabel(event.brandStatus)}
-                </span>
-                <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                  {getTrainingEventStatusLabel(event.status)}
-                </span>
-              </div>
-            </div>
-            <div className="mt-5 grid gap-3 text-sm text-brand-muted md:grid-cols-4">
-              <p>
-                {formatDate(event.startsAt)}
-                {event.dayTwoStartsAt ? ` / ${formatDate(event.dayTwoStartsAt)}` : ""}
-              </p>
-              <p>
-                {formatShortTime(event.startsAt)} - {formatShortTime(event.endsAt)}
-                {event.dayTwoStartsAt && event.dayTwoEndsAt
-                  ? ` • ${formatShortTime(event.dayTwoStartsAt)} - ${formatShortTime(event.dayTwoEndsAt)}`
-                  : ""}
-              </p>
-              <p>
-                {event.enrolledCount}/{event.capacity} uczestników
-              </p>
-              <p>
-                Prog: {resolveMinimumParticipants(event)} osob, aktywne zgloszenia:{" "}
-                {activeRequestsCount}
-              </p>
-            </div>
-            <div className="mt-5 grid gap-3 text-sm text-brand-muted md:grid-cols-2">
-              <p>Przekazujący Wiedzę: {ownerLabels.trainerName}</p>
-              <p>Organizator: {ownerLabels.organizerName}</p>
-              <p>
-                Współpraca trenera:{" "}
-                {getEventCollaborationStatusLabel(trainerCollaborationStatus)}
-              </p>
-              <p>
-                Współpraca organizatora:{" "}
-                {getEventCollaborationStatusLabel(organizerCollaborationStatus)}
-              </p>
-            </div>
-            {canDecideCollaboration && (
-              <CollaborationActionBar
-                pending={savingEventId === event.id}
-                onDecision={async (status) => {
-                  setSavingEventId(event.id);
 
-                  try {
-                    await decideTrainingEventCollaboration(event.id, status);
-                    toast.success("Zapisano decyzję o współpracy.");
-                  } catch (error) {
-                    toast.error(
-                      error instanceof Error
-                        ? error.message
-                        : "Nie udało się zapisać decyzji.",
-                    );
-                  } finally {
-                    setSavingEventId(null);
-                  }
-                }}
-              />
-            )}
-            {!canManageEvent && (
-              <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
-                To szkolenie czeka jeszcze na akceptację współpracy drugiej strony.
-              </p>
-            )}
-            {canManageEvent && <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4">
-              <div className="grid gap-4 xl:grid-cols-[1fr_220px_220px_1fr]">
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">
-                    Status wydarzenia
-                  </span>
-                  <select
-                    value={managementDraft.status}
-                    onChange={(changeEvent) =>
-                      updateEventManagementDraft(event, {
-                        status: changeEvent.target.value as TrainingEventStatus,
-                      })
-                    }
-                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                  >
-                    <option value="active">Aktywne</option>
-                    <option value="confirmed">Potwierdzone zorganizowanie</option>
-                    <option value="cancelled">Anulowane</option>
-                  </select>
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Maks. miejsc</span>
-                  <input
-                    min={1}
-                    type="number"
-                    value={managementDraft.capacity}
-                    onChange={(changeEvent) =>
-                      updateEventManagementDraft(event, {
-                        capacity: changeEvent.target.value,
-                      })
-                    }
-                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                  />
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">
-                    Prog uczestnikow
-                  </span>
-                  <input
-                    min={1}
-                    type="number"
-                    value={managementDraft.minimumParticipants}
-                    onChange={(changeEvent) =>
-                      updateEventManagementDraft(event, {
-                        minimumParticipants: changeEvent.target.value,
-                      })
-                    }
-                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                  />
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">
-                    Przenies aktywne zgloszenia do
-                  </span>
-                  <select
-                    value={managementDraft.transferTargetEventId}
-                    onChange={(changeEvent) =>
-                      updateEventManagementDraft(event, {
-                        transferTargetEventId: changeEvent.target.value,
-                      })
-                    }
-                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                  >
-                    <option value="">Bez przenoszenia</option>
-                    {transferOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.location} | {formatDate(option.startsAt)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              <div className="mt-5 space-y-3 text-sm text-brand-muted">
+                <div className="flex flex-wrap gap-x-5 gap-y-2">
+                  <span>{scheduleRangeLabel}</span>
+                  <span>{event.enrolledCount}/{event.capacity} miejsc</span>
+                  <span>Prog: {resolveMinimumParticipants(event)} osob</span>
+                  <span>Aktywne zgloszenia: {activeRequestsCount}</span>
+                  {currentUser.role !== "organizer" && (
+                    <span>Organizator: {ownerLabels.organizerName}</span>
+                  )}
+                </div>
+                <div
+                  className={`grid gap-3 ${
+                    scheduleDays.length > 1 ? "md:grid-cols-2" : "md:grid-cols-1"
+                  }`}
+                >
+                  {scheduleDays.map((day, index) => (
+                    <div
+                      key={`${event.id}-schedule-${index + 1}`}
+                      className="rounded-2xl bg-brand-shell px-4 py-3"
+                    >
+                      <div className="text-sm font-semibold text-brand-navy">
+                        Dzien {index + 1}
+                      </div>
+                      <p>{formatDate(day.startsAt)}</p>
+                      <p>
+                        {formatShortTime(day.startsAt)} - {formatShortTime(day.endsAt)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  disabled={savingEventId === event.id}
-                  onClick={async () => {
+
+              {locationParts.extraLocationLabel && (
+                <p className="mt-3 text-sm text-brand-muted">
+                  Dodatkowo: {locationParts.extraLocationLabel}
+                </p>
+              )}
+
+              {collaborationNotice && (
+                <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
+                  {collaborationNotice}
+                </p>
+              )}
+
+              {canDecideCollaboration && (
+                <CollaborationActionBar
+                  pending={savingEventId === event.id}
+                  onDecision={async (status) => {
                     setSavingEventId(event.id);
 
                     try {
-                      await updateTrainingEventManagement(
-                        event.id,
-                        managementDraft.status,
-                        Number(managementDraft.capacity) || event.capacity,
-                        Number(managementDraft.minimumParticipants) ||
-                          resolveMinimumParticipants(event),
-                      );
-                      clearEventManagementDraft(event.id);
-                      toast.success("Zapisano ustawienia szkolenia.");
+                      await decideTrainingEventCollaboration(event.id, status);
+                      toast.success("Zapisano decyzje o wspolpracy.");
                     } catch (error) {
                       toast.error(
                         error instanceof Error
                           ? error.message
-                          : "Nie udało się zapisać ustawień szkolenia.",
+                          : "Nie udalo sie zapisac decyzji.",
                       );
                     } finally {
                       setSavingEventId(null);
                     }
                   }}
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  {savingEventId === event.id ? "Zapisywanie..." : "Zapisz status"}
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    transferringEventId === event.id ||
-                    !managementDraft.transferTargetEventId ||
-                    activeRequestsCount === 0
-                  }
-                  onClick={async () => {
-                    setTransferringEventId(event.id);
-
-                    try {
-                      await updateTrainingEventManagement(
-                        event.id,
-                        managementDraft.status,
-                        Number(managementDraft.capacity) || event.capacity,
-                        Number(managementDraft.minimumParticipants) ||
-                          resolveMinimumParticipants(event),
-                        managementDraft.transferTargetEventId,
-                      );
-                      clearEventManagementDraft(event.id);
-                      toast.success("Przeniesiono aktywne zgłoszenia.");
-                    } catch (error) {
-                      toast.error(
-                        error instanceof Error
-                          ? error.message
-                          : "Nie udało się przenieść zgłoszeń.",
-                      );
-                    } finally {
-                      setTransferringEventId(null);
-                    }
-                  }}
-                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                >
-                  {transferringEventId === event.id
-                    ? "Przenoszenie..."
-                    : "Zapisz i przenies zgloszenia"}
-                </button>
-              </div>
-              <p className="mt-3 text-sm text-brand-muted">
-                Przenoszone sa zgloszenia, ktore nie zostaly odrzucone.
-              </p>
-            </div>}
-            {currentUser.role === "admin" && (
-              <div className="mt-5 max-w-sm">
-                <AdminBrandStatusSelect
-                  value={event.brandStatus}
-                  onChange={(brandStatus) =>
-                    updateTrainingEventBrandStatus(event.id, brandStatus)
-                  }
                 />
-              </div>
-            )}
-            <div className="mt-5 flex flex-wrap gap-3">
-              <Link
-                to={`/panel/szkolenia/${event.id}`}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-              >
-                Otworz pelny widok
-              </Link>
-              <Link
-                to={`/kalendarz/${event.id}`}
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-              >
-                Zobacz widok publiczny
-              </Link>
-            </div>
-          </article>
+              )}
+            </article>
           );
         })}
       </div>}
@@ -2216,6 +2951,7 @@ export function EventManagementPage() {
     decideTrainingEventCollaboration,
     manageEnrollmentRequest,
     store,
+    updateTrainingEventBrandStatus,
     updateTrainingEventManagement,
   } = useAppState();
   const [savingSettings, setSavingSettings] = useState(false);
@@ -2226,6 +2962,9 @@ export function EventManagementPage() {
     status: "active" as TrainingEventStatus,
     capacity: "1",
     minimumParticipants: "1",
+    tags: "",
+    firstDayDate: "",
+    scheduleDays: resizeScheduleDayDrafts(2, []),
   });
   const event = store.trainingEvents.find((item) => item.id === eventId);
 
@@ -2238,6 +2977,8 @@ export function EventManagementPage() {
       status: resolveTrainingEventStatus(event.status),
       capacity: String(event.capacity),
       minimumParticipants: String(resolveMinimumParticipants(event)),
+      tags: (event.tags ?? []).join(", "),
+      ...getScheduleDraftsFromEvent(event),
     });
   }, [event]);
 
@@ -2263,8 +3004,11 @@ export function EventManagementPage() {
   const canManageEvent = canManageTrainingEvent(event, currentUser);
   const canDecideCollaboration = canDecideTrainingEventCollaboration(event, currentUser);
   const ownerLabels = getEventOwnerLabel(event, store);
-  const trainerCollaborationStatus = resolveTrainerCollaborationStatus(event);
-  const organizerCollaborationStatus = resolveOrganizerCollaborationStatus(event);
+  const detailTitle = getEventCardTitle(event, currentUser, store);
+  const locationParts = getEventLocationParts(event.location);
+  const collaborationNotice = getEventCollaborationNotice(event);
+  const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
+  const scheduleDays = getTrainingEventScheduleDays(event);
 
   if (!canManageEvent && !canDecideCollaboration) {
     return <Navigate to="/panel/szkolenia" replace />;
@@ -2292,7 +3036,7 @@ export function EventManagementPage() {
   return (
     <PanelSection
       eyebrow="Pelny widok szkolenia"
-      title={event.location}
+      title={detailTitle}
       description="Tutaj zarządzasz ustawieniami wydarzenia i listą osób, które chcą wziąć w nim udział."
     >
       <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
@@ -2301,7 +3045,7 @@ export function EventManagementPage() {
             <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
               {event.title}
             </p>
-            <h3 className="mt-2 text-2xl font-semibold text-brand-navy">{event.location}</h3>
+            <h3 className="mt-2 text-2xl font-semibold text-brand-navy">{detailTitle}</h3>
             <p className="mt-2 text-brand-muted">{event.summary}</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -2314,33 +3058,41 @@ export function EventManagementPage() {
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 text-sm text-brand-muted md:grid-cols-4">
-          <p>
-            {formatDate(event.startsAt)}
-            {event.dayTwoStartsAt ? ` / ${formatDate(event.dayTwoStartsAt)}` : ""}
-          </p>
-          <p>
-            {formatShortTime(event.startsAt)} - {formatShortTime(event.endsAt)}
-            {event.dayTwoStartsAt && event.dayTwoEndsAt
-              ? ` / ${formatShortTime(event.dayTwoStartsAt)} - ${formatShortTime(event.dayTwoEndsAt)}`
-              : ""}
-          </p>
-          <p>Maks. miejsc: {event.capacity}</p>
-          <p>Minimalny prog: {resolveMinimumParticipants(event)}</p>
+        <div className="mt-5 space-y-3 text-sm text-brand-muted">
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
+            <span>{scheduleRangeLabel}</span>
+            <span>Maks. miejsc: {event.capacity}</span>
+            <span>Minimalny prog: {resolveMinimumParticipants(event)}</span>
+          </div>
+          <div
+            className={`grid gap-3 ${scheduleDays.length > 1 ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+          >
+            {scheduleDays.map((day, index) => (
+              <div
+                key={`${event.id}-detail-day-${index + 1}`}
+                className="rounded-2xl bg-brand-shell px-4 py-3"
+              >
+                <div className="text-sm font-semibold text-brand-navy">Dzien {index + 1}</div>
+                <p>{formatDate(day.startsAt)}</p>
+                <p>
+                  {formatShortTime(day.startsAt)} - {formatShortTime(day.endsAt)}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
 
-        <div className="mt-5 grid gap-3 text-sm text-brand-muted md:grid-cols-2">
-          <p>Przekazujący Wiedzę: {ownerLabels.trainerName}</p>
+        <div className="mt-5 grid gap-3 text-sm text-brand-muted md:grid-cols-3">
+          <p>Przekazujacy Wiedze: {ownerLabels.trainerName}</p>
           <p>Organizator: {ownerLabels.organizerName}</p>
-          <p>
-            Współpraca trenera:{" "}
-            {getEventCollaborationStatusLabel(trainerCollaborationStatus)}
-          </p>
-          <p>
-            Współpraca organizatora:{" "}
-            {getEventCollaborationStatusLabel(organizerCollaborationStatus)}
-          </p>
+          <p>Pelna lokalizacja: {locationParts.primaryLocation}</p>
         </div>
+
+        {locationParts.extraLocationLabel && (
+          <p className="mt-3 text-sm text-brand-muted">
+            Dodatkowo: {locationParts.extraLocationLabel}
+          </p>
+        )}
 
         {canDecideCollaboration && (
           <CollaborationActionBar
@@ -2350,12 +3102,12 @@ export function EventManagementPage() {
 
               try {
                 await decideTrainingEventCollaboration(event.id, status);
-                toast.success("Zapisano decyzję o współpracy.");
+                toast.success("Zapisano decyzje o wspolpracy.");
               } catch (error) {
                 toast.error(
                   error instanceof Error
                     ? error.message
-                    : "Nie udało się zapisać decyzji.",
+                    : "Nie udalo sie zapisac decyzji.",
                 );
               } finally {
                 setSavingSettings(false);
@@ -2364,13 +3116,31 @@ export function EventManagementPage() {
           />
         )}
 
-        {!canManageEvent && (
+        {collaborationNotice && (
           <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
-            To szkolenie czeka na Twoją decyzję o współpracy. Po akceptacji zobaczysz tu pełne zarządzanie uczestnikami i ustawieniami.
+            {collaborationNotice}
           </p>
         )}
 
         {canManageEvent && <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-4">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-2xl font-semibold text-brand-navy">Ustawienia szkolenia</h3>
+              <p className="text-sm text-brand-muted">
+                W tym miejscu ustawiasz status, limity i prog potwierdzenia.
+              </p>
+            </div>
+            {currentUser.role === "admin" && (
+              <div className="w-full max-w-sm">
+                <AdminBrandStatusSelect
+                  value={event.brandStatus}
+                  onChange={(brandStatus) =>
+                    updateTrainingEventBrandStatus(event.id, brandStatus)
+                  }
+                />
+              </div>
+            )}
+          </div>
           <div className="grid gap-4 md:grid-cols-[1fr_220px_220px]">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">Status szkolenia</span>
@@ -2421,6 +3191,134 @@ export function EventManagementPage() {
             </label>
           </div>
 
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">Pierwszy dzien szkolenia</span>
+              <input
+                required
+                type="date"
+                value={settingsDraft.firstDayDate}
+                onChange={(changeEvent) =>
+                  setSettingsDraft((previous) => ({
+                    ...previous,
+                    firstDayDate: changeEvent.target.value,
+                  }))
+                }
+                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+              />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
+              <input
+                required
+                min={1}
+                type="number"
+                value={settingsDraft.scheduleDays.length}
+                onChange={(changeEvent) => {
+                  const nextDayCount = Math.max(1, Number(changeEvent.target.value) || 1);
+                  setSettingsDraft((previous) => ({
+                    ...previous,
+                    scheduleDays: resizeScheduleDayDrafts(
+                      nextDayCount,
+                      previous.scheduleDays,
+                    ),
+                  }));
+                }}
+                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 grid gap-4">
+            {settingsDraft.scheduleDays.map((day, index) => {
+              const draftScheduleDays = buildScheduleDaysFromDrafts(
+                settingsDraft.firstDayDate,
+                settingsDraft.scheduleDays,
+              );
+
+              return (
+                <div
+                  key={`management-day-${index + 1}`}
+                  className="rounded-3xl border border-brand-line bg-white p-4"
+                >
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                      Dzien {index + 1}
+                    </p>
+                    <p className="text-sm text-brand-muted">
+                      {draftScheduleDays[index]?.startsAt
+                        ? formatDate(draftScheduleDays[index].startsAt)
+                        : "Wybierz pierwszy dzien"}
+                    </p>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="grid gap-2">
+                      <span className="text-sm font-semibold text-brand-navy">Godzina startu</span>
+                      <input
+                        required
+                        type="time"
+                        value={day.startTime}
+                        onChange={(changeEvent) =>
+                          setSettingsDraft((previous) => ({
+                            ...previous,
+                            scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                              itemIndex === index
+                                ? {
+                                    ...item,
+                                    startTime: changeEvent.target.value,
+                                  }
+                                : item,
+                            ),
+                          }))
+                        }
+                        className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-sm font-semibold text-brand-navy">Godzina konca</span>
+                      <input
+                        required
+                        type="time"
+                        value={day.endTime}
+                        onChange={(changeEvent) =>
+                          setSettingsDraft((previous) => ({
+                            ...previous,
+                            scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                              itemIndex === index
+                                ? {
+                                    ...item,
+                                    endTime: changeEvent.target.value,
+                                  }
+                                : item,
+                            ),
+                          }))
+                        }
+                        className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+                      />
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <label className="mt-4 grid gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
+            <input
+              value={settingsDraft.tags}
+              onChange={(changeEvent) =>
+                setSettingsDraft((previous) => ({
+                  ...previous,
+                  tags: changeEvent.target.value,
+                }))
+              }
+              placeholder="np. ognisko, pozywienie, nocleg, samodzielna kuchnia"
+              className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+            />
+            <span className="text-sm text-brand-muted">
+              Oddziel tagi przecinkami. Pokaza sie publicznie jako chmura tagow.
+            </span>
+          </label>
           <div className="mt-4 flex flex-wrap gap-3">
             <button
               type="button"
@@ -2435,6 +3333,11 @@ export function EventManagementPage() {
                     Number(settingsDraft.capacity) || event.capacity,
                     Number(settingsDraft.minimumParticipants) ||
                       resolveMinimumParticipants(event),
+                    parseEventTags(settingsDraft.tags),
+                    buildScheduleDaysFromDrafts(
+                      settingsDraft.firstDayDate,
+                      settingsDraft.scheduleDays,
+                    ),
                   );
                   toast.success("Zapisano ustawienia szkolenia.");
                 } catch (error) {
@@ -2465,6 +3368,12 @@ export function EventManagementPage() {
       </article>
 
       {canManageEvent && <div className="space-y-4">
+        <div>
+          <h3 className="text-2xl font-semibold text-brand-navy">Uczestnicy i zgłoszenia</h3>
+          <p className="mt-2 text-brand-muted">
+            Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy.
+          </p>
+        </div>
         {requests.length === 0 && (
           <EmptyPanelState
             title="Brak osob na liscie"
@@ -3237,3 +4146,4 @@ export function AccountRequestsPage() {
     </PanelSection>
   );
 }
+

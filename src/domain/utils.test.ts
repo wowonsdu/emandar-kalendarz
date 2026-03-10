@@ -8,6 +8,8 @@ import {
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  getTrainingEventScheduleBounds,
+  getTrainingEventScheduleDays,
   isTrainingEventCollaborationAccepted,
   resolveOrganizerCollaborationStatus,
   sortEventsByFillRate,
@@ -273,5 +275,53 @@ describe("permissions and sorting", () => {
   it("returns readable collaboration labels", () => {
     expect(getEventCollaborationStatusLabel("pending")).toBe("oczekuje");
     expect(getEventCollaborationStatusLabel("accepted")).toBe("zaakceptowana");
+  });
+
+  it("reads multi-day schedule from new scheduleDays field", () => {
+    const event = {
+      startsAt: "2026-06-01T13:00:00.000Z",
+      endsAt: "2026-06-03T12:00:00.000Z",
+      scheduleDays: [
+        {
+          startsAt: "2026-06-01T13:00:00.000Z",
+          endsAt: "2026-06-01T19:00:00.000Z",
+        },
+        {
+          startsAt: "2026-06-02T07:00:00.000Z",
+          endsAt: "2026-06-02T12:00:00.000Z",
+        },
+        {
+          startsAt: "2026-06-03T07:00:00.000Z",
+          endsAt: "2026-06-03T12:00:00.000Z",
+        },
+      ],
+    };
+
+    expect(getTrainingEventScheduleDays(event)).toHaveLength(3);
+    expect(getTrainingEventScheduleBounds(event)).toEqual({
+      startsAt: "2026-06-01T13:00:00.000Z",
+      endsAt: "2026-06-03T12:00:00.000Z",
+      dayCount: 3,
+    });
+  });
+
+  it("falls back to legacy first and second day fields", () => {
+    const event = {
+      startsAt: "2026-05-01T13:00:00.000Z",
+      endsAt: "2026-05-01T19:00:00.000Z",
+      dayTwoStartsAt: "2026-05-02T07:00:00.000Z",
+      dayTwoEndsAt: "2026-05-02T12:00:00.000Z",
+    };
+
+    expect(getTrainingEventScheduleDays(event)).toEqual([
+      {
+        startsAt: "2026-05-01T13:00:00.000Z",
+        endsAt: "2026-05-01T19:00:00.000Z",
+      },
+      {
+        startsAt: "2026-05-02T07:00:00.000Z",
+        endsAt: "2026-05-02T12:00:00.000Z",
+      },
+    ]);
   });
 });

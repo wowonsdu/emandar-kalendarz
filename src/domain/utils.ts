@@ -5,6 +5,7 @@ import type {
   EmandarBrandStatus,
   EventCollaborationStatus,
   EnrollmentFinalStatus,
+  TrainingEventScheduleDay,
   TrainerOrganizerRelation,
   TrainingEventStatus,
   TrainingEvent,
@@ -193,6 +194,55 @@ export function sortEventsByDate(events: TrainingEvent[]) {
     (left, right) =>
       new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
   );
+}
+
+export function getTrainingEventScheduleDays(
+  event: Pick<
+    TrainingEvent,
+    "startsAt" | "endsAt" | "dayTwoStartsAt" | "dayTwoEndsAt" | "scheduleDays"
+  >,
+) {
+  if (event.scheduleDays && event.scheduleDays.length > 0) {
+    return [...event.scheduleDays]
+      .filter((day) => Boolean(day.startsAt) && Boolean(day.endsAt))
+      .sort(
+        (left, right) =>
+          new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
+      );
+  }
+
+  const legacyDays: TrainingEventScheduleDay[] = [
+    {
+      startsAt: event.startsAt,
+      endsAt: event.endsAt,
+    },
+  ];
+
+  if (event.dayTwoStartsAt && event.dayTwoEndsAt) {
+    legacyDays.push({
+      startsAt: event.dayTwoStartsAt,
+      endsAt: event.dayTwoEndsAt,
+    });
+  }
+
+  return legacyDays.filter((day) => Boolean(day.startsAt) && Boolean(day.endsAt));
+}
+
+export function getTrainingEventScheduleBounds(
+  event: Pick<
+    TrainingEvent,
+    "startsAt" | "endsAt" | "dayTwoStartsAt" | "dayTwoEndsAt" | "scheduleDays"
+  >,
+) {
+  const days = getTrainingEventScheduleDays(event);
+  const firstDay = days[0];
+  const lastDay = days[days.length - 1];
+
+  return {
+    startsAt: firstDay?.startsAt ?? event.startsAt,
+    endsAt: lastDay?.endsAt ?? event.endsAt,
+    dayCount: days.length,
+  };
 }
 
 export function getAvailablePlaces(

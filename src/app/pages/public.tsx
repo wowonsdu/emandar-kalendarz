@@ -14,12 +14,12 @@ import { toast } from "sonner";
 import { SEEDED_ACCOUNTS, SEEDED_PASSWORD } from "@/data/accounts";
 import type { EmandarBrandStatus, TrainingEvent } from "@/domain/types";
 import {
-  getTrainingEventStatusLabel,
+  getTrainingEventScheduleBounds,
+  getTrainingEventScheduleDays,
   isSelfManagedTrainingEvent,
   isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
   resolveBrandStatus,
-  resolveMinimumParticipants,
   resolveTrainingEventStatus,
   sortEventsByDate,
 } from "@/domain/utils";
@@ -41,23 +41,22 @@ function formatTime(date: string) {
 }
 
 function getScheduleRows(event: TrainingEvent) {
-  const rows = [
-    {
-      key: "day-1",
-      label: formatDate(event.startsAt),
-      range: `${formatTime(event.startsAt)} - ${formatTime(event.endsAt)}`,
-    },
-  ];
+  return getTrainingEventScheduleDays(event).map((day, index) => ({
+    key: `day-${index + 1}`,
+    title: `Dzien ${index + 1}`,
+    label: formatDate(day.startsAt),
+    range: `${formatTime(day.startsAt)} - ${formatTime(day.endsAt)}`,
+  }));
+}
 
-  if (event.dayTwoStartsAt && event.dayTwoEndsAt) {
-    rows.push({
-      key: "day-2",
-      label: formatDate(event.dayTwoStartsAt),
-      range: `${formatTime(event.dayTwoStartsAt)} - ${formatTime(event.dayTwoEndsAt)}`,
-    });
+function getScheduleRangeLabel(event: TrainingEvent) {
+  const bounds = getTrainingEventScheduleBounds(event);
+
+  if (bounds.dayCount <= 1) {
+    return formatDate(bounds.startsAt);
   }
 
-  return rows;
+  return `od ${formatDate(bounds.startsAt)} do ${formatDate(bounds.endsAt)}`;
 }
 
 function firstName(value?: string) {
@@ -66,6 +65,10 @@ function firstName(value?: string) {
   }
 
   return value.trim().split(/\s+/)[0] ?? "";
+}
+
+function getEventTags(event: TrainingEvent) {
+  return (event.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
 }
 
 function isOfficialTrainerProfile(
@@ -137,10 +140,9 @@ function EventCard({ eventId }: { eventId: string }) {
 
   const trainer = store.trainers.find((item) => item.id === event.trainerId);
   const organizer = store.organizers.find((item) => item.id === event.organizerId);
-  const freePlaces = Math.max(event.capacity - event.enrolledCount, 0);
+  const eventTags = getEventTags(event);
   const scheduleRows = getScheduleRows(event);
-  const eventStatus = resolveTrainingEventStatus(event.status);
-  const minimumParticipants = resolveMinimumParticipants(event);
+  const scheduleRangeLabel = getScheduleRangeLabel(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
 
   return (
@@ -172,13 +174,13 @@ function EventCard({ eventId }: { eventId: string }) {
               {event.type}
             </span>
             <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-              {freePlaces} wolnych miejsc
-            </span>
-            <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-              {getTrainingEventStatusLabel(eventStatus)}
+              maks. {event.capacity} uczestnikow
             </span>
           </div>
           <h3 className="text-2xl font-semibold text-brand-navy">{event.location}</h3>
+          <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+            {scheduleRangeLabel}
+          </p>
           <p className="mt-3 line-clamp-2 text-brand-muted">{event.summary}</p>
           <div
             className={`mt-6 grid gap-3 ${
@@ -192,7 +194,7 @@ function EventCard({ eventId }: { eventId: string }) {
               >
                 <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
                   <CalendarDays size={16} />
-                  Termin
+                  {row.title}
                 </div>
                 <p>{row.label}</p>
                 <p>{row.range}</p>
@@ -210,10 +212,7 @@ function EventCard({ eventId }: { eventId: string }) {
                 </span>
               )}
               <span className="ml-3">
-                prog: {minimumParticipants} osob
-              </span>
-              <span className="ml-3">
-                {freePlaces} wolnych miejsc
+                maks. {event.capacity} osob
               </span>
             </div>
             <Link
@@ -224,6 +223,18 @@ function EventCard({ eventId }: { eventId: string }) {
               <ArrowRight size={16} />
             </Link>
           </div>
+          {eventTags.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {eventTags.map((tag) => (
+                <span
+                  key={`${event.id}-${tag}`}
+                  className="rounded-full border border-brand-line bg-brand-shell px-3 py-1 text-xs font-semibold text-brand-navy"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </article>
@@ -405,12 +416,12 @@ export function EventDetailsPage() {
     return <Navigate to="/kalendarz" replace />;
   }
 
-  const freePlaces = Math.max(event.capacity - event.enrolledCount, 0);
   const scheduleRows = getScheduleRows(event);
+  const scheduleRangeLabel = getScheduleRangeLabel(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventStatus = resolveTrainingEventStatus(event.status);
-  const minimumParticipants = resolveMinimumParticipants(event);
   const isCancelled = eventStatus === "cancelled";
+  const eventTags = getEventTags(event);
 
   function handleFileChange(fileEvent: ChangeEvent<HTMLInputElement>) {
     const nextFile = fileEvent.target.files?.[0] ?? null;
@@ -464,6 +475,9 @@ export function EventDetailsPage() {
             {event.type}
           </p>
           <h1 className="mt-4 text-4xl font-semibold text-brand-navy">{event.location}</h1>
+          <p className="mt-3 text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+            {scheduleRangeLabel}
+          </p>
           <p className="mt-4 text-lg font-medium text-brand-sky-deep">{event.summary}</p>
           <p className="mt-4 text-lg text-brand-muted">{event.description}</p>
 
@@ -476,7 +490,7 @@ export function EventDetailsPage() {
               <div key={row.key} className="rounded-3xl bg-brand-shell p-5">
                 <div className="flex items-center gap-2 text-sm font-semibold text-brand-navy">
                   <CalendarDays size={16} />
-                  Termin
+                  {row.title}
                 </div>
                 <p className="mt-2 text-brand-muted">{row.label}</p>
                 <p className="text-brand-muted">{row.range}</p>
@@ -485,17 +499,8 @@ export function EventDetailsPage() {
           </div>
 
           <p className="mt-5 text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-            {freePlaces} wolnych miejsc
+            Maks. {event.capacity} uczestnikow
           </p>
-
-          <div className="mt-4 flex flex-wrap gap-3 text-sm text-brand-muted">
-            <span className="rounded-full border border-brand-line px-3 py-1 font-semibold text-brand-navy">
-              {getTrainingEventStatusLabel(eventStatus)}
-            </span>
-            <span className="rounded-full border border-brand-line px-3 py-1">
-              Prog organizacji: {minimumParticipants} osob
-            </span>
-          </div>
 
           <div
             className={`mt-8 grid gap-4 ${
@@ -529,6 +534,23 @@ export function EventDetailsPage() {
               </div>
             )}
           </div>
+          {eventTags.length > 0 && (
+            <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+                Tagi wydarzenia
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {eventTags.map((tag) => (
+                  <span
+                    key={`${event.id}-detail-${tag}`}
+                    className="rounded-full border border-brand-line bg-white px-3 py-1 text-sm font-semibold text-brand-navy"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <form

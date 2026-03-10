@@ -81,6 +81,11 @@ export interface GroupRecord {
   createdAt: string;
 }
 
+export interface TrainingEventScheduleDay {
+  startsAt: string;
+  endsAt: string;
+}
+
 export interface TrainingEvent {
   id: string;
   trainerId: string;
@@ -95,7 +100,9 @@ export interface TrainingEvent {
   endsAt: string;
   dayTwoStartsAt?: string;
   dayTwoEndsAt?: string;
+  scheduleDays?: TrainingEventScheduleDay[];
   location: string;
+  tags?: string[];
   capacity: number;
   enrolledCount: number;
   isPublished: boolean;
@@ -230,11 +237,9 @@ export interface TrainingEventInput {
   summary: string;
   description: string;
   type: string;
-  startsAt: string;
-  endsAt: string;
-  dayTwoStartsAt: string;
-  dayTwoEndsAt: string;
+  scheduleDays: TrainingEventScheduleDay[];
   location: string;
+  tags?: string[];
   capacity: number;
   isPublished: boolean;
   brandStatus?: EmandarBrandStatus;
@@ -273,6 +278,8 @@ export interface TrainingEventManagementUpdateInput {
   status: TrainingEventStatus;
   capacity: number;
   minimumParticipants: number;
+  tags?: string[];
+  scheduleDays?: TrainingEventScheduleDay[];
   transferTargetEventId?: string | null;
 }
 

@@ -44,6 +44,7 @@ import type {
   EnrollmentFormInput,
   GroupInput,
   OrganizerProfileUpdateInput,
+  TrainingEventScheduleDay,
   TrainingEventInput,
   TrainingEventStatus,
   TrainerProfileUpdateInput,
@@ -103,6 +104,8 @@ interface AppStateContextValue {
     status: TrainingEventStatus,
     capacity: number,
     minimumParticipants: number,
+    tags?: string[],
+    scheduleDays?: TrainingEventScheduleDay[],
     transferTargetEventId?: string,
   ) => Promise<void>;
   notificationsCount: number;
@@ -394,6 +397,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
         status,
         capacity,
         minimumParticipants,
+        tags,
+        scheduleDays,
         transferTargetEventId,
       ) {
         if (!currentUser) {
@@ -406,6 +411,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
             status,
             capacity,
             minimumParticipants,
+            tags,
+            scheduleDays,
             transferTargetEventId,
           },
           currentUser,

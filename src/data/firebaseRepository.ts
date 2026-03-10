@@ -3,6 +3,7 @@ import {
   arrayRemove,
   arrayUnion,
   collection,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -57,6 +58,7 @@ import type {
   TrainingEventCollaborationUpdateInput,
   TrainingEventManagementUpdateInput,
   TrainingEventInput,
+  TrainingEventScheduleDay,
   TrainingEventStatus,
   TrainingEvent,
 } from "@/domain/types";
@@ -65,6 +67,7 @@ import {
   canManageTrainingEvent,
   canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
+  getTrainingEventScheduleDays,
   isSelfManagedTrainingEvent,
   isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
@@ -130,6 +133,69 @@ function resolveEventStatus(
   value: TrainingEventStatus | null | undefined,
 ): TrainingEventStatus {
   return resolveTrainingEventStatus(value);
+}
+
+function normalizeEventTags(tags: string[] | null | undefined) {
+  return Array.from(
+    new Set(
+      (tags ?? [])
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function normalizeScheduleDays(
+  scheduleDays: TrainingEventScheduleDay[] | null | undefined,
+) {
+  const normalizedDays = (scheduleDays ?? []).map((day) => {
+    const startsAt = new Date(day.startsAt);
+    const endsAt = new Date(day.endsAt);
+
+    if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+      throw new Error("Podaj poprawne daty szkolenia.");
+    }
+
+    if (endsAt.getTime() <= startsAt.getTime()) {
+      throw new Error("Każdy dzień szkolenia musi kończyć się po starcie.");
+    }
+
+    return {
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+    };
+  });
+
+  if (normalizedDays.length === 0) {
+    throw new Error("Dodaj przynajmniej jeden dzień szkolenia.");
+  }
+
+  const sortedDays = [...normalizedDays].sort(
+    (left, right) =>
+      new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
+  );
+
+  sortedDays.forEach((day, index) => {
+    if (index === 0) {
+      return;
+    }
+
+    const previousDay = new Date(sortedDays[index - 1]?.startsAt ?? "");
+    const currentDay = new Date(day.startsAt);
+
+    previousDay.setHours(0, 0, 0, 0);
+    currentDay.setHours(0, 0, 0, 0);
+
+    const daysDifference = Math.round(
+      (currentDay.getTime() - previousDay.getTime()) / (1000 * 60 * 60 * 24),
+    );
+
+    if (daysDifference !== 1) {
+      throw new Error("Dni szkolenia muszą następować kolejno po sobie.");
+    }
+  });
+
+  return sortedDays;
 }
 
 function normalizeEventCollaborationStatus(
@@ -1078,10 +1144,22 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
     }
   }
 
-  const startsAt = new Date(input.startsAt);
-  const endsAt = new Date(input.endsAt);
-  const dayTwoStartsAt = new Date(input.dayTwoStartsAt);
-  const dayTwoEndsAt = new Date(input.dayTwoEndsAt);
+  const normalizedScheduleDays = normalizeScheduleDays(input.scheduleDays);
+  const firstScheduleDay = normalizedScheduleDays[0];
+  const secondScheduleDay = normalizedScheduleDays[1];
+  const lastScheduleDay = normalizedScheduleDays[normalizedScheduleDays.length - 1];
+  const startsAt = new Date(firstScheduleDay?.startsAt ?? "");
+  const endsAt = new Date(lastScheduleDay?.endsAt ?? "");
+  const fallbackSecondDayStart = new Date(startsAt);
+  fallbackSecondDayStart.setDate(fallbackSecondDayStart.getDate() + 1);
+  const fallbackSecondDayEnd = new Date(fallbackSecondDayStart);
+  fallbackSecondDayEnd.setHours(fallbackSecondDayEnd.getHours() + 1);
+  const dayTwoStartsAt = new Date(
+    secondScheduleDay?.startsAt ?? fallbackSecondDayStart.toISOString(),
+  );
+  const dayTwoEndsAt = new Date(
+    secondScheduleDay?.endsAt ?? fallbackSecondDayEnd.toISOString(),
+  );
 
   if (
     Number.isNaN(startsAt.getTime()) ||
@@ -1105,6 +1183,7 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
   }
 
   const trimmedLocation = input.location.trim();
+  const normalizedTags = normalizeEventTags(input.tags);
   const minimumParticipants = Math.max(
     1,
     Math.min(input.capacity, input.minimumParticipants ?? input.capacity),
@@ -1119,11 +1198,13 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
     summary: input.summary.trim(),
     description: input.description.trim(),
     type: input.type.trim(),
-    startsAt: startsAt.toISOString(),
-    endsAt: endsAt.toISOString(),
-    dayTwoStartsAt: dayTwoStartsAt.toISOString(),
-    dayTwoEndsAt: dayTwoEndsAt.toISOString(),
+    startsAt: firstScheduleDay?.startsAt ?? startsAt.toISOString(),
+    endsAt: lastScheduleDay?.endsAt ?? endsAt.toISOString(),
+    dayTwoStartsAt: secondScheduleDay?.startsAt ?? null,
+    dayTwoEndsAt: secondScheduleDay?.endsAt ?? null,
+    scheduleDays: normalizedScheduleDays,
     location: trimmedLocation,
+    tags: normalizedTags,
     capacity: input.capacity,
     enrolledCount: 0,
     isPublished: input.isPublished,
@@ -1218,10 +1299,22 @@ export async function createUnifiedTrainingEvent(
     }
   }
 
-  const startsAt = new Date(input.startsAt);
-  const endsAt = new Date(input.endsAt);
-  const dayTwoStartsAt = new Date(input.dayTwoStartsAt);
-  const dayTwoEndsAt = new Date(input.dayTwoEndsAt);
+  const normalizedScheduleDays = normalizeScheduleDays(input.scheduleDays);
+  const firstScheduleDay = normalizedScheduleDays[0];
+  const secondScheduleDay = normalizedScheduleDays[1];
+  const lastScheduleDay = normalizedScheduleDays[normalizedScheduleDays.length - 1];
+  const startsAt = new Date(firstScheduleDay?.startsAt ?? "");
+  const endsAt = new Date(lastScheduleDay?.endsAt ?? "");
+  const fallbackSecondDayStart = new Date(startsAt);
+  fallbackSecondDayStart.setDate(fallbackSecondDayStart.getDate() + 1);
+  const fallbackSecondDayEnd = new Date(fallbackSecondDayStart);
+  fallbackSecondDayEnd.setHours(fallbackSecondDayEnd.getHours() + 1);
+  const dayTwoStartsAt = new Date(
+    secondScheduleDay?.startsAt ?? fallbackSecondDayStart.toISOString(),
+  );
+  const dayTwoEndsAt = new Date(
+    secondScheduleDay?.endsAt ?? fallbackSecondDayEnd.toISOString(),
+  );
 
   if (
     Number.isNaN(startsAt.getTime()) ||
@@ -1245,6 +1338,7 @@ export async function createUnifiedTrainingEvent(
   }
 
   const trimmedLocation = input.location.trim();
+  const normalizedTags = normalizeEventTags(input.tags);
   const minimumParticipants = Math.max(
     1,
     Math.min(input.capacity, input.minimumParticipants ?? input.capacity),
@@ -1259,11 +1353,13 @@ export async function createUnifiedTrainingEvent(
     summary: input.summary.trim(),
     description: input.description.trim(),
     type: input.type.trim(),
-    startsAt: startsAt.toISOString(),
-    endsAt: endsAt.toISOString(),
-    dayTwoStartsAt: dayTwoStartsAt.toISOString(),
-    dayTwoEndsAt: dayTwoEndsAt.toISOString(),
+    startsAt: firstScheduleDay?.startsAt ?? startsAt.toISOString(),
+    endsAt: lastScheduleDay?.endsAt ?? endsAt.toISOString(),
+    dayTwoStartsAt: secondScheduleDay?.startsAt ?? null,
+    dayTwoEndsAt: secondScheduleDay?.endsAt ?? null,
+    scheduleDays: normalizedScheduleDays,
     location: trimmedLocation,
+    tags: normalizedTags,
     capacity: input.capacity,
     enrolledCount: 0,
     isPublished: input.isPublished,
@@ -1490,9 +1586,24 @@ export async function updateTrainingEventManagement(
     1,
     Math.min(normalizedCapacity, input.minimumParticipants),
   );
+  const normalizedTags = normalizeEventTags(input.tags);
+  const normalizedScheduleDays = normalizeScheduleDays(
+    input.scheduleDays ?? getTrainingEventScheduleDays(event),
+  );
+  const firstScheduleDay = normalizedScheduleDays[0];
+  const secondScheduleDay = normalizedScheduleDays[1];
+  const lastScheduleDay = normalizedScheduleDays[normalizedScheduleDays.length - 1];
   const targetEventId = input.transferTargetEventId?.trim();
 
   if (!targetEventId) {
+    await updateDoc(doc(db, collections.trainingEvents, input.eventId), {
+      tags: normalizedTags,
+      startsAt: firstScheduleDay?.startsAt ?? event.startsAt,
+      endsAt: lastScheduleDay?.endsAt ?? event.endsAt,
+      dayTwoStartsAt: secondScheduleDay?.startsAt ?? deleteField(),
+      dayTwoEndsAt: secondScheduleDay?.endsAt ?? deleteField(),
+      scheduleDays: normalizedScheduleDays,
+    });
     await syncEventEnrollmentState(input.eventId, {
       capacity: normalizedCapacity,
       status: resolveEventStatus(input.status),
@@ -1558,6 +1669,14 @@ export async function updateTrainingEventManagement(
   await batch.commit();
 
   await Promise.all([
+    updateDoc(doc(db, collections.trainingEvents, input.eventId), {
+      tags: normalizedTags,
+      startsAt: firstScheduleDay?.startsAt ?? event.startsAt,
+      endsAt: lastScheduleDay?.endsAt ?? event.endsAt,
+      dayTwoStartsAt: secondScheduleDay?.startsAt ?? deleteField(),
+      dayTwoEndsAt: secondScheduleDay?.endsAt ?? deleteField(),
+      scheduleDays: normalizedScheduleDays,
+    }),
     syncEventEnrollmentState(event.id, {
       capacity: normalizedCapacity,
       status: resolveEventStatus(input.status),

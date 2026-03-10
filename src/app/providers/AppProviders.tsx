@@ -12,9 +12,10 @@ import {
   addAvailabilitySlot as addAvailabilitySlotAction,
   createEmptyStore,
   createGroup as createGroupAction,
-  createTrainingEvent as createTrainingEventAction,
+  createUnifiedTrainingEvent as createTrainingEventAction,
   decideAccountRequest as decideAccountRequestAction,
   decideEnrollment as decideEnrollmentAction,
+  decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
   decideRelation as decideRelationAction,
   requestRelation as requestRelationAction,
@@ -80,6 +81,10 @@ interface AppStateContextValue {
     input: Omit<GroupInput, "organizerId"> & { organizerId?: string },
   ) => Promise<void>;
   createTrainingEvent: (input: TrainingEventInput) => Promise<void>;
+  decideTrainingEventCollaboration: (
+    eventId: string,
+    status: "accepted" | "rejected",
+  ) => Promise<void>;
   addAvailabilitySlot: (
     input: Omit<AvailabilityInput, "trainerId"> & { trainerId?: string },
   ) => Promise<void>;
@@ -309,6 +314,19 @@ export function AppProviders({ children }: { children: ReactNode }) {
         }
 
         await createTrainingEventAction(input, currentUser);
+      },
+      async decideTrainingEventCollaboration(eventId, status) {
+        if (!currentUser) {
+          throw new Error("Musisz byÄ‡ zalogowany.");
+        }
+
+        await decideTrainingEventCollaborationAction(
+          {
+            eventId,
+            status,
+          },
+          currentUser,
+        );
       },
       async addAvailabilitySlot(input) {
         if (!currentUser) {

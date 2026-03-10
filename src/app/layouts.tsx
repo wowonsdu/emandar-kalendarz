@@ -145,7 +145,8 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
     return [
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
-      { to: "/panel/grupy", label: "Moje grupy", icon: Users },
+      { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
+      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzeń", icon: CalendarDays },
       {
         to: "/panel/terminy",
         label: "Terminy Przekazujących Wiedzę",
@@ -183,7 +184,6 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
     { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
     { to: "/panel/trenerzy", label: "Przekazujący Wiedzę", icon: Users },
     { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },
-    { to: "/panel/grupy", label: "Grupy", icon: Users },
     { to: "/panel/szkolenia", label: "Szkolenia", icon: CalendarDays },
     { to: "/panel/terminy", label: "Terminy", icon: CalendarDays },
     { to: "/panel/relacje", label: "Relacje", icon: ShieldCheck },

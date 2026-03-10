@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateEventCapacityStats,
+  canDecideTrainingEventCollaboration,
+  canManageTrainingEvent,
   canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
+  getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  isTrainingEventCollaborationAccepted,
+  resolveOrganizerCollaborationStatus,
   sortEventsByFillRate,
   sortEventsByDate,
 } from "./utils";
@@ -212,5 +217,61 @@ describe("permissions and sorting", () => {
     ]);
 
     expect(sorted.map((event) => event.id)).toEqual(["best", "earlier", "later"]);
+  });
+
+  it("treats self-managed official event as fully accepted", () => {
+    expect(
+      isTrainingEventCollaborationAccepted({
+        trainerId: "trainer-1",
+        organizerId: null,
+        brandStatus: "official",
+        selfManagedByTrainer: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      resolveOrganizerCollaborationStatus({
+        organizerId: null,
+        brandStatus: "official",
+        selfManagedByTrainer: true,
+      }),
+    ).toBe("not-required");
+  });
+
+  it("allows creator to manage pending shared event and invited side only to decide", () => {
+    const event = {
+      trainerId: "trainer-1",
+      organizerId: "organizer-1",
+      brandStatus: "official" as const,
+      trainerCollaborationStatus: "accepted" as const,
+      organizerCollaborationStatus: "pending" as const,
+      createdByRole: "trainer" as const,
+    };
+
+    expect(
+      canManageTrainingEvent(event, {
+        role: "trainer",
+        profileId: "trainer-1",
+      }),
+    ).toBe(true);
+
+    expect(
+      canManageTrainingEvent(event, {
+        role: "organizer",
+        profileId: "organizer-1",
+      }),
+    ).toBe(false);
+
+    expect(
+      canDecideTrainingEventCollaboration(event, {
+        role: "organizer",
+        profileId: "organizer-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns readable collaboration labels", () => {
+    expect(getEventCollaborationStatusLabel("pending")).toBe("oczekuje");
+    expect(getEventCollaborationStatusLabel("accepted")).toBe("zaakceptowana");
   });
 });

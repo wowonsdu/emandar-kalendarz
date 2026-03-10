@@ -19,13 +19,16 @@ const COLLECTIONS = [
   { storeKey: "trainers", collectionName: "trainers" },
   { storeKey: "organizers", collectionName: "organizers" },
   { storeKey: "relations", collectionName: "trainerOrganizerRelations" },
-  { storeKey: "groups", collectionName: "groups" },
   { storeKey: "trainingEvents", collectionName: "trainingEvents" },
   { storeKey: "availabilitySlots", collectionName: "availabilitySlots" },
   { storeKey: "enrollmentRequests", collectionName: "enrollmentRequests" },
   { storeKey: "notifications", collectionName: "notifications" },
   { storeKey: "accountRequests", collectionName: "accountRequests" },
 ];
+const LEGACY_COLLECTIONS = ["groups"];
+const FIREBASE_CLI_CLIENT_ID =
+  "563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com";
+const FIREBASE_CLI_CLIENT_SECRET = "j9iVZfS8kkCEFUPaAeJV0sAi";
 
 function deriveEnrollmentFinalStatus(trainerDecision, organizerDecision) {
   if (trainerDecision === "rejected" || organizerDecision === "rejected") {
@@ -238,21 +241,6 @@ function buildSeedPayloads(store, userIdMap) {
     };
   });
 
-  const groups = store.groups.map((group) => {
-    const trainer = trainerById.get(group.trainerId);
-    const organizer = organizerById.get(group.organizerId);
-
-    return {
-      ...group,
-      trainerUserId:
-        trainer ? userIdMap.get(trainer.userId) ?? trainer.userId : group.trainerUserId ?? null,
-      organizerUserId:
-        organizer
-          ? userIdMap.get(organizer.userId) ?? organizer.userId
-          : group.organizerUserId ?? null,
-    };
-  });
-
   const trainingEvents = store.trainingEvents.map((event) => {
     const trainer = trainerById.get(event.trainerId);
     const organizer = organizerById.get(event.organizerId);
@@ -300,7 +288,6 @@ function buildSeedPayloads(store, userIdMap) {
     trainers,
     organizers,
     relations,
-    groups,
     trainingEvents,
     availabilitySlots,
     enrollmentRequests,
@@ -310,6 +297,29 @@ function buildSeedPayloads(store, userIdMap) {
     })),
     accountRequests: store.accountRequests,
   };
+}
+
+async function clearCollectionAdmin(db, collectionName) {
+  const refs = await db.collection(collectionName).listDocuments();
+
+  for (let index = 0; index < refs.length; index += 400) {
+    const batch = db.batch();
+
+    for (const ref of refs.slice(index, index + 400)) {
+      batch.delete(ref);
+    }
+
+    await batch.commit();
+  }
+}
+
+async function clearFirestoreAdmin(db) {
+  for (const collectionName of [
+    ...COLLECTIONS.map((entry) => entry.collectionName),
+    ...LEGACY_COLLECTIONS,
+  ]) {
+    await clearCollectionAdmin(db, collectionName);
+  }
 }
 
 async function upsertAuthUserAdmin(auth, user) {
@@ -402,6 +412,36 @@ async function firebaseRequest(url, options) {
   }
 
   return json;
+}
+
+async function refreshFirebaseToolsAccessToken(firebaseToolsConfig) {
+  const refreshToken = firebaseToolsConfig?.tokens?.refresh_token;
+
+  if (!refreshToken) {
+    throw new Error("Missing Firebase CLI refresh token.");
+  }
+
+  const response = await fetch("https://www.googleapis.com/oauth2/v3/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      refresh_token: refreshToken,
+      client_id: FIREBASE_CLI_CLIENT_ID,
+      client_secret: FIREBASE_CLI_CLIENT_SECRET,
+      grant_type: "refresh_token",
+    }),
+  });
+  const text = await response.text();
+  const json = text ? JSON.parse(text) : null;
+
+  if (!response.ok || !json?.access_token) {
+    const message = json?.error_description ?? json?.error ?? response.statusText;
+    throw new Error(`Failed to refresh Firebase CLI access token: ${message}`);
+  }
+
+  return json.access_token;
 }
 
 async function upsertAuthUsersViaWebApi(users, apiKey) {
@@ -508,6 +548,51 @@ async function writeFirestoreDocument(projectId, accessToken, collectionName, do
   });
 }
 
+async function deleteFirestoreDocumentByName(accessToken, documentName) {
+  await firebaseRequest(`https://firestore.googleapis.com/v1/${documentName}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+}
+
+async function clearCollectionViaRest(projectId, accessToken, collectionName) {
+  let pageToken = null;
+
+  do {
+    const query = new URLSearchParams({ pageSize: "100" });
+    if (pageToken) {
+      query.set("pageToken", pageToken);
+    }
+
+    const response = await firebaseRequest(
+      `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}?${query.toString()}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      },
+    );
+
+    for (const document of response.documents ?? []) {
+      await deleteFirestoreDocumentByName(accessToken, document.name);
+    }
+
+    pageToken = response.nextPageToken ?? null;
+  } while (pageToken);
+}
+
+async function clearFirestoreViaRest(projectId, accessToken) {
+  for (const collectionName of [
+    ...COLLECTIONS.map((entry) => entry.collectionName),
+    ...LEGACY_COLLECTIONS,
+  ]) {
+    await clearCollectionViaRest(projectId, accessToken, collectionName);
+  }
+}
+
 async function seedFirestoreViaRest(projectId, accessToken, store, userIdMap) {
   const payloads = buildSeedPayloads(store, userIdMap);
   const seededAt = new Date().toISOString();
@@ -550,16 +635,13 @@ async function seedUsingAdminSdk(credentialConfig, demoStore) {
   const db = getFirestore(app);
 
   const userIdMap = await seedAuthUsersAdmin(auth, demoStore.users);
+  await clearFirestoreAdmin(db);
   await seedFirestoreAdmin(db, demoStore, userIdMap);
 }
 
 async function seedUsingFirebaseToolsLogin(credentialConfig, demoStore) {
   const firebaseToolsConfig = credentialConfig.firebaseToolsConfig;
-  const accessToken = firebaseToolsConfig?.tokens?.access_token;
-
-  if (!accessToken) {
-    throw new Error("Missing Firebase CLI access token.");
-  }
+  const accessToken = await refreshFirebaseToolsAccessToken(firebaseToolsConfig);
 
   const envFile = await loadEnvFile(DOTENV_PATH);
   const apiKey = process.env.VITE_FIREBASE_API_KEY ?? envFile.VITE_FIREBASE_API_KEY;
@@ -569,6 +651,7 @@ async function seedUsingFirebaseToolsLogin(credentialConfig, demoStore) {
   }
 
   const userIdMap = await upsertAuthUsersViaWebApi(demoStore.users, apiKey);
+  await clearFirestoreViaRest(credentialConfig.projectId, accessToken);
   await seedFirestoreViaRest(
     credentialConfig.projectId,
     accessToken,

@@ -40,6 +40,7 @@ import type {
   AvailabilitySlot,
   DemoStore,
   EmandarBrandStatus,
+  EventCollaborationStatus,
   EnrollmentFormInput,
   EnrollmentRequestManagementInput,
   EnrollmentRequest,
@@ -53,16 +54,23 @@ import type {
   TrainerProfile,
   TrainerProfileUpdateInput,
   TrainingEventBrandStatusUpdateInput,
+  TrainingEventCollaborationUpdateInput,
   TrainingEventManagementUpdateInput,
   TrainingEventInput,
   TrainingEventStatus,
   TrainingEvent,
 } from "@/domain/types";
 import {
+  canDecideTrainingEventCollaboration,
+  canManageTrainingEvent,
   canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
+  isSelfManagedTrainingEvent,
+  isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
+  resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
+  resolveTrainerCollaborationStatus,
   resolveTrainingEventStatus,
 } from "@/domain/utils";
 
@@ -122,6 +130,22 @@ function resolveEventStatus(
   value: TrainingEventStatus | null | undefined,
 ): TrainingEventStatus {
   return resolveTrainingEventStatus(value);
+}
+
+function normalizeEventCollaborationStatus(
+  value: EventCollaborationStatus | null | undefined,
+  fallback: EventCollaborationStatus,
+) {
+  if (
+    value === "accepted" ||
+    value === "pending" ||
+    value === "rejected" ||
+    value === "not-required"
+  ) {
+    return value;
+  }
+
+  return fallback;
 }
 
 function createId(prefix: string) {
@@ -286,6 +310,7 @@ export function subscribePrivateStore(
   );
 
   if (currentUser.role === "admin") {
+    onPatch({ groups: [] });
     unsubs.push(
       subscribeArray<TrainingEvent>(collection(db, collections.trainingEvents), (items) => {
         onPatch({ trainingEvents: items });
@@ -298,11 +323,6 @@ export function subscribePrivateStore(
           onPatch({ relations: pushSorted(relations) });
         },
       ),
-    );
-    unsubs.push(
-      subscribeArray<GroupRecord>(collection(db, collections.groups), (groups) => {
-        onPatch({ groups: pushSorted(groups) });
-      }),
     );
     unsubs.push(
       subscribeArray<AvailabilitySlot>(
@@ -365,21 +385,7 @@ export function subscribePrivateStore(
   } else {
     onPatch({ relations: [] });
   }
-
-  const groupsQuery = buildRoleQuery(
-    collections.groups,
-    currentUser.role === "trainer" ? "trainerUserId" : "organizerUserId",
-    currentUser.id,
-  );
-  if (groupsQuery) {
-    unsubs.push(
-      subscribeArray<GroupRecord>(groupsQuery, (groups) => {
-        onPatch({ groups: pushSorted(groups) });
-      }),
-    );
-  } else {
-    onPatch({ groups: [] });
-  }
+  onPatch({ groups: [] });
 
   if (currentUser.role === "trainer") {
     const ownSlotsQuery = buildRoleQuery(
@@ -773,23 +779,18 @@ export async function manageEnrollmentRequest(
     id: requestSnapshot.id,
     ...(normalizeValue(requestSnapshot.data()) as Omit<EnrollmentRequest, "id">),
   } as EnrollmentRequest;
-  const canManageSource =
-    actor.role === "admin" ||
-    (actor.role === "trainer" && actor.profileId === request.trainerId) ||
-    (actor.role === "organizer" && actor.profileId === request.organizerId);
+  const sourceEvent = await getEvent(request.eventId);
+  const canManageSource = canManageTrainingEvent(sourceEvent, actor);
 
   if (!canManageSource) {
     throw new Error("Możesz zarządzać tylko zgłoszeniami do swoich wydarzeń.");
   }
 
   const targetEventId = input.transferTargetEventId?.trim();
-  const targetEvent = targetEventId ? await getEvent(targetEventId) : await getEvent(request.eventId);
+  const targetEvent = targetEventId ? await getEvent(targetEventId) : sourceEvent;
 
   if (targetEventId) {
-    const canManageTarget =
-      actor.role === "admin" ||
-      (actor.role === "trainer" && actor.profileId === targetEvent.trainerId) ||
-      (actor.role === "organizer" && actor.profileId === targetEvent.organizerId);
+    const canManageTarget = canManageTrainingEvent(targetEvent, actor);
 
     if (!canManageTarget) {
       throw new Error("Możesz przenosić osoby tylko do swoich wydarzeń.");
@@ -801,8 +802,7 @@ export async function manageEnrollmentRequest(
     ? await getOrganizerProfile(targetEvent.organizerId)
     : null;
   const targetRequiresOrganizerApproval =
-    targetEvent.requiresOrganizerApproval ??
-    !isCommunityBrandStatus(targetEvent.brandStatus);
+    targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
 
   let nextTrainerDecision =
     !targetEventId || request.trainerId === targetEvent.trainerId
@@ -1144,6 +1144,168 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
   }
 }
 
+export async function createUnifiedTrainingEvent(
+  input: TrainingEventInput,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+
+  if (
+    (actor.role !== "trainer" && actor.role !== "organizer") ||
+    !actor.profileId
+  ) {
+    throw new Error("Tylko Przekazujący Wiedzę albo organizator może tworzyć szkolenia.");
+  }
+
+  const actingOrganizer =
+    actor.role === "organizer" ? await getOrganizerProfile(actor.profileId) : null;
+  const actingTrainer =
+    actor.role === "trainer" ? await getTrainerProfile(actor.profileId) : null;
+  const trainer =
+    actor.role === "trainer"
+      ? actingTrainer
+      : input.trainerId
+        ? await getTrainerProfile(input.trainerId)
+        : null;
+
+  if (!trainer) {
+    throw new Error("Najpierw wybierz Przekazującego Wiedzę dla szkolenia.");
+  }
+
+  const brandStatus =
+    actor.role === "trainer"
+      ? resolveBrandStatus(input.brandStatus ?? trainer.brandStatus)
+      : "official";
+  const isCommunityTrainer = isCommunityBrandStatus(brandStatus);
+
+  if (actor.role === "organizer" && isCommunityTrainer) {
+    throw new Error("Organizator może tworzyć tylko oficjalne szkolenia.");
+  }
+
+  if (actor.role === "organizer" && isCommunityBrandStatus(trainer.brandStatus)) {
+    throw new Error("Wydarzenia społeczności pozostają po stronie ich właściciela.");
+  }
+
+  const selfManagedByTrainer =
+    actor.role === "trainer" && !isCommunityTrainer
+      ? Boolean(input.selfManagedByTrainer || !input.organizerId)
+      : false;
+  const organizer =
+    isCommunityTrainer || selfManagedByTrainer
+      ? null
+      : actor.role === "organizer"
+        ? actingOrganizer
+        : input.organizerId
+          ? await getOrganizerProfile(input.organizerId)
+          : null;
+
+  if (!isCommunityTrainer && !selfManagedByTrainer && !organizer) {
+    throw new Error("Najpierw wybierz organizatora dla szkolenia.");
+  }
+
+  if (!isCommunityTrainer && !selfManagedByTrainer && organizer) {
+    const approvedRelations = await mapQuery<TrainerOrganizerRelation>(
+      query(
+        collection(db, collections.relations),
+        where("trainerId", "==", trainer.id),
+        where("organizerId", "==", organizer.id),
+        where("status", "==", "approved"),
+      ),
+    );
+
+    if (approvedRelations.length === 0) {
+      throw new Error("Najpierw potrzebujesz zatwierdzonej relacji między trenerem i organizatorem.");
+    }
+  }
+
+  const startsAt = new Date(input.startsAt);
+  const endsAt = new Date(input.endsAt);
+  const dayTwoStartsAt = new Date(input.dayTwoStartsAt);
+  const dayTwoEndsAt = new Date(input.dayTwoEndsAt);
+
+  if (
+    Number.isNaN(startsAt.getTime()) ||
+    Number.isNaN(endsAt.getTime()) ||
+    Number.isNaN(dayTwoStartsAt.getTime()) ||
+    Number.isNaN(dayTwoEndsAt.getTime())
+  ) {
+    throw new Error("Podaj poprawne daty szkolenia.");
+  }
+
+  if (endsAt.getTime() <= startsAt.getTime()) {
+    throw new Error("Data zakończenia musi być późniejsza niż start.");
+  }
+
+  if (dayTwoEndsAt.getTime() <= dayTwoStartsAt.getTime()) {
+    throw new Error("Drugi dzień szkolenia musi kończyć się po starcie.");
+  }
+
+  if (dayTwoStartsAt.getTime() <= startsAt.getTime()) {
+    throw new Error("Drugi dzień szkolenia musi zaczynać się po pierwszym dniu.");
+  }
+
+  const trimmedLocation = input.location.trim();
+  const minimumParticipants = Math.max(
+    1,
+    Math.min(input.capacity, input.minimumParticipants ?? input.capacity),
+  );
+
+  await addDoc(collection(db, collections.trainingEvents), {
+    trainerId: trainer.id,
+    organizerId: organizer?.id ?? null,
+    trainerUserId: trainer.userId,
+    organizerUserId: organizer?.userId ?? null,
+    title: trimmedLocation,
+    summary: input.summary.trim(),
+    description: input.description.trim(),
+    type: input.type.trim(),
+    startsAt: startsAt.toISOString(),
+    endsAt: endsAt.toISOString(),
+    dayTwoStartsAt: dayTwoStartsAt.toISOString(),
+    dayTwoEndsAt: dayTwoEndsAt.toISOString(),
+    location: trimmedLocation,
+    capacity: input.capacity,
+    enrolledCount: 0,
+    isPublished: input.isPublished,
+    imageHint: trimmedLocation.split(/\s+/)[0]?.toLowerCase() || "event",
+    brandStatus,
+    status: resolveEventStatus(input.status),
+    minimumParticipants,
+    requiresOrganizerApproval: !isCommunityTrainer && !selfManagedByTrainer,
+    trainerCollaborationStatus: actor.role === "trainer" ? "accepted" : "pending",
+    organizerCollaborationStatus:
+      isCommunityTrainer || selfManagedByTrainer
+        ? "not-required"
+        : actor.role === "organizer"
+          ? "accepted"
+          : "pending",
+    selfManagedByTrainer: isCommunityTrainer ? true : selfManagedByTrainer,
+    createdByRole: actor.role,
+  });
+
+  if (isCommunityTrainer || selfManagedByTrainer) {
+    return;
+  }
+
+  if (actor.role === "trainer" && organizer) {
+    await notifyUser(
+      organizer.userId,
+      "Nowe szkolenie czeka na akceptację",
+      `${trainer.displayName} dodał szkolenie ${trimmedLocation}.`,
+      "event",
+    );
+  }
+
+  if (actor.role === "organizer") {
+    await notifyUser(
+      trainer.userId,
+      "Nowe szkolenie czeka na akceptację",
+      `${organizer?.displayName ?? "Organizator"} dodał szkolenie ${trimmedLocation}.`,
+      "event",
+    );
+  }
+}
+
 export async function submitAccountRequest(input: AccountRequestInput) {
   const { db } = assertReady();
   await ensureAnonymousSession();
@@ -1255,6 +1417,61 @@ export async function updateTrainingEventBrandStatus(
   });
 }
 
+export async function decideTrainingEventCollaboration(
+  input: TrainingEventCollaborationUpdateInput,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+  const event = await getEvent(input.eventId);
+
+  if (!canDecideTrainingEventCollaboration(event, actor)) {
+    throw new Error("Możesz odpowiadać tylko na swoje zaproszenia do szkolenia.");
+  }
+
+  const updates: Partial<TrainingEvent> = {};
+
+  if (actor.role === "trainer" && actor.profileId === event.trainerId) {
+    updates.trainerCollaborationStatus = input.status;
+  }
+
+  if (actor.role === "organizer" && actor.profileId === event.organizerId) {
+    updates.organizerCollaborationStatus = input.status;
+  }
+
+  if (actor.role === "admin") {
+    updates.trainerCollaborationStatus =
+      normalizeEventCollaborationStatus(
+        event.trainerCollaborationStatus,
+        resolveTrainerCollaborationStatus(event),
+      ) === "pending"
+        ? input.status
+        : resolveTrainerCollaborationStatus(event);
+    updates.organizerCollaborationStatus =
+      normalizeEventCollaborationStatus(
+        event.organizerCollaborationStatus,
+        resolveOrganizerCollaborationStatus(event),
+      ) === "pending"
+        ? input.status
+        : resolveOrganizerCollaborationStatus(event);
+  }
+
+  await updateDoc(doc(db, collections.trainingEvents, input.eventId), updates);
+
+  const trainer = await getTrainerProfile(event.trainerId);
+  const organizer = event.organizerId ? await getOrganizerProfile(event.organizerId) : null;
+  const nextTrainerStatus =
+    updates.trainerCollaborationStatus ?? resolveTrainerCollaborationStatus(event);
+  const nextOrganizerStatus =
+    updates.organizerCollaborationStatus ?? resolveOrganizerCollaborationStatus(event);
+
+  await notifyUsers(
+    [trainer.userId, organizer?.userId],
+    "Zmieniono status współpracy przy szkoleniu",
+    `${event.title}: trener ${nextTrainerStatus}, organizator ${nextOrganizerStatus}.`,
+    "event",
+  );
+}
+
 export async function updateTrainingEventManagement(
   input: TrainingEventManagementUpdateInput,
   actor: AppUser,
@@ -1262,10 +1479,7 @@ export async function updateTrainingEventManagement(
   const { db } = assertReady();
   const event = await getEvent(input.eventId);
 
-  const canManage =
-    actor.role === "admin" ||
-    (actor.role === "trainer" && actor.profileId === event.trainerId) ||
-    (actor.role === "organizer" && actor.profileId === event.organizerId);
+  const canManage = canManageTrainingEvent(event, actor);
 
   if (!canManage) {
     throw new Error("Mozesz zarzadzac tylko swoimi wydarzeniami.");
@@ -1292,10 +1506,7 @@ export async function updateTrainingEventManagement(
   }
 
   const targetEvent = await getEvent(targetEventId);
-  const canManageTarget =
-    actor.role === "admin" ||
-    (actor.role === "trainer" && actor.profileId === targetEvent.trainerId) ||
-    (actor.role === "organizer" && actor.profileId === targetEvent.organizerId);
+  const canManageTarget = canManageTrainingEvent(targetEvent, actor);
 
   if (!canManageTarget) {
     throw new Error("Możesz przenosić zgłoszenia tylko do swoich wydarzeń.");
@@ -1309,8 +1520,7 @@ export async function updateTrainingEventManagement(
     ? await getOrganizerProfile(targetEvent.organizerId)
     : null;
   const targetRequiresOrganizerApproval =
-    targetEvent.requiresOrganizerApproval ??
-    !isCommunityBrandStatus(targetEvent.brandStatus);
+    targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
   const transferableRequests = sourceRequests.filter(
     (request) => request.finalStatus !== "rejected",
   );

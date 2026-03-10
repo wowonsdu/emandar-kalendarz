@@ -12,6 +12,11 @@ export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
 export type AccountRequestStatus = "pending" | "approved" | "rejected";
 export type EmandarBrandStatus = "official" | "supported";
 export type TrainingEventStatus = "active" | "confirmed" | "cancelled";
+export type EventCollaborationStatus =
+  | "pending"
+  | "accepted"
+  | "rejected"
+  | "not-required";
 
 export interface AppUser {
   id: string;
@@ -82,7 +87,6 @@ export interface TrainingEvent {
   organizerId?: string | null;
   trainerUserId?: string;
   organizerUserId?: string | null;
-  groupId?: string;
   title: string;
   summary: string;
   description: string;
@@ -100,6 +104,10 @@ export interface TrainingEvent {
   status?: TrainingEventStatus;
   minimumParticipants?: number;
   requiresOrganizerApproval?: boolean;
+  trainerCollaborationStatus?: EventCollaborationStatus;
+  organizerCollaborationStatus?: EventCollaborationStatus;
+  selfManagedByTrainer?: boolean;
+  createdByRole?: "trainer" | "organizer";
 }
 
 export interface AvailabilitySlot {
@@ -217,6 +225,7 @@ export interface AvailabilityInput {
 }
 
 export interface TrainingEventInput {
+  trainerId?: string;
   organizerId?: string;
   summary: string;
   description: string;
@@ -231,6 +240,7 @@ export interface TrainingEventInput {
   brandStatus?: EmandarBrandStatus;
   status?: TrainingEventStatus;
   minimumParticipants?: number;
+  selfManagedByTrainer?: boolean;
 }
 
 export interface TrainerProfileUpdateInput {
@@ -270,4 +280,9 @@ export interface EnrollmentRequestManagementInput {
   requestId: string;
   decision: DecisionStatus;
   transferTargetEventId?: string | null;
+}
+
+export interface TrainingEventCollaborationUpdateInput {
+  eventId: string;
+  status: Extract<EventCollaborationStatus, "accepted" | "rejected">;
 }

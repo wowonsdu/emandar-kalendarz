@@ -15,6 +15,8 @@ import { SEEDED_ACCOUNTS, SEEDED_PASSWORD } from "@/data/accounts";
 import type { EmandarBrandStatus, TrainingEvent } from "@/domain/types";
 import {
   getTrainingEventStatusLabel,
+  isSelfManagedTrainingEvent,
+  isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
   resolveBrandStatus,
   resolveMinimumParticipants,
@@ -199,8 +201,10 @@ function EventCard({ eventId }: { eventId: string }) {
           </div>
           <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
             <div className="text-sm text-brand-muted">
-              {isCommunityEvent ? "Prowadzone samodzielnie" : "Organizator:"}{" "}
-              {!isCommunityEvent && (
+              {isCommunityEvent || isSelfManagedTrainingEvent(event)
+                ? "Prowadzone samodzielnie"
+                : "Organizator:"}{" "}
+              {!isCommunityEvent && !isSelfManagedTrainingEvent(event) && (
                 <span className="font-semibold text-brand-navy">
                   {firstName(organizer?.displayName)}
                 </span>
@@ -334,7 +338,9 @@ export function CalendarPage() {
       sortEventsByDate(
         store.trainingEvents.filter(
           (item) =>
-            item.isPublished && resolveBrandStatus(item.brandStatus) === "official",
+            item.isPublished &&
+            resolveBrandStatus(item.brandStatus) === "official" &&
+            isTrainingEventCollaborationAccepted(item),
         ),
       ),
     [store.trainingEvents],
@@ -359,7 +365,9 @@ export function CommunityEventsPage() {
       sortEventsByDate(
         store.trainingEvents.filter(
           (item) =>
-            item.isPublished && resolveBrandStatus(item.brandStatus) === "supported",
+            item.isPublished &&
+            resolveBrandStatus(item.brandStatus) === "supported" &&
+            isTrainingEventCollaborationAccepted(item),
         ),
       ),
     [store.trainingEvents],
@@ -489,7 +497,11 @@ export function EventDetailsPage() {
             </span>
           </div>
 
-          <div className={`mt-8 grid gap-4 ${isCommunityEvent ? "md:grid-cols-1" : "md:grid-cols-2"}`}>
+          <div
+            className={`mt-8 grid gap-4 ${
+              isCommunityEvent ? "md:grid-cols-1" : "md:grid-cols-2"
+            }`}
+          >
             <div className="rounded-3xl border border-brand-line bg-white p-5">
               <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
                 Przekazujący Wiedzę
@@ -499,15 +511,21 @@ export function EventDetailsPage() {
               </p>
               <p className="mt-2 text-brand-muted">{trainer.heroNote}</p>
             </div>
-            {!isCommunityEvent && organizer && (
+            {!isCommunityEvent && (
               <div className="rounded-3xl border border-brand-line bg-white p-5">
                 <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
                   Organizator
                 </p>
                 <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                  {firstName(organizer.displayName)}
+                  {isSelfManagedTrainingEvent(event)
+                    ? firstName(trainer.displayName)
+                    : firstName(organizer?.displayName)}
                 </p>
-                <p className="mt-2 text-brand-muted">{organizer.description}</p>
+                <p className="mt-2 text-brand-muted">
+                  {isSelfManagedTrainingEvent(event)
+                    ? trainer.heroNote
+                    : organizer?.description}
+                </p>
               </div>
             )}
           </div>

@@ -1,7 +1,9 @@
 import type {
+  AppUser,
   AppRole,
   DecisionStatus,
   EmandarBrandStatus,
+  EventCollaborationStatus,
   EnrollmentFinalStatus,
   TrainerOrganizerRelation,
   TrainingEventStatus,
@@ -51,6 +53,139 @@ export function canOrganizerAccessTrainer(
       relation.trainerId === trainerId &&
       relation.status === "approved",
   );
+}
+
+export function resolveTrainerCollaborationStatus(
+  event: Pick<
+    TrainingEvent,
+    "brandStatus" | "trainerCollaborationStatus"
+  >,
+): EventCollaborationStatus {
+  if (event.trainerCollaborationStatus) {
+    return event.trainerCollaborationStatus;
+  }
+
+  return "accepted";
+}
+
+export function resolveOrganizerCollaborationStatus(
+  event: Pick<
+    TrainingEvent,
+    "brandStatus" | "organizerId" | "organizerCollaborationStatus" | "selfManagedByTrainer"
+  >,
+): EventCollaborationStatus {
+  if (event.organizerCollaborationStatus) {
+    return event.organizerCollaborationStatus;
+  }
+
+  if (
+    isCommunityBrandStatus(event.brandStatus) ||
+    event.selfManagedByTrainer ||
+    !event.organizerId
+  ) {
+    return "not-required";
+  }
+
+  return "accepted";
+}
+
+export function isSelfManagedTrainingEvent(
+  event: Pick<TrainingEvent, "brandStatus" | "selfManagedByTrainer" | "organizerId">,
+) {
+  return isCommunityBrandStatus(event.brandStatus) || event.selfManagedByTrainer || !event.organizerId;
+}
+
+export function isTrainingEventCollaborationAccepted(
+  event: Pick<
+    TrainingEvent,
+    | "brandStatus"
+    | "organizerId"
+    | "trainerCollaborationStatus"
+    | "organizerCollaborationStatus"
+    | "selfManagedByTrainer"
+  >,
+) {
+  if (isSelfManagedTrainingEvent(event)) {
+    return true;
+  }
+
+  return (
+    resolveTrainerCollaborationStatus(event) === "accepted" &&
+    resolveOrganizerCollaborationStatus(event) === "accepted"
+  );
+}
+
+export function canManageTrainingEvent(
+  event: Pick<
+    TrainingEvent,
+    | "brandStatus"
+    | "createdByRole"
+    | "organizerId"
+    | "selfManagedByTrainer"
+    | "trainerCollaborationStatus"
+    | "organizerCollaborationStatus"
+    | "trainerId"
+  >,
+  actor: Pick<AppUser, "role" | "profileId">,
+) {
+  if (actor.role === "admin") {
+    return true;
+  }
+
+  if (actor.role === "trainer" && actor.profileId === event.trainerId) {
+    return (
+      isSelfManagedTrainingEvent(event) ||
+      resolveTrainerCollaborationStatus(event) === "accepted" ||
+      event.createdByRole === "trainer"
+    );
+  }
+
+  if (actor.role === "organizer" && actor.profileId === event.organizerId) {
+    return (
+      resolveOrganizerCollaborationStatus(event) === "accepted" ||
+      event.createdByRole === "organizer"
+    );
+  }
+
+  return false;
+}
+
+export function canDecideTrainingEventCollaboration(
+  event: Pick<
+    TrainingEvent,
+    | "organizerId"
+    | "organizerCollaborationStatus"
+    | "trainerCollaborationStatus"
+    | "trainerId"
+  >,
+  actor: Pick<AppUser, "role" | "profileId">,
+) {
+  if (actor.role === "admin") {
+    return true;
+  }
+
+  if (actor.role === "trainer" && actor.profileId === event.trainerId) {
+    return resolveTrainerCollaborationStatus(event) === "pending";
+  }
+
+  if (actor.role === "organizer" && actor.profileId === event.organizerId) {
+    return resolveOrganizerCollaborationStatus(event) === "pending";
+  }
+
+  return false;
+}
+
+export function getEventCollaborationStatusLabel(status: EventCollaborationStatus) {
+  switch (status) {
+    case "accepted":
+      return "zaakceptowana";
+    case "rejected":
+      return "odrzucona";
+    case "not-required":
+      return "niepotrzebna";
+    default:
+      return "oczekuje";
+  }
 }
 
 export function sortEventsByDate(events: TrainingEvent[]) {

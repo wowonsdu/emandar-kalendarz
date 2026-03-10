@@ -370,34 +370,12 @@ export const demoSeed: DemoStore = {
     },
     
   ],
-  "groups": [
-    {
-      "id": "group-1",
-      "organizerId": "organizer-1",
-      "trainerId": "trainer-1",
-      "name": "Warszawska grupa oddechu",
-      "visibility": "public",
-      "location": "Warszawa, mazowieckie",
-      "notes": "Nowy cykl otwarty dla os\u00f3b pocz\u0105tkuj\u0105cych.",
-      "createdAt": "2026-03-09T09:00:00.000Z"
-    },
-    {
-      "id": "group-2",
-      "organizerId": "organizer-2",
-      "trainerId": "trainer-5",
-      "name": "Kr\u0105g regeneracji",
-      "visibility": "private",
-      "location": "Krak\u00f3w, ma\u0142opolskie",
-      "notes": "Kameralna grupa dla sta\u0142ych uczestnik\u00f3w.",
-      "createdAt": "2026-03-09T09:00:00.000Z"
-    }
-  ],
+  "groups": [],
   "trainingEvents": [
     {
       "id": "event-1",
       "trainerId": "trainer-1",
       "organizerId": "organizer-1",
-      "groupId": "group-1",
       "title": "Szkolenie oddechu i wyciszania",
       "summary": "Najbli\u017cszy warsztat dla os\u00f3b, kt\u00f3re chc\u0105 odzyska\u0107 r\u00f3wnowag\u0119 i spok\u00f3j.",
       "description": "Dwucz\u0119\u015bciowy warsztat z praktyk\u0105 oddechu, prac\u0119 z cia\u0142em i kr\u00f3tkim blokiem wdro\u017ceniowym. Idealny na wej\u015bcie do \u015bwiata Emandar.",
@@ -409,7 +387,14 @@ export const demoSeed: DemoStore = {
       "enrolledCount": 11,
       "isPublished": true,
       "imageHint": "sky",
-      "brandStatus": "official"
+      "brandStatus": "official",
+      "status": "active",
+      "minimumParticipants": 12,
+      "requiresOrganizerApproval": true,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "selfManagedByTrainer": false,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-2",
@@ -426,7 +411,14 @@ export const demoSeed: DemoStore = {
       "enrolledCount": 9,
       "isPublished": true,
       "imageHint": "forest",
-      "brandStatus": "official"
+      "brandStatus": "official",
+      "status": "confirmed",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "selfManagedByTrainer": false,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-3",
@@ -443,13 +435,19 @@ export const demoSeed: DemoStore = {
       "enrolledCount": 7,
       "isPublished": true,
       "imageHint": "nature",
-      "brandStatus": "official"
+      "brandStatus": "official",
+      "status": "active",
+      "minimumParticipants": 9,
+      "requiresOrganizerApproval": true,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "selfManagedByTrainer": false,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-4",
       "trainerId": "trainer-5",
       "organizerId": "organizer-2",
-      "groupId": "group-2",
       "title": "Regeneracja i oddech bez spiny",
       "summary": "Wieczorne spotkanie dla os\u00f3b, kt\u00f3re chc\u0105 z\u0142apa\u0107 oddech i wr\u00f3ci\u0107 do kontaktu z cia\u0142em.",
       "description": "Trzygodzinne spotkanie z prostymi praktykami oddechowymi, prac\u0119 z cia\u0142em i planem lekkiego wdro\u017cenia na kolejne dni.",
@@ -461,7 +459,14 @@ export const demoSeed: DemoStore = {
       "enrolledCount": 8,
       "isPublished": true,
       "imageHint": "calm",
-      "brandStatus": "official"
+      "brandStatus": "official",
+      "status": "active",
+      "minimumParticipants": 10,
+      "requiresOrganizerApproval": true,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "selfManagedByTrainer": false,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-5",
@@ -478,12 +483,19 @@ export const demoSeed: DemoStore = {
       "enrolledCount": 6,
       "isPublished": true,
       "imageHint": "nature",
-      "brandStatus": "official"
+      "brandStatus": "official",
+      "status": "active",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "selfManagedByTrainer": false,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-6",
       "trainerId": "trainer-6",
-      "organizerId": "organizer-1",
+      "organizerId": null,
       "title": "Beata Kapcewisz: Spokoj w zmianie",
       "summary": "Kameralne szkolenie dla osob, ktore sa w zmianie i chca odzyskac grunt, rytm i wieksza jasnosc decyzji.",
       "description": "Beata prowadzi lagodny, ale konkretny proces pracy z oddechem, cialem i codziennymi nawykami, ktory pomaga szybciej odzyskac poczucie stabilnosci.",
@@ -495,7 +507,14 @@ export const demoSeed: DemoStore = {
       "enrolledCount": 4,
       "isPublished": true,
       "imageHint": "calm",
-      "brandStatus": "official"
+      "brandStatus": "official",
+      "status": "active",
+      "minimumParticipants": 6,
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-7",
@@ -515,7 +534,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "active",
       "minimumParticipants": 10,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-8",
@@ -535,7 +558,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "confirmed",
       "minimumParticipants": 8,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-9",
@@ -555,7 +582,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "active",
       "minimumParticipants": 8,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-10",
@@ -575,7 +606,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "active",
       "minimumParticipants": 12,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-11",
@@ -595,7 +630,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "confirmed",
       "minimumParticipants": 10,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-12",
@@ -615,7 +654,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "cancelled",
       "minimumParticipants": 12,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-13",
@@ -635,7 +678,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "active",
       "minimumParticipants": 8,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-14",
@@ -655,7 +702,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "confirmed",
       "minimumParticipants": 8,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     },
     {
       "id": "event-15",
@@ -675,7 +726,11 @@ export const demoSeed: DemoStore = {
       "brandStatus": "supported",
       "status": "active",
       "minimumParticipants": 9,
-      "requiresOrganizerApproval": false
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "not-required",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer"
     }
   ],
   "availabilitySlots": [

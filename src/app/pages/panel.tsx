@@ -472,6 +472,21 @@ function EmptyPanelState({
   );
 }
 
+function SectionBlockHeading({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div>
+      <h3 className="text-2xl font-semibold text-brand-navy">{title}</h3>
+      <p className="mt-2 text-sm text-brand-muted">{description}</p>
+    </div>
+  );
+}
+
 function getCommunityChartColor(status: TrainingEventStatus | undefined) {
   return resolveTrainingEventStatus(status) === "confirmed"
     ? "#0ea5a4"
@@ -513,9 +528,8 @@ function DashboardChartCard({
 }) {
   return (
     <article className="rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft">
-      <div>
-        <h3 className="text-2xl font-semibold text-brand-navy">{title}</h3>
-        <p className="mt-2 text-sm text-brand-muted">{description}</p>
+      <div className="min-h-[88px]">
+        <SectionBlockHeading title={title} description={description} />
       </div>
       <div className="mt-5">{children}</div>
     </article>
@@ -1086,9 +1100,9 @@ export function DashboardPage() {
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
                 Oblozenie na najblizsze miesiace
               </p>
-              <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
                 Nadchodzace szkolenia i ile osob jeszcze brakuje
-              </h3>
+              </p>
             </div>
             <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-4">
               <DashboardChartCard
@@ -1221,9 +1235,9 @@ export function DashboardPage() {
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
                 Operacyjnie
               </p>
-              <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
                 Jak splywaja zgloszenia i czym koncza sie terminy
-              </h3>
+              </p>
             </div>
             <div className="grid gap-4 xl:grid-cols-3">
               <DashboardChartCard
@@ -3124,12 +3138,10 @@ export function EventManagementPage() {
 
         {canManageEvent && <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-4">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 className="text-2xl font-semibold text-brand-navy">Ustawienia szkolenia</h3>
-              <p className="text-sm text-brand-muted">
-                W tym miejscu ustawiasz status, limity i prog potwierdzenia.
-              </p>
-            </div>
+            <SectionBlockHeading
+              title="Ustawienia szkolenia"
+              description="W tym miejscu ustawiasz status, limity i prog potwierdzenia."
+            />
             {currentUser.role === "admin" && (
               <div className="w-full max-w-sm">
                 <AdminBrandStatusSelect
@@ -3368,12 +3380,10 @@ export function EventManagementPage() {
       </article>
 
       {canManageEvent && <div className="space-y-4">
-        <div>
-          <h3 className="text-2xl font-semibold text-brand-navy">Uczestnicy i zgłoszenia</h3>
-          <p className="mt-2 text-brand-muted">
-            Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy.
-          </p>
-        </div>
+        <SectionBlockHeading
+          title="Uczestnicy i zgłoszenia"
+          description="Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy."
+        />
         {requests.length === 0 && (
           <EmptyPanelState
             title="Brak osob na liscie"

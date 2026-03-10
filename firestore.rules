@@ -62,6 +62,18 @@ service cloud.firestore {
       return isParticipantUser(resource.data.trainerUserId, resource.data.organizerUserId);
     }
 
+    function trainerBrandStatusUnchanged() {
+      return resource == null ||
+        !("brandStatus" in resource.data) ||
+        request.resource.data.brandStatus == resource.data.brandStatus;
+    }
+
+    function eventBrandStatusUnchanged() {
+      return resource == null ||
+        !("brandStatus" in resource.data) ||
+        request.resource.data.brandStatus == resource.data.brandStatus;
+    }
+
     match /users/{userId} {
       allow read: if isAdmin() || isOwnUser(userId);
       allow create, delete: if isAdmin();
@@ -79,6 +91,7 @@ service cloud.firestore {
         hasUserDocument() &&
         currentUserRole() == "trainer" &&
         request.auth.uid == request.resource.data.userId &&
+        trainerBrandStatusUnchanged() &&
         (
           !exists(/databases/$(database)/documents/trainers/$(trainerId)) ||
           resource.data.userId == request.auth.uid
@@ -103,9 +116,12 @@ service cloud.firestore {
       allow read: if resource.data.isPublished == true ||
         isParticipantUser(resource.data.trainerUserId, resource.data.organizerUserId);
       allow create, update, delete: if isAdmin() ||
-        isParticipantUser(
-          request.resource.data.trainerUserId,
-          request.resource.data.organizerUserId
+        (
+          isParticipantUser(
+            request.resource.data.trainerUserId,
+            request.resource.data.organizerUserId
+          ) &&
+          eventBrandStatusUnchanged()
         );
     }
 

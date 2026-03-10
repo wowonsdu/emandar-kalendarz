@@ -11,6 +11,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
   type Query,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -38,22 +39,31 @@ import type {
   AvailabilityInput,
   AvailabilitySlot,
   DemoStore,
+  EmandarBrandStatus,
   EnrollmentFormInput,
+  EnrollmentRequestManagementInput,
   EnrollmentRequest,
   GroupInput,
   GroupRecord,
   NotificationRecord,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
+  TrainerBrandStatusUpdateInput,
   TrainerOrganizerRelation,
   TrainerProfile,
   TrainerProfileUpdateInput,
+  TrainingEventBrandStatusUpdateInput,
+  TrainingEventManagementUpdateInput,
   TrainingEventInput,
+  TrainingEventStatus,
   TrainingEvent,
 } from "@/domain/types";
 import {
   canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
+  isCommunityBrandStatus,
+  resolveMinimumParticipants,
+  resolveTrainingEventStatus,
 } from "@/domain/utils";
 
 type StorePatch = Partial<DemoStore>;
@@ -100,6 +110,18 @@ function assertReady() {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function resolveBrandStatus(
+  value: EmandarBrandStatus | null | undefined,
+): EmandarBrandStatus {
+  return value === "supported" ? "supported" : "official";
+}
+
+function resolveEventStatus(
+  value: TrainingEventStatus | null | undefined,
+): TrainingEventStatus {
+  return resolveTrainingEventStatus(value);
 }
 
 function createId(prefix: string) {
@@ -504,6 +526,78 @@ async function notifyUser(
   });
 }
 
+async function notifyUsers(
+  userIds: Array<string | null | undefined>,
+  title: string,
+  body: string,
+  entityType: NotificationRecord["entityType"],
+) {
+  const uniqueUserIds = Array.from(
+    new Set(userIds.filter((value): value is string => Boolean(value))),
+  );
+
+  await Promise.all(
+    uniqueUserIds.map((userId) => notifyUser(userId, title, body, entityType)),
+  );
+}
+
+async function getEnrollmentRequestsForEvent(eventId: string) {
+  const { db } = assertReady();
+  return mapQuery<EnrollmentRequest>(
+    query(collection(db, collections.enrollmentRequests), where("eventId", "==", eventId)),
+  );
+}
+
+function countActiveEnrollmentRequests(requests: EnrollmentRequest[]) {
+  return requests.filter((request) => request.finalStatus !== "rejected").length;
+}
+
+function countAcceptedEnrollmentRequests(requests: EnrollmentRequest[]) {
+  return requests.filter((request) => request.finalStatus === "accepted").length;
+}
+
+function resolveManagedEventStatus(
+  currentStatus: TrainingEventStatus | undefined,
+  acceptedCount: number,
+  minimumParticipants: number,
+) {
+  if (resolveEventStatus(currentStatus) === "cancelled") {
+    return "cancelled" as const;
+  }
+
+  return acceptedCount >= minimumParticipants ? "confirmed" : "active";
+}
+
+async function syncEventEnrollmentState(
+  eventId: string,
+  overrides?: Partial<Pick<TrainingEvent, "status" | "capacity" | "minimumParticipants">>,
+) {
+  const { db } = assertReady();
+  const event = await getEvent(eventId);
+  const requests = await getEnrollmentRequestsForEvent(eventId);
+  const acceptedCount = countAcceptedEnrollmentRequests(requests);
+  const capacity = Math.max(1, overrides?.capacity ?? event.capacity);
+  const minimumParticipants = Math.max(
+    1,
+    Math.min(
+      capacity,
+      overrides?.minimumParticipants ?? resolveMinimumParticipants(event),
+    ),
+  );
+  const nextStatus = resolveManagedEventStatus(
+    overrides?.status ?? event.status,
+    acceptedCount,
+    minimumParticipants,
+  );
+
+  await updateDoc(doc(db, collections.trainingEvents, eventId), {
+    capacity,
+    enrolledCount: acceptedCount,
+    minimumParticipants,
+    status: nextStatus,
+  });
+}
+
 export async function signIn(email: string, password: string) {
   const { auth } = assertReady();
   const result = await signInWithEmailAndPassword(auth, email, password);
@@ -520,6 +614,9 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   const anonymousUser = await ensureAnonymousSession();
 
   const event = await getEvent(input.eventId);
+  if (resolveEventStatus(event.status) === "cancelled") {
+    throw new Error("To wydarzenie jest anulowane i nie przyjmuje nowych zgĹ‚oszeĹ„.");
+  }
   if (!event.isPublished) {
     throw new Error("To szkolenie nie przyjmuje teraz zgłoszeń.");
   }
@@ -529,17 +626,21 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   }
 
   const trainer = await getTrainerProfile(event.trainerId);
-  const organizer = await getOrganizerProfile(event.organizerId);
+  const organizer = event.organizerId
+    ? await getOrganizerProfile(event.organizerId)
+    : null;
+  const requiresOrganizerApproval =
+    event.requiresOrganizerApproval ?? !isCommunityBrandStatus(event.brandStatus);
   const requestRef = doc(collection(db, collections.enrollmentRequests));
   const photoPath = `enrollment-photos/${requestRef.id}/original`;
 
   await setDoc(requestRef, {
     eventId: event.id,
     trainerId: event.trainerId,
-    organizerId: event.organizerId,
+    organizerId: event.organizerId ?? null,
     submitterUid: anonymousUser.uid,
     trainerUserId: trainer.userId,
-    organizerUserId: organizer.userId,
+    organizerUserId: organizer?.userId ?? null,
     imieNazwisko: input.imieNazwisko,
     telefon: input.telefon,
     polecenieOdKogo: input.polecenieOdKogo,
@@ -548,6 +649,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
     trainerDecision: "pending",
     organizerDecision: "pending",
     finalStatus: "pending",
+    requiresOrganizerApproval,
     createdAt: nowIso(),
   });
 
@@ -578,7 +680,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       "request",
     ),
     notifyUser(
-      organizer.userId,
+      organizer?.userId ?? trainer.userId,
       "Nowe zgłoszenie do grupy",
       `${input.imieNazwisko} wysłał formularz do wydarzenia ${event.title}.`,
       "request",
@@ -589,7 +691,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
 export async function decideEnrollment(
   requestId: string,
   actor: AppUser,
-  decision: "accepted" | "rejected",
+  decision: "accepted" | "rejected" | "pending",
 ) {
   const { db } = assertReady();
   const requestRef = doc(db, collections.enrollmentRequests, requestId);
@@ -604,13 +706,22 @@ export async function decideEnrollment(
     ...(normalizeValue(requestSnapshot.data()) as Omit<EnrollmentRequest, "id">),
   } as EnrollmentRequest;
   const trainer = await getTrainerProfile(request.trainerId);
-  const organizer = await getOrganizerProfile(request.organizerId);
+  const organizer = request.organizerId
+    ? await getOrganizerProfile(request.organizerId)
+    : null;
 
   const updates: Record<string, unknown> = {};
   if (actor.role === "trainer" && actor.profileId === trainer.id) {
     updates.trainerDecision = decision;
-  } else if (actor.role === "organizer" && actor.profileId === organizer.id) {
+  } else if (
+    organizer &&
+    actor.role === "organizer" &&
+    actor.profileId === organizer.id
+  ) {
     updates.organizerDecision = decision;
+  } else if (actor.role === "admin") {
+    updates.trainerDecision = decision;
+    updates.organizerDecision = request.requiresOrganizerApproval ? decision : "pending";
   } else if (actor.role !== "admin") {
     throw new Error("Brak dostępu do tej decyzji.");
   }
@@ -620,12 +731,15 @@ export async function decideEnrollment(
       request.trainerDecision,
     (updates.organizerDecision as EnrollmentRequest["organizerDecision"]) ??
       request.organizerDecision,
+    request.requiresOrganizerApproval,
   );
 
   await updateDoc(requestRef, {
     ...updates,
     finalStatus,
   });
+
+  await syncEventEnrollmentState(request.eventId);
 
   await Promise.all([
     notifyUser(
@@ -635,12 +749,116 @@ export async function decideEnrollment(
       "request",
     ),
     notifyUser(
-      organizer.userId,
+      organizer?.userId ?? trainer.userId,
       "Zmieniono status zgłoszenia",
       `${request.imieNazwisko}: ${finalStatus}.`,
       "request",
     ),
   ]);
+}
+
+export async function manageEnrollmentRequest(
+  input: EnrollmentRequestManagementInput,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+  const requestRef = doc(db, collections.enrollmentRequests, input.requestId);
+  const requestSnapshot = await getDoc(requestRef);
+
+  if (!requestSnapshot.exists()) {
+    throw new Error("Nie znaleziono zgłoszenia.");
+  }
+
+  const request = {
+    id: requestSnapshot.id,
+    ...(normalizeValue(requestSnapshot.data()) as Omit<EnrollmentRequest, "id">),
+  } as EnrollmentRequest;
+  const canManageSource =
+    actor.role === "admin" ||
+    (actor.role === "trainer" && actor.profileId === request.trainerId) ||
+    (actor.role === "organizer" && actor.profileId === request.organizerId);
+
+  if (!canManageSource) {
+    throw new Error("Możesz zarządzać tylko zgłoszeniami do swoich wydarzeń.");
+  }
+
+  const targetEventId = input.transferTargetEventId?.trim();
+  const targetEvent = targetEventId ? await getEvent(targetEventId) : await getEvent(request.eventId);
+
+  if (targetEventId) {
+    const canManageTarget =
+      actor.role === "admin" ||
+      (actor.role === "trainer" && actor.profileId === targetEvent.trainerId) ||
+      (actor.role === "organizer" && actor.profileId === targetEvent.organizerId);
+
+    if (!canManageTarget) {
+      throw new Error("Możesz przenosić osoby tylko do swoich wydarzeń.");
+    }
+  }
+
+  const targetTrainer = await getTrainerProfile(targetEvent.trainerId);
+  const targetOrganizer = targetEvent.organizerId
+    ? await getOrganizerProfile(targetEvent.organizerId)
+    : null;
+  const targetRequiresOrganizerApproval =
+    targetEvent.requiresOrganizerApproval ??
+    !isCommunityBrandStatus(targetEvent.brandStatus);
+
+  let nextTrainerDecision =
+    !targetEventId || request.trainerId === targetEvent.trainerId
+      ? request.trainerDecision
+      : "pending";
+  let nextOrganizerDecision =
+    targetRequiresOrganizerApproval
+      ? !targetEventId || request.organizerId === targetEvent.organizerId
+        ? request.organizerDecision
+        : "pending"
+      : "pending";
+
+  if (actor.role === "trainer" && actor.profileId === targetEvent.trainerId) {
+    nextTrainerDecision = input.decision;
+  } else if (
+    actor.role === "organizer" &&
+    actor.profileId === targetEvent.organizerId &&
+    targetRequiresOrganizerApproval
+  ) {
+    nextOrganizerDecision = input.decision;
+  } else if (actor.role === "admin") {
+    nextTrainerDecision = input.decision;
+    nextOrganizerDecision = targetRequiresOrganizerApproval ? input.decision : "pending";
+  }
+
+  const nextFinalStatus = deriveEnrollmentFinalStatus(
+    nextTrainerDecision,
+    nextOrganizerDecision,
+    targetRequiresOrganizerApproval,
+  );
+
+  await updateDoc(requestRef, {
+    eventId: targetEvent.id,
+    trainerId: targetEvent.trainerId,
+    organizerId: targetEvent.organizerId ?? null,
+    trainerUserId: targetTrainer.userId,
+    organizerUserId: targetOrganizer?.userId ?? null,
+    trainerDecision: nextTrainerDecision,
+    organizerDecision: nextOrganizerDecision,
+    finalStatus: nextFinalStatus,
+    requiresOrganizerApproval: targetRequiresOrganizerApproval,
+  });
+
+  await Promise.all([
+    syncEventEnrollmentState(request.eventId),
+    targetEvent.id === request.eventId
+      ? Promise.resolve()
+      : syncEventEnrollmentState(targetEvent.id),
+  ]);
+
+  await notifyUsers(
+    [targetTrainer.userId, targetOrganizer?.userId],
+    "Zmieniono status uczestnika",
+    `${request.imieNazwisko}: ${nextFinalStatus}.`,
+    "request",
+  );
 }
 
 export async function requestRelation(currentUser: AppUser, trainerId: string) {
@@ -674,12 +892,14 @@ export async function requestRelation(currentUser: AppUser, trainerId: string) {
     createdAt: nowIso(),
   });
 
-  await notifyUser(
+  if (organizer) {
+    await notifyUser(
     trainer.userId,
     "Nowa prośba o współpracę",
     `${organizer.displayName} chce uzyskać dostęp do Twoich terminów.`,
     "relation",
-  );
+    );
+  }
 }
 
 export async function decideRelation(
@@ -831,20 +1051,31 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
   }
 
   const trainer = await getTrainerProfile(actor.profileId);
-  const organizer = await getOrganizerProfile(input.organizerId);
+  const brandStatus = resolveBrandStatus(input.brandStatus ?? trainer.brandStatus);
+  const isCommunityTrainer = isCommunityBrandStatus(brandStatus);
+  const organizer =
+    !isCommunityTrainer && input.organizerId
+      ? await getOrganizerProfile(input.organizerId)
+      : null;
 
-  const approvedRelations = await mapQuery<TrainerOrganizerRelation>(
-    query(
-      collection(db, collections.relations),
-      where("trainerId", "==", trainer.id),
-      where("organizerId", "==", organizer.id),
-      where("trainerUserId", "==", trainer.userId),
-      where("status", "==", "approved"),
-    ),
-  );
+  if (!isCommunityTrainer) {
+    if (!organizer) {
+      throw new Error("Najpierw wybierz organizatora dla szkolenia.");
+    }
 
-  if (approvedRelations.length === 0) {
-    throw new Error("Najpierw potrzebujesz zatwierdzonej relacji z organizatorem.");
+    const approvedRelations = await mapQuery<TrainerOrganizerRelation>(
+      query(
+        collection(db, collections.relations),
+        where("trainerId", "==", trainer.id),
+        where("organizerId", "==", organizer.id),
+        where("trainerUserId", "==", trainer.userId),
+        where("status", "==", "approved"),
+      ),
+    );
+
+    if (approvedRelations.length === 0) {
+      throw new Error("Najpierw potrzebujesz zatwierdzonej relacji z organizatorem.");
+    }
   }
 
   const startsAt = new Date(input.startsAt);
@@ -874,12 +1105,16 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
   }
 
   const trimmedLocation = input.location.trim();
+  const minimumParticipants = Math.max(
+    1,
+    Math.min(input.capacity, input.minimumParticipants ?? input.capacity),
+  );
 
   await addDoc(collection(db, collections.trainingEvents), {
     trainerId: trainer.id,
-    organizerId: organizer.id,
+    organizerId: organizer?.id ?? null,
     trainerUserId: trainer.userId,
-    organizerUserId: organizer.userId,
+    organizerUserId: organizer?.userId ?? null,
     title: trimmedLocation,
     summary: input.summary.trim(),
     description: input.description.trim(),
@@ -893,14 +1128,20 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
     enrolledCount: 0,
     isPublished: input.isPublished,
     imageHint: trimmedLocation.split(/\s+/)[0]?.toLowerCase() || "event",
+    brandStatus,
+    status: resolveEventStatus(input.status),
+    minimumParticipants,
+    requiresOrganizerApproval: !isCommunityTrainer,
   });
 
-  await notifyUser(
-    organizer.userId,
+  if (organizer) {
+    await notifyUser(
+      organizer.userId,
     "Nowe szkolenie od Przekazującego Wiedzę",
     `${trainer.displayName} dodał szkolenie ${trimmedLocation}.`,
-    "event",
-  );
+      "event",
+    );
+  }
 }
 
 export async function submitAccountRequest(input: AccountRequestInput) {
@@ -982,6 +1223,147 @@ export async function updateOrganizerProfile(
     location: input.location.trim(),
     description: input.description.trim(),
   });
+}
+
+export async function updateTrainerBrandStatus(
+  input: TrainerBrandStatusUpdateInput,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+
+  if (actor.role !== "admin") {
+    throw new Error("Tylko admin może zmieniać status Emandar profilu.");
+  }
+
+  await updateDoc(doc(db, collections.trainers, input.trainerId), {
+    brandStatus: resolveBrandStatus(input.brandStatus),
+  });
+}
+
+export async function updateTrainingEventBrandStatus(
+  input: TrainingEventBrandStatusUpdateInput,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+
+  if (actor.role !== "admin") {
+    throw new Error("Tylko admin może zmieniać status Emandar wydarzenia.");
+  }
+
+  await updateDoc(doc(db, collections.trainingEvents, input.eventId), {
+    brandStatus: resolveBrandStatus(input.brandStatus),
+  });
+}
+
+export async function updateTrainingEventManagement(
+  input: TrainingEventManagementUpdateInput,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+  const event = await getEvent(input.eventId);
+
+  const canManage =
+    actor.role === "admin" ||
+    (actor.role === "trainer" && actor.profileId === event.trainerId) ||
+    (actor.role === "organizer" && actor.profileId === event.organizerId);
+
+  if (!canManage) {
+    throw new Error("Mozesz zarzadzac tylko swoimi wydarzeniami.");
+  }
+
+  const normalizedCapacity = Math.max(1, input.capacity);
+  const normalizedMinimumParticipants = Math.max(
+    1,
+    Math.min(normalizedCapacity, input.minimumParticipants),
+  );
+  const targetEventId = input.transferTargetEventId?.trim();
+
+  if (!targetEventId) {
+    await syncEventEnrollmentState(input.eventId, {
+      capacity: normalizedCapacity,
+      status: resolveEventStatus(input.status),
+      minimumParticipants: normalizedMinimumParticipants,
+    });
+    return;
+  }
+
+  if (targetEventId === event.id) {
+    throw new Error("Wybierz inne wydarzenie do przeniesienia zgłoszeń.");
+  }
+
+  const targetEvent = await getEvent(targetEventId);
+  const canManageTarget =
+    actor.role === "admin" ||
+    (actor.role === "trainer" && actor.profileId === targetEvent.trainerId) ||
+    (actor.role === "organizer" && actor.profileId === targetEvent.organizerId);
+
+  if (!canManageTarget) {
+    throw new Error("Możesz przenosić zgłoszenia tylko do swoich wydarzeń.");
+  }
+
+  const [sourceRequests, targetTrainer] = await Promise.all([
+    getEnrollmentRequestsForEvent(event.id),
+    getTrainerProfile(targetEvent.trainerId),
+  ]);
+  const targetOrganizer = targetEvent.organizerId
+    ? await getOrganizerProfile(targetEvent.organizerId)
+    : null;
+  const targetRequiresOrganizerApproval =
+    targetEvent.requiresOrganizerApproval ??
+    !isCommunityBrandStatus(targetEvent.brandStatus);
+  const transferableRequests = sourceRequests.filter(
+    (request) => request.finalStatus !== "rejected",
+  );
+
+  const batch = writeBatch(db);
+
+  transferableRequests.forEach((request) => {
+    const nextTrainerDecision =
+      request.trainerId === targetEvent.trainerId
+        ? request.trainerDecision
+        : "pending";
+    const nextOrganizerDecision = targetRequiresOrganizerApproval
+      ? request.organizerId === targetEvent.organizerId
+        ? request.organizerDecision
+        : "pending"
+      : "pending";
+
+    batch.update(doc(db, collections.enrollmentRequests, request.id), {
+      eventId: targetEvent.id,
+      trainerId: targetEvent.trainerId,
+      organizerId: targetEvent.organizerId ?? null,
+      trainerUserId: targetTrainer.userId,
+      organizerUserId: targetOrganizer?.userId ?? null,
+      trainerDecision: nextTrainerDecision,
+      organizerDecision: nextOrganizerDecision,
+      finalStatus: deriveEnrollmentFinalStatus(
+        nextTrainerDecision,
+        nextOrganizerDecision,
+        targetRequiresOrganizerApproval,
+      ),
+      requiresOrganizerApproval: targetRequiresOrganizerApproval,
+    });
+  });
+
+  await batch.commit();
+
+  await Promise.all([
+    syncEventEnrollmentState(event.id, {
+      capacity: normalizedCapacity,
+      status: resolveEventStatus(input.status),
+      minimumParticipants: normalizedMinimumParticipants,
+    }),
+    syncEventEnrollmentState(targetEvent.id),
+  ]);
+
+  if (transferableRequests.length > 0) {
+    await notifyUsers(
+      [targetTrainer.userId, targetOrganizer?.userId],
+      "Przeniesiono zgłoszenia do szkolenia",
+      `${transferableRequests.length} zgłoszeń przeniesiono do ${targetEvent.title}.`,
+      "request",
+    );
+  }
 }
 
 export async function decideAccountRequest(

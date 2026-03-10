@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env.local
+.env.*.local
+.vite-dev.log
+.vite-dev.err.log
+.vite-firebase.log
+run-once.log

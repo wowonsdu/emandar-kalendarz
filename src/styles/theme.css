@@ -1,0 +1,101 @@
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-size: 16px;
+  --font-brand: "Mulish", "Segoe UI", sans-serif;
+  --background: #f7fbff;
+  --foreground: #113455;
+  --card: #ffffff;
+  --card-foreground: #113455;
+  --popover: #ffffff;
+  --popover-foreground: #113455;
+  --primary: #0c3f80;
+  --primary-foreground: #ffffff;
+  --secondary: #dff2ff;
+  --secondary-foreground: #113455;
+  --muted: #e8f1f8;
+  --muted-foreground: #5f7287;
+  --accent: #caebff;
+  --accent-foreground: #113455;
+  --destructive: #b42318;
+  --destructive-foreground: #ffffff;
+  --border: rgba(17, 52, 85, 0.12);
+  --input: transparent;
+  --input-background: #f4f9fd;
+  --switch-background: #b7cad8;
+  --ring: rgba(12, 63, 128, 0.35);
+  --radius: 1rem;
+  --color-brand-navy: #0c3f80;
+  --color-brand-shell: #eef6fb;
+  --color-brand-line: rgba(17, 52, 85, 0.12);
+  --color-brand-muted: #5f7287;
+  --color-brand-sky: #8ed8ff;
+  --color-brand-sky-deep: #2f8fc9;
+  --shadow-soft: 0 24px 60px rgba(12, 63, 128, 0.08);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+  --color-brand-navy: var(--color-brand-navy);
+  --color-brand-shell: var(--color-brand-shell);
+  --color-brand-line: var(--color-brand-line);
+  --color-brand-muted: var(--color-brand-muted);
+  --color-brand-sky: var(--color-brand-sky);
+  --color-brand-sky-deep: var(--color-brand-sky-deep);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 8px);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    font-size: var(--font-size);
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-brand);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  button,
+  input,
+  textarea,
+  select {
+    font-family: var(--font-brand);
+  }
+}
+
+@layer utilities {
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+}

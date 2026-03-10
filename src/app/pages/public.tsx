@@ -11,11 +11,11 @@ import {
 } from "lucide-react";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
-import { SEEDED_ACCOUNTS, SEEDED_PASSWORD } from "@/data/accounts";
-import type { EmandarBrandStatus, TrainingEvent } from "@/domain/types";
+import type { AppUser, EmandarBrandStatus, TrainingEvent } from "@/domain/types";
 import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
+  isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
@@ -67,8 +67,52 @@ function firstName(value?: string) {
   return value.trim().split(/\s+/)[0] ?? "";
 }
 
+function getPublicOrganizerName(event: TrainingEvent, organizerName?: string, trainerName?: string) {
+  if (isSelfManagedTrainingEvent(event)) {
+    return firstName(trainerName);
+  }
+
+  return firstName(organizerName) || "Zespół Emandar";
+}
+
+function getPublicOrganizerDescription(
+  event: TrainingEvent,
+  organizerDescription?: string,
+  trainerHeroNote?: string,
+) {
+  if (isSelfManagedTrainingEvent(event)) {
+    return trainerHeroNote ?? "";
+  }
+
+  return organizerDescription || "Szczegóły organizacyjne otrzymasz po zgłoszeniu.";
+}
+
 function getEventTags(event: TrainingEvent) {
   return (event.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+}
+
+function canManagePublicEvent(event: TrainingEvent, currentUser: AppUser | null) {
+  if (!currentUser) {
+    return false;
+  }
+
+  if (currentUser.role === "admin") {
+    return true;
+  }
+
+  if (currentUser.role === "trainer") {
+    return currentUser.trainerProfileId === event.trainerId;
+  }
+
+  if (currentUser.role === "organizer") {
+    return (
+      Boolean(event.organizerId) &&
+      currentUser.organizerProfileId === event.organizerId &&
+      !isTrainingEventArchived(event)
+    );
+  }
+
+  return false;
 }
 
 function isOfficialTrainerProfile(
@@ -131,7 +175,7 @@ function EventFeedSection({
 }
 
 function EventCard({ eventId }: { eventId: string }) {
-  const { store } = useAppState();
+  const { currentUser, store } = useAppState();
   const event = store.trainingEvents.find((item) => item.id === eventId);
 
   if (!event) {
@@ -139,11 +183,11 @@ function EventCard({ eventId }: { eventId: string }) {
   }
 
   const trainer = store.trainers.find((item) => item.id === event.trainerId);
-  const organizer = store.organizers.find((item) => item.id === event.organizerId);
   const eventTags = getEventTags(event);
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const canManage = canManagePublicEvent(event, currentUser);
 
   return (
     <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
@@ -168,20 +212,14 @@ function EventCard({ eventId }: { eventId: string }) {
           </div>
         </div>
 
-        <div>
-          <div className="mb-5 flex flex-wrap items-center gap-3">
-            <span className="rounded-full bg-brand-sky/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
-              {event.type}
-            </span>
-            <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-              maks. {event.capacity} uczestnikow
-            </span>
-          </div>
-          <h3 className="text-2xl font-semibold text-brand-navy">{event.location}</h3>
-          <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+        <div className="flex h-full flex-col">
+          <div>
+            <h3 className="text-2xl font-semibold text-brand-navy">{event.location}</h3>
+            <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
             {scheduleRangeLabel}
-          </p>
-          <p className="mt-3 line-clamp-2 text-brand-muted">{event.summary}</p>
+            </p>
+            <p className="mt-3 line-clamp-2 text-brand-muted">{event.summary}</p>
+          </div>
           <div
             className={`mt-6 grid gap-3 ${
               scheduleRows.length > 1 ? "sm:grid-cols-2" : "sm:grid-cols-1"
@@ -201,40 +239,51 @@ function EventCard({ eventId }: { eventId: string }) {
               </div>
             ))}
           </div>
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
-            <div className="text-sm text-brand-muted">
+          <div className="mt-5 text-sm text-brand-muted">
+            <div>
               {isCommunityEvent || isSelfManagedTrainingEvent(event)
                 ? "Prowadzone samodzielnie"
                 : "Organizator:"}{" "}
               {!isCommunityEvent && !isSelfManagedTrainingEvent(event) && (
                 <span className="font-semibold text-brand-navy">
-                  {firstName(organizer?.displayName)}
+                  {getPublicOrganizerName(event, undefined, trainer?.displayName)}
                 </span>
               )}
-              <span className="ml-3">
-                maks. {event.capacity} osob
-              </span>
             </div>
-            <Link
-              to={`/kalendarz/${event.id}`}
-              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-            >
-              Poproś o kontakt
-              <ArrowRight size={16} />
-            </Link>
           </div>
-          {eventTags.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-auto flex flex-wrap items-end justify-between gap-4 pt-5">
+            {eventTags.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
               {eventTags.map((tag) => (
                 <span
                   key={`${event.id}-${tag}`}
-                  className="rounded-full border border-brand-line bg-brand-shell px-3 py-1 text-xs font-semibold text-brand-navy"
+                  className="rounded-full bg-brand-sky/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy"
                 >
                   {tag}
                 </span>
               ))}
+              </div>
+            ) : (
+              <div />
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              {canManage && (
+                <Link
+                  to={`/panel/szkolenia/${event.id}`}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                >
+                  Edytuj szkolenie
+                </Link>
+              )}
+              <Link
+                to={`/kalendarz/${event.id}`}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+              >
+                Poproś o kontakt
+                <ArrowRight size={16} />
+              </Link>
             </div>
-          )}
+          </div>
         </div>
       </div>
     </article>
@@ -350,6 +399,7 @@ export function CalendarPage() {
         store.trainingEvents.filter(
           (item) =>
             item.isPublished &&
+            !isTrainingEventArchived(item) &&
             resolveBrandStatus(item.brandStatus) === "official" &&
             isTrainingEventCollaborationAccepted(item),
         ),
@@ -377,6 +427,7 @@ export function CommunityEventsPage() {
         store.trainingEvents.filter(
           (item) =>
             item.isPublished &&
+            !isTrainingEventArchived(item) &&
             resolveBrandStatus(item.brandStatus) === "supported" &&
             isTrainingEventCollaborationAccepted(item),
         ),
@@ -398,11 +449,10 @@ export function CommunityEventsPage() {
 
 export function EventDetailsPage() {
   const { eventId } = useParams();
-  const { store, submitEnrollment } = useAppState();
+  const { currentUser, store, submitEnrollment } = useAppState();
   const navigate = useNavigate();
   const event = store.trainingEvents.find((item) => item.id === eventId);
   const trainer = store.trainers.find((item) => item.id === event?.trainerId);
-  const organizer = store.organizers.find((item) => item.id === event?.organizerId);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
     imieNazwisko: "",
@@ -416,12 +466,17 @@ export function EventDetailsPage() {
     return <Navigate to="/kalendarz" replace />;
   }
 
+  if (isTrainingEventArchived(event)) {
+    return <Navigate to={isCommunityBrandStatus(event.brandStatus) ? "/wydarzenia-spolecznosci" : "/kalendarz"} replace />;
+  }
+
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventStatus = resolveTrainingEventStatus(event.status);
   const isCancelled = eventStatus === "cancelled";
   const eventTags = getEventTags(event);
+  const canManage = canManagePublicEvent(event, currentUser);
 
   function handleFileChange(fileEvent: ChangeEvent<HTMLInputElement>) {
     const nextFile = fileEvent.target.files?.[0] ?? null;
@@ -522,17 +577,13 @@ export function EventDetailsPage() {
                   Organizator
                 </p>
                 <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                  {isSelfManagedTrainingEvent(event)
-                    ? firstName(trainer.displayName)
-                    : firstName(organizer?.displayName)}
-                </p>
-                <p className="mt-2 text-brand-muted">
-                  {isSelfManagedTrainingEvent(event)
-                    ? trainer.heroNote
-                    : organizer?.description}
-                </p>
-              </div>
-            )}
+                    {getPublicOrganizerName(event, undefined, trainer.displayName)}
+                  </p>
+                  <p className="mt-2 text-brand-muted">
+                    {getPublicOrganizerDescription(event, undefined, trainer.heroNote)}
+                  </p>
+                </div>
+              )}
           </div>
           {eventTags.length > 0 && (
             <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-5">
@@ -648,14 +699,24 @@ export function EventDetailsPage() {
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={loading || isCancelled}
-            className="mt-6 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-          >
-            {loading ? "Wysyłanie..." : "Poproś o kontakt"}
-            <ArrowRight size={16} />
-          </button>
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            {canManage && (
+              <Link
+                to={`/panel/szkolenia/${event.id}`}
+                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy shadow-soft"
+              >
+                Edytuj szkolenie
+              </Link>
+            )}
+            <button
+              type="submit"
+              disabled={loading || isCancelled}
+              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+            >
+              {loading ? "Wysyłanie..." : "Poproś o kontakt"}
+              <ArrowRight size={16} />
+            </button>
+          </div>
         </form>
       </div>
     </section>
@@ -691,7 +752,7 @@ export function TrainersPage() {
           <div className="sm:col-span-2 xl:col-span-4">
             <EmptyState
               title="Brak publicznych profili"
-              description="Po seedzie Firebase albo po odblokowaniu profili Przekazujący Wiedzę pojawią się tutaj."
+              description="Tutaj pojawią się tylko profile trenerów, które zostały ręcznie dodane i odblokowane w systemie."
             />
           </div>
         ) : (
@@ -762,7 +823,7 @@ export function TrainerDetailsPage() {
 
   const publicEvents = sortEventsByDate(
     store.trainingEvents.filter(
-      (event) => event.trainerId === trainer.id && event.isPublished,
+      (event) => event.trainerId === trainer.id && event.isPublished && !isTrainingEventArchived(event),
     ),
   );
 
@@ -833,8 +894,8 @@ export function TrainerDetailsPage() {
 export function LoginPage() {
   const { authReady, currentUser, signIn } = useAppState();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("marcin@emandar.pl");
-  const [password, setPassword] = useState(SEEDED_PASSWORD);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   if (currentUser) {
@@ -860,7 +921,7 @@ export function LoginPage() {
 
   return (
     <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="grid gap-8 lg:grid-cols-[0.95fr_1.05fr]">
+      <div className="mx-auto max-w-2xl">
         <form
           onSubmit={handleSubmit}
           className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft"
@@ -904,50 +965,18 @@ export function LoginPage() {
               Dostęp do panelu
             </div>
             <p className="mt-2">
-              Jeśli nie masz jeszcze aktywnego konta, wyślij zgłoszenie
-              rejestracyjne i poczekaj na akceptację.
+              Jesteś organizatorem grup? Zarejestruj się, wybierz swojego
+              Przekazującego Wiedzę i poczekaj na akceptację.
             </p>
             <Link
               to="/rejestracja"
               className="mt-4 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2 font-semibold text-brand-navy"
             >
-              Przejdź do rejestracji
+              Utwórz konto organizatora
               <ArrowRight size={14} />
             </Link>
           </div>
         </form>
-
-        <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
-            Szybkie logowanie
-          </p>
-          <p className="mt-4 text-lg text-brand-muted">
-            Kliknij konto, żeby się zalogować. Hasło startowe dla wszystkich to{" "}
-            <span className="font-semibold text-brand-navy">{SEEDED_PASSWORD}</span>.
-          </p>
-
-          <div className="mt-8 grid max-h-[460px] gap-3 overflow-auto pr-1">
-            {SEEDED_ACCOUNTS.map((account) => (
-              <button
-                key={account.email}
-                type="button"
-                onClick={() => {
-                  setEmail(account.email);
-                  setPassword(SEEDED_PASSWORD);
-                }}
-                className="flex items-center justify-between rounded-3xl border border-brand-line bg-brand-shell px-5 py-4 text-left"
-              >
-                <div>
-                  <p className="font-semibold text-brand-navy">{account.label}</p>
-                  <p className="text-sm text-brand-muted">{account.email}</p>
-                </div>
-                <span className="text-sm font-semibold text-brand-sky-deep">
-                  {SEEDED_PASSWORD}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
     </section>
   );
@@ -961,7 +990,7 @@ export function RegisterPage() {
     displayName: "",
     email: "",
     phone: "",
-    requestedRole: "organizer" as "trainer" | "organizer",
+    requestedRoles: ["organizer"] as Array<"trainer" | "organizer">,
     notes: "",
   });
 
@@ -974,6 +1003,11 @@ export function RegisterPage() {
     setLoading(true);
 
     try {
+      if (form.requestedRoles.length === 0) {
+        toast.error("Wybierz przynajmniej jeden zakres działania.");
+        return;
+      }
+
       await submitAccountRequest(form);
       toast.success("Zgłoszenie konta zostało zapisane.");
       navigate("/login");
@@ -998,8 +1032,9 @@ export function RegisterPage() {
           Zgłoszenie nowego konta
         </h1>
         <p className="mt-4 max-w-2xl text-lg text-brand-muted">
-          Wypełnij formularz, a konto Przekazującego Wiedzę albo organizatora
-          zostanie utworzone po akceptacji przez admina.
+          Wypełnij formularz, a po akceptacji przez admina konto może działać
+          jako organizator grup Emandar, osoba prowadząca wydarzenia dla
+          społeczności albo w obu tych trybach naraz.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-8 grid gap-4">
@@ -1057,19 +1092,56 @@ export function RegisterPage() {
             <span className="text-sm font-semibold text-brand-navy">
               Chcę działać jako
             </span>
-            <select
-              value={form.requestedRole}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  requestedRole: event.target.value as "trainer" | "organizer",
-                }))
-              }
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            >
-              <option value="organizer">Organizator</option>
-              <option value="trainer">Przekazujący Wiedzę</option>
-            </select>
+            <div className="grid gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4">
+              <label className="flex items-start gap-3 text-brand-navy">
+                <input
+                  type="checkbox"
+                  checked={form.requestedRoles.includes("organizer")}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      requestedRoles: event.target.checked
+                        ? Array.from(new Set([...current.requestedRoles, "organizer"]))
+                        : current.requestedRoles.filter((role) => role !== "organizer"),
+                    }))
+                  }
+                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+                />
+                <span className="grid gap-1">
+                  <span className="text-sm font-semibold">Organizator grup Emandar</span>
+                  <span className="text-sm text-brand-muted">
+                    Organizujesz normalne szkolenia z Przekazującym Wiedzę na podstawie
+                    zatwierdzonej relacji.
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-3 text-brand-navy">
+                <input
+                  type="checkbox"
+                  checked={form.requestedRoles.includes("trainer")}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      requestedRoles: event.target.checked
+                        ? Array.from(new Set([...current.requestedRoles, "trainer"]))
+                        : current.requestedRoles.filter((role) => role !== "trainer"),
+                    }))
+                  }
+                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+                />
+                <span className="grid gap-1">
+                  <span className="text-sm font-semibold">Wydarzenia dla społeczności</span>
+                  <span className="text-sm text-brand-muted">
+                    Prowadzisz własne zgłoszenia i wydarzenia społeczności bez przypinania
+                    ich do trenera.
+                  </span>
+                </span>
+              </label>
+            </div>
+            <p className="text-sm text-brand-muted">
+              Możesz zaznaczyć oba warianty, jeśli chcesz działać jednocześnie w obu
+              obszarach.
+            </p>
           </label>
 
           <label className="grid gap-2">

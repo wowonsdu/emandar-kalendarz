@@ -3,6 +3,7 @@ import {
   arrayRemove,
   arrayUnion,
   collection,
+  deleteDoc,
   deleteField,
   doc,
   getDoc,
@@ -28,9 +29,11 @@ import {
   uploadBytes,
   type UploadMetadata,
 } from "firebase/storage";
+import { httpsCallable } from "firebase/functions";
 import {
   firebaseAuth,
   firebaseDb,
+  firebaseFunctions,
   firebaseStorage,
 } from "@/lib/firebase";
 import type {
@@ -41,15 +44,17 @@ import type {
   AvailabilitySlot,
   DemoStore,
   EmandarBrandStatus,
+  ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFormInput,
   EnrollmentRequestManagementInput,
   EnrollmentRequest,
-  GroupInput,
-  GroupRecord,
   NotificationRecord,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
+  TrainerCalendarFeed,
+  TrainerCalendarFeedInput,
+  TrainerExternalBusyMonth,
   TrainerBrandStatusUpdateInput,
   TrainerOrganizerRelation,
   TrainerProfile,
@@ -68,14 +73,17 @@ import {
   canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
   getTrainingEventScheduleDays,
-  isSelfManagedTrainingEvent,
   isTrainingEventCollaborationAccepted,
+  isTrainingEventArchived,
+  isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
+  mergeBusyIntervals,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
   resolveTrainingEventStatus,
 } from "@/domain/utils";
+import { fetchIcalBusyIntervals } from "@/lib/ical";
 
 type StorePatch = Partial<DemoStore>;
 
@@ -86,8 +94,9 @@ const collections = {
   trainingEvents: "trainingEvents",
   enrollmentRequests: "enrollmentRequests",
   relations: "trainerOrganizerRelations",
-  groups: "groups",
   availabilitySlots: "availabilitySlots",
+  trainerCalendarFeeds: "trainerCalendarFeeds",
+  trainerExternalBusyMonths: "trainerExternalBusyMonths",
   notifications: "notifications",
   accountRequests: "accountRequests",
 } as const;
@@ -98,9 +107,10 @@ export function createEmptyStore(): DemoStore {
     trainers: [],
     organizers: [],
     relations: [],
-    groups: [],
     trainingEvents: [],
     availabilitySlots: [],
+    trainerCalendarFeeds: [],
+    trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     accountRequests: [],
@@ -119,8 +129,48 @@ function assertReady() {
   };
 }
 
+async function callFirebaseFunction<TInput extends Record<string, unknown> | undefined, TOutput>(
+  name: string,
+  payload?: TInput,
+) {
+  if (!firebaseFunctions) {
+    throw new Error("Firebase Functions nie jest jeszcze gotowe.");
+  }
+
+  const callable = httpsCallable<TInput | undefined, TOutput>(firebaseFunctions, name);
+  const result = await callable(payload);
+  return result.data;
+}
+
 function nowIso() {
   return new Date().toISOString();
+}
+
+function formatMonthKey(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function getAvailabilitySyncRange() {
+  const rangeStart = new Date();
+  rangeStart.setUTCMinutes(0, 0, 0);
+
+  const rangeEnd = new Date(rangeStart);
+  rangeEnd.setUTCFullYear(rangeEnd.getUTCFullYear() + 3);
+
+  return { rangeStart, rangeEnd };
+}
+
+function splitIntervalsByMonth(intervals: ExternalBusyInterval[]) {
+  const grouped = new Map<string, ExternalBusyInterval[]>();
+
+  intervals.forEach((interval) => {
+    const key = formatMonthKey(new Date(interval.startsAt));
+    const existing = grouped.get(key) ?? [];
+    existing.push(interval);
+    grouped.set(key, existing);
+  });
+
+  return grouped;
 }
 
 function resolveBrandStatus(
@@ -218,6 +268,130 @@ function createId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function normalizeUserRoles(value: unknown, fallbackRole?: string | null) {
+  const roles = Array.isArray(value)
+    ? value.filter(
+        (role): role is AppUser["role"] =>
+          role === "admin" || role === "trainer" || role === "organizer",
+      )
+    : [];
+
+  if (roles.length > 0) {
+    return roles;
+  }
+
+  if (
+    fallbackRole === "admin" ||
+    fallbackRole === "trainer" ||
+    fallbackRole === "organizer"
+  ) {
+    return [fallbackRole];
+  }
+
+  return ["trainer"] satisfies AppUser["roles"];
+}
+
+function normalizeAppUserRecord(userId: string, raw: unknown) {
+  const normalized = normalizeValue(raw) as Record<string, unknown>;
+  const roles = normalizeUserRoles(normalized.roles, typeof normalized.role === "string" ? normalized.role : null);
+  const primaryRole =
+    normalized.primaryRole === "admin" ||
+    normalized.primaryRole === "trainer" ||
+    normalized.primaryRole === "organizer"
+      ? normalized.primaryRole
+      : roles[0];
+
+  return {
+    id: userId,
+    ...normalized,
+    role: primaryRole,
+    roles,
+    primaryRole,
+    trainerProfileId:
+      typeof normalized.trainerProfileId === "string"
+        ? normalized.trainerProfileId
+        : undefined,
+    organizerProfileId:
+      typeof normalized.organizerProfileId === "string"
+        ? normalized.organizerProfileId
+        : undefined,
+  } as AppUser;
+}
+
+function getUserTrainerProfileId(user: Pick<AppUser, "trainerProfileId">) {
+  const trainerProfileId = user.trainerProfileId?.trim();
+
+  if (!trainerProfileId) {
+    throw new Error("To konto nie ma aktywnego profilu Przekazującego Wiedzę.");
+  }
+
+  return trainerProfileId;
+}
+
+function getUserOrganizerProfileId(user: Pick<AppUser, "organizerProfileId">) {
+  const organizerProfileId = user.organizerProfileId?.trim();
+
+  if (!organizerProfileId) {
+    throw new Error("To konto nie ma aktywnego profilu organizatora.");
+  }
+
+  return organizerProfileId;
+}
+
+export function buildRelationId(trainerId: string, organizerId: string) {
+  return `${trainerId}__${organizerId}`;
+}
+
+async function getRelationByPair(trainerId: string, organizerId: string) {
+  const { db } = assertReady();
+  const snapshot = await getDoc(doc(db, collections.relations, buildRelationId(trainerId, organizerId)));
+
+  if (!snapshot.exists()) {
+    return null;
+  }
+
+  return {
+    id: snapshot.id,
+    ...(normalizeValue(snapshot.data()) as Omit<TrainerOrganizerRelation, "id">),
+  } as TrainerOrganizerRelation;
+}
+
+async function requireApprovedRelation(
+  trainer: Pick<TrainerProfile, "id" | "userId">,
+  organizer: Pick<OrganizerProfile, "id" | "userId">,
+) {
+  const relation = await getRelationByPair(trainer.id, organizer.id);
+
+  if (
+    !relation ||
+    relation.status !== "approved" ||
+    relation.trainerUserId !== trainer.userId ||
+    relation.organizerUserId !== organizer.userId
+  ) {
+    throw new Error("Najpierw potrzebujesz zatwierdzonej relacji miedzy trenerem i organizatorem.");
+  }
+
+  return relation;
+}
+
+function ensureEventCanAcceptEnrollment(event: TrainingEvent) {
+  if (isTrainingEventArchived(event)) {
+    throw new Error("To szkolenie zostalo zarchiwizowane i nie przyjmuje juz zgloszen.");
+  }
+
+  if (!isTrainingEventCollaborationAccepted(event)) {
+    throw new Error("To szkolenie czeka jeszcze na pelna akceptacje wspolpracy.");
+  }
+
+  if (resolveEventStatus(event.status) === "cancelled") {
+    throw new Error("To wydarzenie jest anulowane i nie przyjmuje nowych zgloszen.");
+  }
+
+  if (!event.isPublished) {
+    throw new Error("To szkolenie nie przyjmuje teraz zgloszen.");
+  }
+}
+
 function normalizeValue<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((item) => normalizeValue(item)) as T;
@@ -276,12 +450,6 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
         onPatch({ trainers });
       },
     ),
-    subscribeArray<OrganizerProfile>(
-      query(collection(db, collections.organizers), where("isVisible", "==", true)),
-      (organizers) => {
-        onPatch({ organizers });
-      },
-    ),
     subscribeArray<TrainingEvent>(
       query(
         collection(db, collections.trainingEvents),
@@ -292,6 +460,8 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
       },
     ),
   ];
+
+  onPatch({ organizers: [] });
 
   return () => {
     unsubs.forEach((unsubscribe) => unsubscribe());
@@ -310,10 +480,7 @@ export function subscribeUserProfile(
       return;
     }
 
-    onUser({
-      id: snapshot.id,
-      ...(normalizeValue(snapshot.data()) as Omit<AppUser, "id">),
-    } as AppUser);
+    onUser(normalizeAppUserRecord(snapshot.id, snapshot.data()));
   });
 }
 
@@ -325,10 +492,7 @@ export async function fetchAppUser(userId: string) {
     throw new Error("To konto nie ma jeszcze profilu aplikacyjnego.");
   }
 
-  return {
-    id: snapshot.id,
-    ...(normalizeValue(snapshot.data()) as Omit<AppUser, "id">),
-  } as AppUser;
+  return normalizeAppUserRecord(snapshot.id, snapshot.data());
 }
 
 function buildRoleQuery(
@@ -350,6 +514,8 @@ export function subscribePrivateStore(
 ): Unsubscribe {
   const { db } = assertReady();
   const unsubs: Unsubscribe[] = [];
+  const trainerProfileId = currentUser.trainerProfileId;
+  const organizerProfileId = currentUser.organizerProfileId;
 
   onPatch({ users: [currentUser] });
 
@@ -375,8 +541,31 @@ export function subscribePrivateStore(
     ),
   );
 
+  if (currentUser.role === "trainer" && trainerProfileId) {
+    unsubs.push(
+      subscribeArray<TrainerCalendarFeed>(
+        query(
+          collection(db, collections.trainerCalendarFeeds),
+          where("trainerId", "==", trainerProfileId),
+        ),
+        (trainerCalendarFeeds) => {
+          onPatch({ trainerCalendarFeeds: pushSorted(trainerCalendarFeeds) });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerExternalBusyMonth>(
+        collection(db, collections.trainerExternalBusyMonths),
+        (trainerExternalBusyMonths) => {
+          onPatch({ trainerExternalBusyMonths });
+        },
+      ),
+    );
+  } else {
+    onPatch({ trainerCalendarFeeds: [], trainerExternalBusyMonths: [] });
+  }
+
   if (currentUser.role === "admin") {
-    onPatch({ groups: [] });
     unsubs.push(
       subscribeArray<TrainingEvent>(collection(db, collections.trainingEvents), (items) => {
         onPatch({ trainingEvents: items });
@@ -420,8 +609,6 @@ export function subscribePrivateStore(
     };
   }
 
-  const profileId = currentUser.profileId;
-
   const eventsQuery = buildRoleQuery(
     collections.trainingEvents,
     currentUser.role === "trainer" ? "trainerUserId" : "organizerUserId",
@@ -451,7 +638,6 @@ export function subscribePrivateStore(
   } else {
     onPatch({ relations: [] });
   }
-  onPatch({ groups: [] });
 
   if (currentUser.role === "trainer") {
     const ownSlotsQuery = buildRoleQuery(
@@ -487,12 +673,12 @@ export function subscribePrivateStore(
   }
 
   if (currentUser.role === "organizer") {
-    if (profileId) {
+    if (organizerProfileId) {
       unsubs.push(
         subscribeArray<AvailabilitySlot>(
           query(
             collection(db, collections.availabilitySlots),
-            where("visibleToOrganizerIds", "array-contains", profileId),
+            where("visibleToOrganizerIds", "array-contains", organizerProfileId),
           ),
           (availabilitySlots) => {
             onPatch({ availabilitySlots });
@@ -580,22 +766,117 @@ async function getEvent(eventId: string) {
   } as TrainingEvent;
 }
 
+async function getTrainerCalendarFeed(feedId: string) {
+  const { db } = assertReady();
+  const snapshot = await getDoc(doc(db, collections.trainerCalendarFeeds, feedId));
+
+  if (!snapshot.exists()) {
+    throw new Error("Nie znaleziono feedu iCal.");
+  }
+
+  return {
+    id: snapshot.id,
+    ...(normalizeValue(snapshot.data()) as Omit<TrainerCalendarFeed, "id">),
+  } as TrainerCalendarFeed;
+}
+
+async function getRelation(relationId: string) {
+  const { db } = assertReady();
+  const snapshot = await getDoc(doc(db, collections.relations, relationId));
+
+  if (!snapshot.exists()) {
+    throw new Error("Nie znaleziono relacji.");
+  }
+
+  return {
+    id: snapshot.id,
+    ...(normalizeValue(snapshot.data()) as Omit<TrainerOrganizerRelation, "id">),
+  } as TrainerOrganizerRelation;
+}
+
+async function updateOrganizerSlotVisibility(
+  relation: Pick<TrainerOrganizerRelation, "trainerId" | "organizerId">,
+  isVisible: boolean,
+) {
+  const { db } = assertReady();
+  const slotSnapshots = await getDocs(
+    query(
+      collection(db, collections.availabilitySlots),
+      where("trainerId", "==", relation.trainerId),
+    ),
+  );
+
+  await Promise.all(
+    slotSnapshots.docs.map((slotSnapshot) =>
+      updateDoc(slotSnapshot.ref, {
+        visibleToOrganizerIds: isVisible
+          ? arrayUnion(relation.organizerId)
+          : arrayRemove(relation.organizerId),
+      }),
+    ),
+  );
+}
+
+async function archiveRelationEvents(
+  relation: Pick<TrainerOrganizerRelation, "id" | "trainerId" | "organizerId">,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+  const eventSnapshots = await getDocs(
+    query(
+      collection(db, collections.trainingEvents),
+      where("trainerId", "==", relation.trainerId),
+      where("organizerId", "==", relation.organizerId),
+    ),
+  );
+
+  if (eventSnapshots.empty) {
+    return 0;
+  }
+
+  const archivedAt = nowIso();
+  const batch = writeBatch(db);
+
+  eventSnapshots.docs.forEach((eventSnapshot) => {
+    batch.update(eventSnapshot.ref, {
+      archivedAt,
+      archivedByRole: actor.role,
+      archivedReason: "relation-detached",
+      archivedForOrganizerId: relation.organizerId,
+      isPublished: false,
+    });
+  });
+
+  await batch.commit();
+  return eventSnapshots.size;
+}
+
+async function archiveEventDocument(
+  event: TrainingEvent,
+  actor: AppUser,
+  reason: TrainingEvent["archivedReason"],
+) {
+  const { db } = assertReady();
+
+  await updateDoc(doc(db, collections.trainingEvents, event.id), {
+    archivedAt: nowIso(),
+    archivedByRole: actor.role,
+    archivedReason: reason,
+    archivedForOrganizerId: event.organizerId ?? null,
+    isPublished: false,
+  });
+}
+
 async function notifyUser(
   userId: string,
   title: string,
   body: string,
   entityType: NotificationRecord["entityType"],
 ) {
-  const { db } = assertReady();
-
-  await addDoc(collection(db, collections.notifications), {
-    id: createId("notification"),
-    userId,
-    title,
-    body,
-    entityType,
-    createdAt: nowIso(),
-  });
+  void userId;
+  void title;
+  void body;
+  void entityType;
 }
 
 async function notifyUsers(
@@ -604,13 +885,10 @@ async function notifyUsers(
   body: string,
   entityType: NotificationRecord["entityType"],
 ) {
-  const uniqueUserIds = Array.from(
-    new Set(userIds.filter((value): value is string => Boolean(value))),
-  );
-
-  await Promise.all(
-    uniqueUserIds.map((userId) => notifyUser(userId, title, body, entityType)),
-  );
+  void userIds;
+  void title;
+  void body;
+  void entityType;
 }
 
 async function getEnrollmentRequestsForEvent(eventId: string) {
@@ -681,83 +959,120 @@ export async function signOut() {
   await firebaseSignOut(auth);
 }
 
-export async function submitEnrollment(input: EnrollmentFormInput) {
-  const { db, storage } = assertReady();
-  const anonymousUser = await ensureAnonymousSession();
+function getFirebaseApiKey() {
+  const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
 
-  const event = await getEvent(input.eventId);
-  if (resolveEventStatus(event.status) === "cancelled") {
-    throw new Error("To wydarzenie jest anulowane i nie przyjmuje nowych zgĹ‚oszeĹ„.");
+  if (!apiKey) {
+    throw new Error("Brak konfiguracji VITE_FIREBASE_API_KEY.");
   }
-  if (!event.isPublished) {
-    throw new Error("To szkolenie nie przyjmuje teraz zgłoszeń.");
+
+  return apiKey;
+}
+
+function slugifyDisplayName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeRequestedRoles(
+  requestedRoles: Array<"trainer" | "organizer"> | undefined,
+) {
+  return Array.from(new Set((requestedRoles ?? []).filter(Boolean))) as Array<
+    "trainer" | "organizer"
+  >;
+}
+
+async function createPasswordAuthUser(email: string, password: string) {
+  const response = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${getFirebaseApiKey()}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        password,
+        returnSecureToken: true,
+      }),
+    },
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | { localId?: string; error?: { message?: string } }
+    | null;
+
+  if (!response.ok || !payload?.localId) {
+    const message = payload?.error?.message;
+    if (message === "EMAIL_EXISTS") {
+      throw new Error("Konto z tym adresem email już istnieje.");
+    }
+
+    throw new Error("Nie udało się utworzyć konta Auth.");
   }
+
+  return payload.localId;
+}
+
+async function sendPasswordReset(email: string) {
+  await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${getFirebaseApiKey()}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        requestType: "PASSWORD_RESET",
+        email,
+      }),
+    },
+  );
+}
+
+export async function submitEnrollment(input: EnrollmentFormInput) {
+  const { storage } = assertReady();
+  await ensureAnonymousSession();
 
   if (!["image/jpeg", "image/png", "image/webp"].includes(input.photoFile.type)) {
     throw new Error("Zdjęcie musi być w formacie JPG, PNG albo WEBP.");
   }
+  if (input.photoFile.size > 5 * 1024 * 1024) {
+    throw new Error("Zdjęcie nie może być większe niż 5 MB.");
+  }
 
-  const trainer = await getTrainerProfile(event.trainerId);
-  const organizer = event.organizerId
-    ? await getOrganizerProfile(event.organizerId)
-    : null;
-  const requiresOrganizerApproval =
-    event.requiresOrganizerApproval ?? !isCommunityBrandStatus(event.brandStatus);
-  const requestRef = doc(collection(db, collections.enrollmentRequests));
-  const photoPath = `enrollment-photos/${requestRef.id}/original`;
-
-  await setDoc(requestRef, {
-    eventId: event.id,
-    trainerId: event.trainerId,
-    organizerId: event.organizerId ?? null,
-    submitterUid: anonymousUser.uid,
-    trainerUserId: trainer.userId,
-    organizerUserId: organizer?.userId ?? null,
+  const draft = await callFirebaseFunction<
+    Pick<
+      EnrollmentFormInput,
+      "eventId" | "imieNazwisko" | "telefon" | "polecenieOdKogo" | "wiadomosc"
+    >,
+    { requestId: string; photoPath: string }
+  >("createEnrollmentDraft", {
+    eventId: input.eventId,
     imieNazwisko: input.imieNazwisko,
     telefon: input.telefon,
     polecenieOdKogo: input.polecenieOdKogo,
     wiadomosc: input.wiadomosc,
-    photoStatus: "pending",
-    trainerDecision: "pending",
-    organizerDecision: "pending",
-    finalStatus: "pending",
-    requiresOrganizerApproval,
-    createdAt: nowIso(),
   });
 
   try {
     const metadata: UploadMetadata = { contentType: input.photoFile.type };
-    await uploadBytes(ref(storage, photoPath), input.photoFile, metadata);
-    await updateDoc(requestRef, {
-      photoStatus: "ready",
-      photoPath,
-      photoContentType: input.photoFile.type,
-      photoUploadedAt: nowIso(),
+    await uploadBytes(ref(storage, draft.photoPath), input.photoFile, metadata);
+    await callFirebaseFunction<
+      { requestId: string; photoPath: string },
+      { ok: true }
+    >("finalizeEnrollmentDraft", {
+      requestId: draft.requestId,
+      photoPath: draft.photoPath,
     });
   } catch (error) {
-    await updateDoc(requestRef, {
-      photoStatus: "error",
-    });
-
     throw error instanceof Error
       ? error
       : new Error("Nie udało się wgrać zdjęcia.");
   }
-
-  await Promise.all([
-    notifyUser(
-      trainer.userId,
-      "Nowe zgłoszenie uczestnika",
-      `${input.imieNazwisko} chce dołączyć do szkolenia ${event.title}.`,
-      "request",
-    ),
-    notifyUser(
-      organizer?.userId ?? trainer.userId,
-      "Nowe zgłoszenie do grupy",
-      `${input.imieNazwisko} wysłał formularz do wydarzenia ${event.title}.`,
-      "request",
-    ),
-  ]);
 }
 
 export async function decideEnrollment(
@@ -765,6 +1080,19 @@ export async function decideEnrollment(
   actor: AppUser,
   decision: "accepted" | "rejected" | "pending",
 ) {
+  void actor;
+  await callFirebaseFunction<
+    {
+      requestId: string;
+      decision: "accepted" | "rejected";
+    },
+    { ok: true }
+  >("decideEnrollment", {
+    requestId,
+    decision: decision === "pending" ? "rejected" : decision,
+  });
+  return;
+
   const { db } = assertReady();
   const requestRef = doc(db, collections.enrollmentRequests, requestId);
   const requestSnapshot = await getDoc(requestRef);
@@ -783,12 +1111,12 @@ export async function decideEnrollment(
     : null;
 
   const updates: Record<string, unknown> = {};
-  if (actor.role === "trainer" && actor.profileId === trainer.id) {
+  if (actor.role === "trainer" && actor.trainerProfileId === trainer.id) {
     updates.trainerDecision = decision;
   } else if (
     organizer &&
     actor.role === "organizer" &&
-    actor.profileId === organizer.id
+    actor.organizerProfileId === organizer.id
   ) {
     updates.organizerDecision = decision;
   } else if (actor.role === "admin") {
@@ -833,6 +1161,21 @@ export async function manageEnrollmentRequest(
   input: EnrollmentRequestManagementInput,
   actor: AppUser,
 ) {
+  void actor;
+  await callFirebaseFunction<
+    {
+      requestId: string;
+      decision: EnrollmentRequestManagementInput["decision"];
+      transferTargetEventId?: string;
+    },
+    { ok: true }
+  >("manageEnrollmentRequest", {
+    requestId: input.requestId,
+    decision: input.decision,
+    transferTargetEventId: input.transferTargetEventId?.trim() || undefined,
+  });
+  return;
+
   const { db } = assertReady();
   const requestRef = doc(db, collections.enrollmentRequests, input.requestId);
   const requestSnapshot = await getDoc(requestRef);
@@ -881,11 +1224,11 @@ export async function manageEnrollmentRequest(
         : "pending"
       : "pending";
 
-  if (actor.role === "trainer" && actor.profileId === targetEvent.trainerId) {
+  if (actor.role === "trainer" && actor.trainerProfileId === targetEvent.trainerId) {
     nextTrainerDecision = input.decision;
   } else if (
     actor.role === "organizer" &&
-    actor.profileId === targetEvent.organizerId &&
+    actor.organizerProfileId === targetEvent.organizerId &&
     targetRequiresOrganizerApproval
   ) {
     nextOrganizerDecision = input.decision;
@@ -928,35 +1271,43 @@ export async function manageEnrollmentRequest(
 }
 
 export async function requestRelation(currentUser: AppUser, trainerId: string) {
-  const { db } = assertReady();
-
-  if (currentUser.role !== "organizer" || !currentUser.profileId) {
+  if (currentUser.role !== "organizer" || !currentUser.organizerProfileId) {
     throw new Error("Tylko organizator może prosić o relację.");
   }
 
-  const existing = await getDocs(
-    query(
-      collection(db, collections.relations),
-      where("organizerUserId", "==", currentUser.id),
-      where("trainerId", "==", trainerId),
-    ),
-  );
-  if (!existing.empty) {
-    throw new Error("Ta relacja już istnieje.");
+  const trainer = await getTrainerProfile(trainerId);
+  const organizer = await getOrganizerProfile(currentUser.organizerProfileId);
+  const relationId = buildRelationId(trainerId, organizer.id);
+  const existingRelation = await getRelationByPair(trainerId, organizer.id);
+
+  if (existingRelation?.status === "pending" || existingRelation?.status === "approved") {
+    throw new Error("Ta relacja juz istnieje.");
   }
 
-  const trainer = await getTrainerProfile(trainerId);
-  const organizer = await getOrganizerProfile(currentUser.profileId);
-
-  await addDoc(collection(db, collections.relations), {
-    trainerId,
-    organizerId: currentUser.profileId,
-    trainerUserId: trainer.userId,
-    organizerUserId: organizer.userId,
-    status: "pending",
-    requestedBy: "organizer",
-    createdAt: nowIso(),
-  });
+  if (existingRelation) {
+    const { db } = assertReady();
+    await updateDoc(doc(db, collections.relations, relationId), {
+      status: "pending",
+      requestedBy: "organizer",
+      createdAt: nowIso(),
+      trainerUserId: trainer.userId,
+      organizerUserId: organizer.userId,
+      detachedAt: deleteField(),
+      detachedByRole: deleteField(),
+      archivedLinkedEvents: deleteField(),
+    });
+  } else {
+    const { db } = assertReady();
+    await setDoc(doc(db, collections.relations, relationId), {
+      trainerId,
+      organizerId: organizer.id,
+      trainerUserId: trainer.userId,
+      organizerUserId: organizer.userId,
+      status: "pending",
+      requestedBy: "organizer",
+      createdAt: nowIso(),
+    });
+  }
 
   if (organizer) {
     await notifyUser(
@@ -975,50 +1326,32 @@ export async function decideRelation(
 ) {
   const { db } = assertReady();
   const relationRef = doc(db, collections.relations, relationId);
-  const relationSnapshot = await getDoc(relationRef);
-
-  if (!relationSnapshot.exists()) {
-    throw new Error("Nie znaleziono relacji.");
-  }
-
-  const relation = {
-    id: relationSnapshot.id,
-    ...(normalizeValue(relationSnapshot.data()) as Omit<TrainerOrganizerRelation, "id">),
-  } as TrainerOrganizerRelation;
+  const relation = await getRelation(relationId);
 
   const canDecide =
     actor.role === "admin" ||
     (actor.role === "trainer" &&
-      actor.profileId === relation.trainerId &&
+      actor.trainerProfileId === relation.trainerId &&
       relation.requestedBy === "organizer") ||
     (actor.role === "organizer" &&
-      actor.profileId === relation.organizerId &&
+      actor.organizerProfileId === relation.organizerId &&
       relation.requestedBy === "trainer");
 
   if (!canDecide) {
     throw new Error("Możesz zarządzać tylko swoimi relacjami.");
   }
 
-  await updateDoc(relationRef, { status });
+  if (relation.status !== "pending") {
+    throw new Error("Tylko oczekujaca relacje mozna zaakceptowac albo odrzucic.");
+  }
 
-  const slotSnapshots = await getDocs(
-    query(
-      collection(db, collections.availabilitySlots),
-      where("trainerId", "==", relation.trainerId),
-      where("trainerUserId", "==", relation.trainerUserId),
-    ),
-  );
-
-  await Promise.all(
-    slotSnapshots.docs.map((slotSnapshot) =>
-      updateDoc(slotSnapshot.ref, {
-        visibleToOrganizerIds:
-          status === "approved"
-            ? arrayUnion(relation.organizerId)
-            : arrayRemove(relation.organizerId),
-      }),
-    ),
-  );
+  await updateDoc(relationRef, {
+    status,
+    detachedAt: deleteField(),
+    detachedByRole: deleteField(),
+    archivedLinkedEvents: deleteField(),
+  });
+  await updateOrganizerSlotVisibility(relation, status === "approved");
 
   const trainer = await getTrainerProfile(relation.trainerId);
   const organizerUserId =
@@ -1032,8 +1365,60 @@ export async function decideRelation(
   );
 }
 
+export async function detachRelation(
+  relationId: string,
+  actor: AppUser,
+  archiveLinkedEvents = false,
+) {
+  const { db } = assertReady();
+  const relationRef = doc(db, collections.relations, relationId);
+  const relation = await getRelation(relationId);
+
+  const canDetach =
+    actor.role === "admin" ||
+    (actor.role === "trainer" && actor.trainerProfileId === relation.trainerId) ||
+    (actor.role === "organizer" && actor.organizerProfileId === relation.organizerId);
+
+  if (!canDetach) {
+    throw new Error("Mozesz odpiac tylko wlasna relacje.");
+  }
+
+  if (relation.status !== "approved") {
+    throw new Error("Odpiac mozna tylko aktywna relacje.");
+  }
+
+  const shouldArchiveLinkedEvents = actor.role === "trainer" && archiveLinkedEvents;
+
+  await updateDoc(relationRef, {
+    status: "detached",
+    detachedAt: nowIso(),
+    detachedByRole: actor.role,
+    archivedLinkedEvents: shouldArchiveLinkedEvents,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  return;
+
+  await updateOrganizerSlotVisibility(relation, false);
+
+  const archivedEventsCount = shouldArchiveLinkedEvents
+    ? await archiveRelationEvents(relation, actor)
+    : 0;
+  const trainer = await getTrainerProfile(relation.trainerId);
+  const organizer = await getOrganizerProfile(relation.organizerId);
+
+  await notifyUsers(
+    [trainer.userId, organizer.userId],
+    "Odpieto relacje",
+    shouldArchiveLinkedEvents
+      ? `${trainer.displayName} zakonczyl wspolprace z ${organizer.displayName} i zarchiwizowal ${archivedEventsCount} szkolen.`
+      : `${trainer.displayName} i ${organizer.displayName} zakonczyliscie wspolprace.`,
+    "relation",
+  );
+}
+
 export async function createGroup(input: GroupInput, actor: AppUser) {
   const { db } = assertReady();
+  throw new Error("Model grup zostal usuniety. Korzystaj z jednego modelu szkolen.");
 
   if (actor.role !== "admin" && actor.role !== "organizer") {
     throw new Error("Nie możesz tworzyć grup.");
@@ -1062,6 +1447,10 @@ export async function createGroup(input: GroupInput, actor: AppUser) {
     actor.role === "organizer" && actor.profileId ? actor.profileId : input.organizerId;
   const organizer = await getOrganizerProfile(organizerId);
 
+  if (actor.role === "organizer") {
+    await requireApprovedRelation(trainer, organizer);
+  }
+
   await addDoc(collection(db, collections.groups), {
     ...input,
     organizerId,
@@ -1081,10 +1470,12 @@ export async function createGroup(input: GroupInput, actor: AppUser) {
 export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUser) {
   const { db } = assertReady();
   const trainerId =
-    actor.role === "trainer" && actor.profileId ? actor.profileId : input.trainerId;
+    actor.role === "trainer" && actor.trainerProfileId
+      ? actor.trainerProfileId
+      : input.trainerId;
   const trainer = await getTrainerProfile(trainerId);
 
-  if (actor.role === "trainer" && actor.profileId !== trainer.id) {
+  if (actor.role === "trainer" && actor.trainerProfileId !== trainer.id) {
     throw new Error("Możesz dodawać terminy tylko sobie.");
   }
 
@@ -1109,14 +1500,202 @@ export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUs
   });
 }
 
-export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {
+async function rebuildTrainerExternalBusyMonths(trainer: TrainerProfile) {
+  const { db } = assertReady();
+  const { rangeStart, rangeEnd } = getAvailabilitySyncRange();
+  const feedSnapshots = await mapQuery<TrainerCalendarFeed>(
+    query(
+      collection(db, collections.trainerCalendarFeeds),
+      where("trainerId", "==", trainer.id),
+    ),
+  );
+  const enabledFeeds = feedSnapshots.filter((feed) => feed.enabled);
+  const trainerEvents = await mapQuery<TrainingEvent>(
+    query(
+      collection(db, collections.trainingEvents),
+      where("trainerId", "==", trainer.id),
+    ),
+  );
+  const emandarIntervals = trainerEvents
+    .filter(
+      (event) =>
+        !isTrainingEventArchived(event) &&
+        resolveEventStatus(event.status) !== "cancelled",
+    )
+    .flatMap((event) =>
+      getTrainingEventScheduleDays(event).map((day) => ({
+        startsAt: day.startsAt,
+        endsAt: day.endsAt,
+        source: "emandar" as const,
+        sourceLabel: event.title || event.location,
+      })),
+    );
+
+  const successfulIntervals: ExternalBusyInterval[] = [];
+  let successfulFeedCount = 0;
+
+  for (const feed of enabledFeeds) {
+    try {
+      const fetchedIntervals = await fetchIcalBusyIntervals({
+        provider: feed.provider,
+        sourceLabel: feed.id,
+        url: feed.url,
+        rangeStart,
+        rangeEnd,
+      });
+
+      successfulIntervals.push(...fetchedIntervals);
+      successfulFeedCount += 1;
+      await updateDoc(doc(db, collections.trainerCalendarFeeds, feed.id), {
+        lastSyncedAt: nowIso(),
+        lastSyncStatus: "success",
+        lastSyncError: deleteField(),
+        updatedAt: nowIso(),
+      });
+    } catch (error) {
+      await updateDoc(doc(db, collections.trainerCalendarFeeds, feed.id), {
+        lastSyncedAt: nowIso(),
+        lastSyncStatus: "error",
+        lastSyncError:
+          error instanceof Error ? error.message : "Nie udało się pobrać feedu iCal.",
+        updatedAt: nowIso(),
+      });
+    }
+  }
+
+  if (enabledFeeds.length > 0 && successfulFeedCount === 0) {
+    return;
+  }
+
+  const mergedIntervals = mergeBusyIntervals([
+    ...emandarIntervals,
+    ...successfulIntervals,
+  ]);
+  const groupedIntervals = splitIntervalsByMonth(mergedIntervals);
+  const existingMonthDocs = await mapQuery<TrainerExternalBusyMonth>(
+    query(
+      collection(db, collections.trainerExternalBusyMonths),
+      where("trainerId", "==", trainer.id),
+    ),
+  );
+  const batch = writeBatch(db);
+
+  existingMonthDocs.forEach((monthDoc) => {
+    batch.delete(doc(db, collections.trainerExternalBusyMonths, monthDoc.id));
+  });
+
+  groupedIntervals.forEach((intervals, monthKey) => {
+    const monthDocId = `${trainer.id}__${monthKey}`;
+    batch.set(doc(db, collections.trainerExternalBusyMonths, monthDocId), {
+      trainerId: trainer.id,
+      monthKey,
+      intervals,
+      updatedAt: nowIso(),
+    });
+  });
+
+  await batch.commit();
+}
+
+export async function addTrainerCalendarFeed(
+  input: TrainerCalendarFeedInput,
+  actor: AppUser,
+) {
   const { db } = assertReady();
 
-  if (actor.role !== "trainer" || !actor.profileId) {
+  if (actor.role !== "trainer" || !actor.trainerProfileId) {
+    throw new Error("Tylko trener może podpiąć swój kalendarz iCal.");
+  }
+
+  const trainer = await getTrainerProfile(actor.trainerProfileId);
+
+  if (isCommunityBrandStatus(trainer.brandStatus)) {
+    throw new Error("Panel wspólnych terminów jest dostępny tylko dla oficjalnych trenerów.");
+  }
+
+  const createdAt = nowIso();
+  await addDoc(collection(db, collections.trainerCalendarFeeds), {
+    trainerId: trainer.id,
+    trainerUserId: trainer.userId,
+    provider: input.provider,
+    url: input.url.trim(),
+    enabled: true,
+    lastSyncStatus: "idle",
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  await rebuildTrainerExternalBusyMonths(trainer);
+}
+
+export async function updateTrainerCalendarFeedEnabled(
+  feedId: string,
+  enabled: boolean,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+
+  if (actor.role !== "trainer" || !actor.trainerProfileId) {
+    throw new Error("Tylko trener może zarządzać feedami iCal.");
+  }
+
+  const trainer = await getTrainerProfile(actor.trainerProfileId);
+  const feed = await getTrainerCalendarFeed(feedId);
+
+  if (feed.trainerId !== trainer.id) {
+    throw new Error("Możesz zarządzać tylko swoimi feedami iCal.");
+  }
+
+  await updateDoc(doc(db, collections.trainerCalendarFeeds, feedId), {
+    enabled,
+    updatedAt: nowIso(),
+  });
+
+  await rebuildTrainerExternalBusyMonths(trainer);
+}
+
+export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) {
+  const { db } = assertReady();
+
+  if (actor.role !== "trainer" || !actor.trainerProfileId) {
+    throw new Error("Tylko trener może usuwać feedy iCal.");
+  }
+
+  const trainer = await getTrainerProfile(actor.trainerProfileId);
+  const feed = await getTrainerCalendarFeed(feedId);
+
+  if (feed.trainerId !== trainer.id) {
+    throw new Error("Możesz usuwać tylko swoje feedy iCal.");
+  }
+
+  await deleteDoc(doc(db, collections.trainerCalendarFeeds, feedId));
+  await rebuildTrainerExternalBusyMonths(trainer);
+}
+
+export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
+  void actor;
+  await callFirebaseFunction<undefined, { ok: true }>("syncOwnTrainerCalendarFeeds");
+  return;
+  if (actor.role !== "trainer" || !actor.trainerProfileId) {
+    throw new Error("Tylko trener może synchronizować feedy iCal.");
+  }
+
+  const trainer = await getTrainerProfile(actor.trainerProfileId);
+
+  if (isCommunityBrandStatus(trainer.brandStatus)) {
+    throw new Error("Panel wspólnych terminów jest dostępny tylko dla oficjalnych trenerów.");
+  }
+
+  await rebuildTrainerExternalBusyMonths(trainer);
+}
+
+export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {
+  const { db } = assertReady();
+  if (actor.role !== "trainer" || !actor.trainerProfileId) {
     throw new Error("Tylko Przekazujący Wiedzę może tworzyć szkolenia.");
   }
 
-  const trainer = await getTrainerProfile(actor.profileId);
+  const trainer = await getTrainerProfile(actor.trainerProfileId);
   const brandStatus = resolveBrandStatus(input.brandStatus ?? trainer.brandStatus);
   const isCommunityTrainer = isCommunityBrandStatus(brandStatus);
   const organizer =
@@ -1129,43 +1708,18 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
       throw new Error("Najpierw wybierz organizatora dla szkolenia.");
     }
 
-    const approvedRelations = await mapQuery<TrainerOrganizerRelation>(
-      query(
-        collection(db, collections.relations),
-        where("trainerId", "==", trainer.id),
-        where("organizerId", "==", organizer.id),
-        where("trainerUserId", "==", trainer.userId),
-        where("status", "==", "approved"),
-      ),
-    );
-
-    if (approvedRelations.length === 0) {
-      throw new Error("Najpierw potrzebujesz zatwierdzonej relacji z organizatorem.");
-    }
+    await requireApprovedRelation(trainer, organizer);
   }
 
   const normalizedScheduleDays = normalizeScheduleDays(input.scheduleDays);
   const firstScheduleDay = normalizedScheduleDays[0];
-  const secondScheduleDay = normalizedScheduleDays[1];
   const lastScheduleDay = normalizedScheduleDays[normalizedScheduleDays.length - 1];
   const startsAt = new Date(firstScheduleDay?.startsAt ?? "");
   const endsAt = new Date(lastScheduleDay?.endsAt ?? "");
-  const fallbackSecondDayStart = new Date(startsAt);
-  fallbackSecondDayStart.setDate(fallbackSecondDayStart.getDate() + 1);
-  const fallbackSecondDayEnd = new Date(fallbackSecondDayStart);
-  fallbackSecondDayEnd.setHours(fallbackSecondDayEnd.getHours() + 1);
-  const dayTwoStartsAt = new Date(
-    secondScheduleDay?.startsAt ?? fallbackSecondDayStart.toISOString(),
-  );
-  const dayTwoEndsAt = new Date(
-    secondScheduleDay?.endsAt ?? fallbackSecondDayEnd.toISOString(),
-  );
 
   if (
     Number.isNaN(startsAt.getTime()) ||
-    Number.isNaN(endsAt.getTime()) ||
-    Number.isNaN(dayTwoStartsAt.getTime()) ||
-    Number.isNaN(dayTwoEndsAt.getTime())
+    Number.isNaN(endsAt.getTime())
   ) {
     throw new Error("Podaj poprawne daty szkolenia.");
   }
@@ -1174,11 +1728,11 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
     throw new Error("Data zakończenia musi być późniejsza niż start.");
   }
 
-  if (dayTwoEndsAt.getTime() <= dayTwoStartsAt.getTime()) {
+  if (false) {
     throw new Error("Drugi dzień szkolenia musi kończyć się po starcie.");
   }
 
-  if (dayTwoStartsAt.getTime() <= startsAt.getTime()) {
+  if (false) {
     throw new Error("Drugi dzień szkolenia musi zaczynać się po pierwszym dniu.");
   }
 
@@ -1200,8 +1754,6 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
     type: input.type.trim(),
     startsAt: firstScheduleDay?.startsAt ?? startsAt.toISOString(),
     endsAt: lastScheduleDay?.endsAt ?? endsAt.toISOString(),
-    dayTwoStartsAt: secondScheduleDay?.startsAt ?? null,
-    dayTwoEndsAt: secondScheduleDay?.endsAt ?? null,
     scheduleDays: normalizedScheduleDays,
     location: trimmedLocation,
     tags: normalizedTags,
@@ -1229,19 +1781,61 @@ export async function createUnifiedTrainingEvent(
   input: TrainingEventInput,
   actor: AppUser,
 ) {
+  void actor;
+  await callFirebaseFunction<
+    {
+      trainerId?: string;
+      organizerId?: string;
+      summary: string;
+      description: string;
+      type: string;
+      scheduleDays: TrainingEventScheduleDay[];
+      location: string;
+      tags?: string[];
+      capacity: number;
+      isPublished: boolean;
+      status?: TrainingEventStatus;
+      minimumParticipants?: number;
+      brandStatus?: EmandarBrandStatus;
+      selfManagedByTrainer?: boolean;
+    },
+    { ok: true; eventId: string }
+  >("createUnifiedTrainingEvent", {
+    trainerId: input.trainerId,
+    organizerId: input.organizerId,
+    summary: input.summary,
+    description: input.description,
+    type: input.type,
+    scheduleDays: input.scheduleDays,
+    location: input.location,
+    tags: input.tags,
+    capacity: input.capacity,
+    isPublished: input.isPublished,
+    status: input.status,
+    minimumParticipants: input.minimumParticipants,
+    brandStatus: input.brandStatus,
+    selfManagedByTrainer: input.selfManagedByTrainer,
+  });
+  return;
+
   const { db } = assertReady();
 
   if (
     (actor.role !== "trainer" && actor.role !== "organizer") ||
-    !actor.profileId
+    (actor.role === "trainer" && !actor.trainerProfileId) ||
+    (actor.role === "organizer" && !actor.organizerProfileId)
   ) {
     throw new Error("Tylko Przekazujący Wiedzę albo organizator może tworzyć szkolenia.");
   }
 
   const actingOrganizer =
-    actor.role === "organizer" ? await getOrganizerProfile(actor.profileId) : null;
+    actor.role === "organizer"
+      ? await getOrganizerProfile(getUserOrganizerProfileId(actor))
+      : null;
   const actingTrainer =
-    actor.role === "trainer" ? await getTrainerProfile(actor.profileId) : null;
+    actor.role === "trainer"
+      ? await getTrainerProfile(getUserTrainerProfileId(actor))
+      : null;
   const trainer =
     actor.role === "trainer"
       ? actingTrainer
@@ -1285,42 +1879,18 @@ export async function createUnifiedTrainingEvent(
   }
 
   if (!isCommunityTrainer && !selfManagedByTrainer && organizer) {
-    const approvedRelations = await mapQuery<TrainerOrganizerRelation>(
-      query(
-        collection(db, collections.relations),
-        where("trainerId", "==", trainer.id),
-        where("organizerId", "==", organizer.id),
-        where("status", "==", "approved"),
-      ),
-    );
-
-    if (approvedRelations.length === 0) {
-      throw new Error("Najpierw potrzebujesz zatwierdzonej relacji między trenerem i organizatorem.");
-    }
+    await requireApprovedRelation(trainer, organizer);
   }
 
   const normalizedScheduleDays = normalizeScheduleDays(input.scheduleDays);
   const firstScheduleDay = normalizedScheduleDays[0];
-  const secondScheduleDay = normalizedScheduleDays[1];
   const lastScheduleDay = normalizedScheduleDays[normalizedScheduleDays.length - 1];
   const startsAt = new Date(firstScheduleDay?.startsAt ?? "");
   const endsAt = new Date(lastScheduleDay?.endsAt ?? "");
-  const fallbackSecondDayStart = new Date(startsAt);
-  fallbackSecondDayStart.setDate(fallbackSecondDayStart.getDate() + 1);
-  const fallbackSecondDayEnd = new Date(fallbackSecondDayStart);
-  fallbackSecondDayEnd.setHours(fallbackSecondDayEnd.getHours() + 1);
-  const dayTwoStartsAt = new Date(
-    secondScheduleDay?.startsAt ?? fallbackSecondDayStart.toISOString(),
-  );
-  const dayTwoEndsAt = new Date(
-    secondScheduleDay?.endsAt ?? fallbackSecondDayEnd.toISOString(),
-  );
 
   if (
     Number.isNaN(startsAt.getTime()) ||
-    Number.isNaN(endsAt.getTime()) ||
-    Number.isNaN(dayTwoStartsAt.getTime()) ||
-    Number.isNaN(dayTwoEndsAt.getTime())
+    Number.isNaN(endsAt.getTime())
   ) {
     throw new Error("Podaj poprawne daty szkolenia.");
   }
@@ -1329,11 +1899,11 @@ export async function createUnifiedTrainingEvent(
     throw new Error("Data zakończenia musi być późniejsza niż start.");
   }
 
-  if (dayTwoEndsAt.getTime() <= dayTwoStartsAt.getTime()) {
+  if (false) {
     throw new Error("Drugi dzień szkolenia musi kończyć się po starcie.");
   }
 
-  if (dayTwoStartsAt.getTime() <= startsAt.getTime()) {
+  if (false) {
     throw new Error("Drugi dzień szkolenia musi zaczynać się po pierwszym dniu.");
   }
 
@@ -1355,8 +1925,6 @@ export async function createUnifiedTrainingEvent(
     type: input.type.trim(),
     startsAt: firstScheduleDay?.startsAt ?? startsAt.toISOString(),
     endsAt: lastScheduleDay?.endsAt ?? endsAt.toISOString(),
-    dayTwoStartsAt: secondScheduleDay?.startsAt ?? null,
-    dayTwoEndsAt: secondScheduleDay?.endsAt ?? null,
     scheduleDays: normalizedScheduleDays,
     location: trimmedLocation,
     tags: normalizedTags,
@@ -1403,14 +1971,38 @@ export async function createUnifiedTrainingEvent(
 }
 
 export async function submitAccountRequest(input: AccountRequestInput) {
+  await ensureAnonymousSession();
+  await callFirebaseFunction<
+    {
+      displayName: string;
+      email: string;
+      phone: string;
+      requestedRoles: Array<"trainer" | "organizer">;
+      notes: string;
+    },
+    { ok: true }
+  >("submitAccountRequest", {
+    displayName: input.displayName,
+    email: input.email,
+    phone: input.phone,
+    requestedRoles: normalizeRequestedRoles(input.requestedRoles),
+    notes: input.notes,
+  });
+  return;
+
   const { db } = assertReady();
   await ensureAnonymousSession();
+  const requestedRoles = normalizeRequestedRoles(input.requestedRoles);
+
+  if (requestedRoles.length === 0) {
+    throw new Error("Wybierz przynajmniej jeden typ konta.");
+  }
 
   await addDoc(collection(db, collections.accountRequests), {
     displayName: input.displayName,
     email: input.email,
     phone: input.phone,
-    requestedRole: input.requestedRole,
+    requestedRoles,
     notes: input.notes,
     status: "pending",
     createdAt: nowIso(),
@@ -1423,12 +2015,15 @@ export async function updateTrainerProfile(
 ) {
   const { db, storage } = assertReady();
 
-  if (currentUser.role !== "trainer" || !currentUser.profileId) {
+  if (
+    (currentUser.role !== "trainer" && currentUser.role !== "admin") ||
+    !currentUser.trainerProfileId
+  ) {
     throw new Error("Tylko Przekazujący Wiedzę może edytować ten profil.");
   }
 
-  const trainerRef = doc(db, collections.trainers, currentUser.profileId);
-  const trainer = await getTrainerProfile(currentUser.profileId);
+  const trainerRef = doc(db, collections.trainers, currentUser.trainerProfileId);
+  const trainer = await getTrainerProfile(currentUser.trainerProfileId);
   const specialties = Array.from(
     new Set(input.specialties.map((item) => item.trim()).filter(Boolean)),
   );
@@ -1471,11 +2066,11 @@ export async function updateOrganizerProfile(
 ) {
   const { db } = assertReady();
 
-  if (currentUser.role !== "organizer" || !currentUser.profileId) {
+  if (currentUser.role !== "organizer" || !currentUser.organizerProfileId) {
     throw new Error("Tylko organizator może edytować ten profil.");
   }
 
-  await updateDoc(doc(db, collections.organizers, currentUser.profileId), {
+  await updateDoc(doc(db, collections.organizers, currentUser.organizerProfileId), {
     displayName: input.displayName.trim(),
     contactName: input.contactName.trim(),
     location: input.location.trim(),
@@ -1526,11 +2121,11 @@ export async function decideTrainingEventCollaboration(
 
   const updates: Partial<TrainingEvent> = {};
 
-  if (actor.role === "trainer" && actor.profileId === event.trainerId) {
+  if (actor.role === "trainer" && actor.trainerProfileId === event.trainerId) {
     updates.trainerCollaborationStatus = input.status;
   }
 
-  if (actor.role === "organizer" && actor.profileId === event.organizerId) {
+  if (actor.role === "organizer" && actor.organizerProfileId === event.organizerId) {
     updates.organizerCollaborationStatus = input.status;
   }
 
@@ -1572,6 +2167,29 @@ export async function updateTrainingEventManagement(
   input: TrainingEventManagementUpdateInput,
   actor: AppUser,
 ) {
+  void actor;
+  await callFirebaseFunction<
+    {
+      eventId: string;
+      status: TrainingEventStatus;
+      capacity: number;
+      minimumParticipants: number;
+      tags?: string[];
+      scheduleDays?: TrainingEventScheduleDay[];
+      transferTargetEventId?: string;
+    },
+    { ok: true }
+  >("updateTrainingEventManagement", {
+    eventId: input.eventId,
+    status: input.status,
+    capacity: input.capacity,
+    minimumParticipants: input.minimumParticipants,
+    tags: input.tags,
+    scheduleDays: input.scheduleDays,
+    transferTargetEventId: input.transferTargetEventId?.trim() || undefined,
+  });
+  return;
+
   const { db } = assertReady();
   const event = await getEvent(input.eventId);
 
@@ -1579,6 +2197,10 @@ export async function updateTrainingEventManagement(
 
   if (!canManage) {
     throw new Error("Mozesz zarzadzac tylko swoimi wydarzeniami.");
+  }
+
+  if (isTrainingEventArchived(event)) {
+    throw new Error("To szkolenie jest juz zarchiwizowane.");
   }
 
   const normalizedCapacity = Math.max(1, input.capacity);
@@ -1591,7 +2213,6 @@ export async function updateTrainingEventManagement(
     input.scheduleDays ?? getTrainingEventScheduleDays(event),
   );
   const firstScheduleDay = normalizedScheduleDays[0];
-  const secondScheduleDay = normalizedScheduleDays[1];
   const lastScheduleDay = normalizedScheduleDays[normalizedScheduleDays.length - 1];
   const targetEventId = input.transferTargetEventId?.trim();
 
@@ -1600,8 +2221,6 @@ export async function updateTrainingEventManagement(
       tags: normalizedTags,
       startsAt: firstScheduleDay?.startsAt ?? event.startsAt,
       endsAt: lastScheduleDay?.endsAt ?? event.endsAt,
-      dayTwoStartsAt: secondScheduleDay?.startsAt ?? deleteField(),
-      dayTwoEndsAt: secondScheduleDay?.endsAt ?? deleteField(),
       scheduleDays: normalizedScheduleDays,
     });
     await syncEventEnrollmentState(input.eventId, {
@@ -1673,8 +2292,6 @@ export async function updateTrainingEventManagement(
       tags: normalizedTags,
       startsAt: firstScheduleDay?.startsAt ?? event.startsAt,
       endsAt: lastScheduleDay?.endsAt ?? event.endsAt,
-      dayTwoStartsAt: secondScheduleDay?.startsAt ?? deleteField(),
-      dayTwoEndsAt: secondScheduleDay?.endsAt ?? deleteField(),
       scheduleDays: normalizedScheduleDays,
     }),
     syncEventEnrollmentState(event.id, {
@@ -1695,18 +2312,135 @@ export async function updateTrainingEventManagement(
   }
 }
 
+export async function archiveTrainingEvent(eventId: string, actor: AppUser) {
+  void actor;
+  await callFirebaseFunction<{ eventId: string }, { ok: true }>("archiveTrainingEvent", {
+    eventId,
+  });
+  return;
+
+  const event = await getEvent(eventId);
+
+  if (!canManageTrainingEvent(event, actor)) {
+    throw new Error("Mozesz archiwizowac tylko swoje wydarzenia.");
+  }
+
+  if (isTrainingEventArchived(event)) {
+    throw new Error("To szkolenie jest juz zarchiwizowane.");
+  }
+
+  await archiveEventDocument(event, actor, "manual");
+}
+
 export async function decideAccountRequest(
   requestId: string,
   actor: AppUser,
   status: "approved" | "rejected",
 ) {
+  void actor;
+  await callFirebaseFunction<{ requestId: string }, { ok: true }>(
+    status === "approved" ? "approveAccountRequest" : "rejectAccountRequest",
+    { requestId },
+  );
+  return;
+
   const { db } = assertReady();
 
   if (actor.role !== "admin") {
     throw new Error("Tylko admin może obsługiwać rejestracje.");
   }
 
-  await updateDoc(doc(db, collections.accountRequests, requestId), { status });
+  const requestRef = doc(db, collections.accountRequests, requestId);
+  const requestSnapshot = await getDoc(requestRef);
+
+  if (!requestSnapshot.exists()) {
+    throw new Error("Nie znaleziono wniosku o konto.");
+  }
+
+  const request = {
+    id: requestSnapshot.id,
+    ...(normalizeValue(requestSnapshot.data()) as Omit<AccountRequest, "id">),
+  } as AccountRequest;
+
+  if (request.status !== "pending") {
+    throw new Error("Ten wniosek został już wcześniej obsłużony.");
+  }
+
+  if (status === "rejected") {
+    await updateDoc(requestRef, {
+      status,
+      reviewedAt: nowIso(),
+      reviewedByUserId: actor.id,
+    });
+    return;
+  }
+
+  const requestedRoles = normalizeRequestedRoles(request.requestedRoles);
+
+  if (requestedRoles.length === 0) {
+    throw new Error("Wniosek nie zawiera żadnego poprawnego zakresu.");
+  }
+
+  const temporaryPassword = `${createId("emandar")}${createId("tmp")}`;
+  const userId = await createPasswordAuthUser(request.email, temporaryPassword);
+  const trainerProfileId = requestedRoles.includes("trainer") ? createId("trainer") : null;
+  const organizerProfileId = requestedRoles.includes("organizer")
+    ? createId("organizer")
+    : null;
+  const primaryRole = requestedRoles.includes("organizer") ? "organizer" : "trainer";
+
+  await setDoc(doc(db, collections.users, userId), {
+    displayName: request.displayName,
+    email: request.email,
+    phone: request.phone,
+    avatarUrl: "",
+    status: "active",
+    role: primaryRole,
+    roles: requestedRoles,
+    primaryRole,
+    trainerProfileId,
+    organizerProfileId,
+    createdAt: nowIso(),
+  });
+
+  if (trainerProfileId) {
+    await setDoc(doc(db, collections.trainers, trainerProfileId), {
+      userId,
+      slug: slugifyDisplayName(request.displayName),
+      displayName: request.displayName,
+      sortOrder: 999,
+      bio: request.notes?.trim() || "Nowy profil oczekuje na uzupelnienie opisu.",
+      specialties: [],
+      locations: [],
+      isVisible: false,
+      heroNote: "Profil w trakcie konfiguracji.",
+      avatarUrl: "",
+      brandStatus: "supported",
+    });
+  }
+
+  if (organizerProfileId) {
+    await setDoc(doc(db, collections.organizers, organizerProfileId), {
+      userId,
+      displayName: request.displayName,
+      description:
+        request.notes?.trim() || "Nowy organizator oczekuje na uzupelnienie profilu.",
+      isVisible: false,
+      contactName: request.displayName.split(/\s+/)[0] ?? request.displayName,
+      location: "",
+    });
+  }
+
+  await updateDoc(requestRef, {
+    status,
+    reviewedAt: nowIso(),
+    reviewedByUserId: actor.id,
+    createdUserId: userId,
+    trainerProfileId,
+    organizerProfileId,
+  });
+
+  await sendPasswordReset(request.email);
 }
 
 export async function resolveEnrollmentPhoto(path: string) {

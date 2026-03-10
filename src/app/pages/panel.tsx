@@ -11,8 +11,11 @@ import {
   CalendarDays,
   Check,
   ImagePlus,
+  Link2,
   Phone,
+  RefreshCcw,
   ShieldCheck,
+  Trash2,
   Users,
   X,
 } from "lucide-react";
@@ -31,6 +34,7 @@ import { toast } from "sonner";
 import { useAppState } from "../providers/AppProviders";
 import {
   aggregateEventCapacityStats,
+  buildSharedAvailabilityWindows,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
   getEventCollaborationStatusLabel,
@@ -40,6 +44,7 @@ import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventStatusLabel,
+  isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
   resolveOrganizerCollaborationStatus,
@@ -48,11 +53,13 @@ import {
   resolveTrainingEventStatus,
   sortEventsByDate,
   sortEventsByFillRate,
+  sortTrainerProfiles,
 } from "@/domain/utils";
 import type {
   EmandarBrandStatus,
   EnrollmentFinalStatus,
   EnrollmentRequest,
+  TrainerCalendarFeedProvider,
   TrainingEvent,
   TrainingEventScheduleDay,
   TrainingEventStatus,
@@ -73,6 +80,31 @@ function formatShortTime(date: string) {
   }).format(new Date(date));
 }
 
+function formatDateTime(date: string) {
+  return new Intl.DateTimeFormat("pl-PL", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(date));
+}
+
+function formatDurationHours(hours: number) {
+  if (Number.isInteger(hours)) {
+    return `${hours} h`;
+  }
+
+  return `${hours.toFixed(1).replace(".", ",")} h`;
+}
+
+function getAvailabilityHorizonEnd() {
+  const end = new Date();
+  end.setUTCMinutes(0, 0, 0);
+  end.setUTCFullYear(end.getUTCFullYear() + 3);
+  return end.toISOString();
+}
+
 function resolveBrandStatus(
   status: EmandarBrandStatus | undefined,
 ): EmandarBrandStatus {
@@ -83,6 +115,12 @@ function getBrandStatusLabel(status: EmandarBrandStatus | undefined) {
   return resolveBrandStatus(status) === "supported"
     ? "Wspierane przez Emandar"
     : "Oficjalny Emandar";
+}
+
+function getEventLifecycleLabel(event: TrainingEvent) {
+  return isTrainingEventArchived(event)
+    ? "Zarchiwizowane"
+    : getTrainingEventStatusLabel(event.status);
 }
 
 function getEventOwnerLabel(
@@ -137,6 +175,31 @@ function getEventCardTitle(
   }
 
   return locationParts.primaryLocation;
+}
+
+function getAccountRequestRoleLabel(request: {
+  requestedRoles?: Array<"trainer" | "organizer">;
+}) {
+  const normalizedRoles = Array.from(
+    new Set((request.requestedRoles ?? []).filter(Boolean)),
+  ) as Array<"trainer" | "organizer">;
+
+  if (
+    normalizedRoles.includes("organizer") &&
+    normalizedRoles.includes("trainer")
+  ) {
+    return "Organizator grup Emandar + wydarzenia dla społeczności";
+  }
+
+  if (normalizedRoles.includes("organizer")) {
+    return "Organizator grup Emandar";
+  }
+
+  if (normalizedRoles.includes("trainer")) {
+    return "Wydarzenia dla społeczności";
+  }
+
+  return "Brak wyboru";
 }
 
 function getEventCollaborationNotice(event: TrainingEvent) {
@@ -610,6 +673,12 @@ type DashboardMonthOutcomeDatum = {
   cancelled: number;
 };
 
+type DashboardOrganizerGroupsDatum = {
+  organizerId: string;
+  label: string;
+  plannedGroups: number;
+};
+
 function MissingPeopleTooltip({
   active,
   payload,
@@ -629,29 +698,6 @@ function MissingPeopleTooltip({
       <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
       <p className="mt-2 text-sm text-brand-navy">Brakuje: {item.missingPeople} osob</p>
       <p className="text-sm text-brand-navy">Zapisani: {item.occupiedPlaces}/{item.capacity}</p>
-    </div>
-  );
-}
-
-function FillRateTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: DashboardEventBarDatum }>;
-}) {
-  if (!active || !payload?.[0]) {
-    return null;
-  }
-
-  const item = payload[0].payload;
-
-  return (
-    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
-      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
-      <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
-      <p className="mt-2 text-sm text-brand-navy">Zapelnienie: {item.fillRate}%</p>
-      <p className="text-sm text-brand-navy">Wolne miejsca: {item.availablePlaces}</p>
     </div>
   );
 }
@@ -744,6 +790,27 @@ function EventOutcomesTooltip({
       <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
       <p className="mt-2 text-sm text-brand-navy">Potwierdzone: {item.confirmed}</p>
       <p className="text-sm text-brand-navy">Anulowane: {item.cancelled}</p>
+    </div>
+  );
+}
+
+function OrganizerGroupsTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: DashboardOrganizerGroupsDatum }>;
+}) {
+  if (!active || !payload?.[0]) {
+    return null;
+  }
+
+  const item = payload[0].payload;
+
+  return (
+    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
+      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
+      <p className="mt-2 text-sm text-brand-navy">Zaplanowane grupy: {item.plannedGroups}</p>
     </div>
   );
 }
@@ -845,12 +912,14 @@ export function DashboardPage() {
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
   const relevantEvents =
     currentUser.role === "trainer"
-      ? store.trainingEvents.filter((item) => item.trainerId === trainerProfile?.id)
+      ? store.trainingEvents.filter(
+          (item) => item.trainerId === trainerProfile?.id && !isTrainingEventArchived(item),
+        )
       : currentUser.role === "organizer"
         ? store.trainingEvents.filter(
-            (item) => item.organizerId === organizerProfile?.id,
+            (item) => item.organizerId === organizerProfile?.id && !isTrainingEventArchived(item),
           )
-        : store.trainingEvents;
+        : store.trainingEvents.filter((item) => !isTrainingEventArchived(item));
   const relevantRequests =
     currentUser.role === "trainer"
       ? store.enrollmentRequests.filter((item) => item.trainerId === trainerProfile?.id)
@@ -927,13 +996,6 @@ export function DashboardPage() {
       }),
     [analyticsEventsInRange],
   );
-  const analyticsCancelledEvents = useMemo(
-    () =>
-      analyticsEventsInRange.filter(
-        (event) => resolveTrainingEventStatus(event.status) === "cancelled",
-      ),
-    [analyticsEventsInRange],
-  );
   const dashboardEventData = useMemo(
     () =>
       analyticsActiveEvents.map((event) => ({
@@ -994,22 +1056,44 @@ export function DashboardPage() {
       }),
     [analyticsActiveEvents, dashboardMonthBuckets],
   );
-  const cancelledEventsData = useMemo(
-    () =>
-      sortEventsByDate(analyticsCancelledEvents).map((event) => ({
-        id: event.id,
-        label: getDashboardEventLabel(event, currentUser, store),
-        startsAt: event.startsAt,
-        statusLabel: getTrainingEventStatusLabel(event.status),
-        status: resolveTrainingEventStatus(event.status),
-        fillRate: getEventFillRate(event),
-        missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
-        capacity: event.capacity,
-        availablePlaces: getAvailablePlaces(event),
-      })),
-    [analyticsCancelledEvents, currentUser, store],
-  );
+  const organizerGroupsData = useMemo(() => {
+    if (currentUser.role !== "trainer") {
+      return [];
+    }
+
+    const grouped = analyticsActiveEvents.reduce<Map<string, DashboardOrganizerGroupsDatum>>(
+      (summary, event) => {
+        if (!event.organizerId) {
+          return summary;
+        }
+
+        const organizer = store.organizers.find((item) => item.id === event.organizerId);
+        const existing = summary.get(event.organizerId);
+
+        if (existing) {
+          existing.plannedGroups += 1;
+          return summary;
+        }
+
+        summary.set(event.organizerId, {
+          organizerId: event.organizerId,
+          label: organizer?.displayName ?? "Nieznany organizator",
+          plannedGroups: 1,
+        });
+
+        return summary;
+      },
+      new Map(),
+    );
+
+    return [...grouped.values()].sort((left, right) => {
+      if (right.plannedGroups !== left.plannedGroups) {
+        return right.plannedGroups - left.plannedGroups;
+      }
+
+      return left.label.localeCompare(right.label, "pl");
+    });
+  }, [analyticsActiveEvents, currentUser.role, store.organizers]);
   const analyticsRequestsInRange = useMemo(() => {
     if (!dashboardWindow || (currentUser.role !== "trainer" && currentUser.role !== "organizer")) {
       return [];
@@ -1104,7 +1188,11 @@ export function DashboardPage() {
                 Nadchodzace szkolenia i ile osob jeszcze brakuje
               </p>
             </div>
-            <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-4">
+            <div
+              className={`grid gap-4 xl:grid-cols-2 ${
+                currentUser.role === "trainer" ? "2xl:grid-cols-4" : "2xl:grid-cols-3"
+              }`}
+            >
               <DashboardChartCard
                 title="Brakuje osob do domkniecia"
                 description="Szybki podglad, ile miejsc trzeba jeszcze dopelnic w najblizszych terminach."
@@ -1198,35 +1286,37 @@ export function DashboardPage() {
                 </div>
               </DashboardChartCard>
 
-              <DashboardChartCard
-                title="Anulowane grupy w okresie"
-                description="Lista anulowanych terminow z tego samego okna czasowego."
-              >
-                {cancelledEventsData.length === 0 ? (
-                  <DashboardChartEmptyState message="Brak anulowanych wydarzen w najblizszych 3 miesiacach." />
-                ) : (
-                  <div style={{ height: `${getDashboardChartHeight(cancelledEventsData.length)}px` }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={cancelledEventsData}
-                        layout="vertical"
-                        margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
-                      >
-                        <CartesianGrid stroke="#f1d5d5" strokeDasharray="3 3" />
-                        <XAxis type="number" allowDecimals={false} stroke="#b35a5a" />
-                        <YAxis
-                          type="category"
-                          dataKey="label"
-                          width={190}
-                          tick={{ fill: "#123e78", fontSize: 12 }}
-                        />
-                        <Tooltip content={<FillRateTooltip />} />
-                        <Bar dataKey="capacity" fill="#c84b4b" radius={[0, 14, 14, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </DashboardChartCard>
+              {currentUser.role === "trainer" && (
+                <DashboardChartCard
+                  title="Grupy wedlug organizatorow"
+                  description="Ile zaplanowanych grup masz w tym samym oknie czasu u kazdego organizatora."
+                >
+                  {organizerGroupsData.length === 0 ? (
+                    <DashboardChartEmptyState message="Brak zaplanowanych grup z przypisanym organizatorem w najblizszych 3 miesiacach." />
+                  ) : (
+                    <div style={{ height: `${getDashboardChartHeight(organizerGroupsData.length)}px` }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={organizerGroupsData}
+                          layout="vertical"
+                          margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                        >
+                          <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                          <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
+                          <YAxis
+                            type="category"
+                            dataKey="label"
+                            width={190}
+                            tick={{ fill: "#123e78", fontSize: 12 }}
+                          />
+                          <Tooltip content={<OrganizerGroupsTooltip />} />
+                          <Bar dataKey="plannedGroups" fill="#0f766e" radius={[0, 14, 14, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </DashboardChartCard>
+              )}
             </div>
           </section>
 
@@ -1652,6 +1742,71 @@ export function RequestsPage() {
   );
 }
 
+function DetachRelationControls({
+  relationId,
+  allowArchiveOption,
+}: {
+  relationId: string;
+  allowArchiveOption: boolean;
+}) {
+  const { detachRelation } = useAppState();
+  const [archiveLinkedEvents, setArchiveLinkedEvents] = useState(false);
+  const [detaching, setDetaching] = useState(false);
+
+  return (
+    <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4">
+      {allowArchiveOption && (
+        <label className="flex items-start gap-3 text-sm text-brand-muted">
+          <input
+            type="checkbox"
+            checked={archiveLinkedEvents}
+            onChange={(event) => setArchiveLinkedEvents(event.target.checked)}
+            className="mt-1"
+          />
+          <span>
+            Przy odpieciu zarchiwizuj wszystkie szkolenia powiazane z tym organizatorem.
+            Organizator zobaczy je potem tylko jako archiwalne i bez mozliwosci otwarcia.
+          </span>
+        </label>
+      )}
+
+      <button
+        type="button"
+        disabled={detaching}
+        onClick={async () => {
+          const confirmMessage = allowArchiveOption && archiveLinkedEvents
+            ? "Odepnac relacje i zarchiwizowac powiazane szkolenia?"
+            : "Odepnac te relacje?";
+
+          if (!window.confirm(confirmMessage)) {
+            return;
+          }
+
+          setDetaching(true);
+
+          try {
+            await detachRelation(relationId, archiveLinkedEvents);
+            toast.success(
+              allowArchiveOption && archiveLinkedEvents
+                ? "Relacja zostala odpięta, a szkolenia zarchiwizowane."
+                : "Relacja zostala odpięta.",
+            );
+          } catch (error) {
+            toast.error(
+              error instanceof Error ? error.message : "Nie udalo sie odpiac relacji.",
+            );
+          } finally {
+            setDetaching(false);
+          }
+        }}
+        className="mt-4 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+      >
+        {detaching ? "Odpinanie..." : "Odepnij relacje"}
+      </button>
+    </div>
+  );
+}
+
 export function RelationsPage() {
   const { currentUser, decideRelation, requestRelation, store } = useAppState();
   const [selectedTrainer, setSelectedTrainer] = useState(
@@ -1810,6 +1965,14 @@ export function RelationsPage() {
                   </button>
                 </div>
               )}
+
+              {relation.status === "approved" &&
+                (currentUser.role === "organizer" || currentUser.role === "admin") && (
+                  <DetachRelationControls
+                    relationId={relation.id}
+                    allowArchiveOption={false}
+                  />
+                )}
             </article>
           );
         })}
@@ -1819,6 +1982,8 @@ export function RelationsPage() {
 }
 
 export function GroupsPage() {
+  return <Navigate to="/panel/szkolenia" replace />;
+
   const { createGroup, currentUser, store } = useAppState();
   const [form, setForm] = useState({
     organizerId: store.organizers[0]?.id ?? "",
@@ -2040,7 +2205,15 @@ export function GroupsPage() {
 }
 
 export function AvailabilityPage() {
-  const { addAvailabilitySlot, currentUser, store } = useAppState();
+  const {
+    addAvailabilitySlot,
+    addTrainerCalendarFeed,
+    currentUser,
+    removeTrainerCalendarFeed,
+    store,
+    syncOwnTrainerCalendarFeeds,
+    updateTrainerCalendarFeedEnabled,
+  } = useAppState();
   const [form, setForm] = useState({
     trainerId: store.trainers[0]?.id ?? "",
     startsAt: "2026-05-05T17:00",
@@ -2048,6 +2221,14 @@ export function AvailabilityPage() {
     location: "Warszawa / online",
     notes: "Nowy termin",
   });
+  const [feedForm, setFeedForm] = useState({
+    provider: "google" as TrainerCalendarFeedProvider,
+    url: "",
+  });
+  const [selectedTrainerIds, setSelectedTrainerIds] = useState<string[]>([]);
+  const [minimumDurationHours, setMinimumDurationHours] = useState(1);
+  const [showOnlyFullMatch, setShowOnlyFullMatch] = useState(false);
+  const [syncingFeeds, setSyncingFeeds] = useState(false);
 
   if (!currentUser) {
     return null;
@@ -2071,6 +2252,150 @@ export function AvailabilityPage() {
       : currentUser.role === "trainer"
         ? store.availabilitySlots.filter((slot) => slot.trainerId === trainerProfile?.id)
         : store.availabilitySlots;
+  const officialTrainers = useMemo(
+    () =>
+      sortTrainerProfiles(
+        store.trainers.filter((trainer) => !isCommunityTrainerProfile(trainer.brandStatus)),
+      ),
+    [store.trainers],
+  );
+  const ownCalendarFeeds = useMemo(
+    () =>
+      (trainerProfile
+        ? store.trainerCalendarFeeds.filter((feed) => feed.trainerId === trainerProfile.id)
+        : []
+      ).sort(
+        (left, right) =>
+          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+      ),
+    [store.trainerCalendarFeeds, trainerProfile],
+  );
+
+  useEffect(() => {
+    if (!trainerProfile || currentUser.role !== "trainer" || isCommunityTrainer) {
+      return;
+    }
+
+    setSelectedTrainerIds((previous) => {
+      const preservedIds = previous.filter((trainerId) =>
+        officialTrainers.some((trainer) => trainer.id === trainerId),
+      );
+
+      if (!preservedIds.includes(trainerProfile.id)) {
+        preservedIds.unshift(trainerProfile.id);
+      }
+
+      return preservedIds.length > 0 ? preservedIds : [trainerProfile.id];
+    });
+  }, [currentUser.role, isCommunityTrainer, officialTrainers, trainerProfile]);
+
+  useEffect(() => {
+    if (!trainerProfile || currentUser.role !== "trainer" || isCommunityTrainer) {
+      return;
+    }
+
+    void syncOwnTrainerCalendarFeeds().catch(() => {});
+  }, [currentUser.role, isCommunityTrainer, syncOwnTrainerCalendarFeeds, trainerProfile?.id]);
+
+  const selectedTrainerProfiles = useMemo(
+    () => officialTrainers.filter((trainer) => selectedTrainerIds.includes(trainer.id)),
+    [officialTrainers, selectedTrainerIds],
+  );
+  const eventBusyIntervalsByTrainer = useMemo(
+    () =>
+      selectedTrainerIds.reduce<Record<string, Array<{ startsAt: string; endsAt: string; source: "emandar" }>>>(
+        (accumulator, trainerId) => {
+          accumulator[trainerId] = store.trainingEvents
+            .filter(
+              (event) =>
+                event.trainerId === trainerId &&
+                !isTrainingEventArchived(event) &&
+                resolveTrainingEventStatus(event.status) !== "cancelled",
+            )
+            .flatMap((event) =>
+              getTrainingEventScheduleDays(event).map((day) => ({
+                startsAt: day.startsAt,
+                endsAt: day.endsAt,
+                source: "emandar" as const,
+              })),
+            );
+
+          return accumulator;
+        },
+        {},
+      ),
+    [selectedTrainerIds, store.trainingEvents],
+  );
+  const externalBusyIntervalsByTrainer = useMemo(
+    () =>
+      selectedTrainerIds.reduce<Record<string, typeof store.trainerExternalBusyMonths[number]["intervals"]>>(
+        (accumulator, trainerId) => {
+          accumulator[trainerId] = store.trainerExternalBusyMonths
+            .filter((month) => month.trainerId === trainerId)
+            .flatMap((month) => month.intervals);
+
+          return accumulator;
+        },
+        {},
+      ),
+    [selectedTrainerIds, store.trainerExternalBusyMonths],
+  );
+  const trainerNamesById = useMemo(
+    () =>
+      Object.fromEntries(
+        officialTrainers.map((trainer) => [trainer.id, trainer.displayName]),
+      ) as Record<string, string>,
+    [officialTrainers],
+  );
+  const sharedAvailabilityWindows = useMemo(() => {
+    if (selectedTrainerIds.length === 0) {
+      return [];
+    }
+
+    const rangeStart = new Date();
+    rangeStart.setUTCMinutes(0, 0, 0);
+
+    const computedWindows = buildSharedAvailabilityWindows({
+      trainerIds: selectedTrainerIds,
+      rangeStart: rangeStart.toISOString(),
+      rangeEnd: getAvailabilityHorizonEnd(),
+      minimumDurationHours,
+      busyIntervalsByTrainer: selectedTrainerIds.reduce<
+        Record<string, Array<{ startsAt: string; endsAt: string; source: "emandar" | "ical"; sourceLabel?: string }>>
+      >((accumulator, trainerId) => {
+        accumulator[trainerId] = [
+          ...(eventBusyIntervalsByTrainer[trainerId] ?? []),
+          ...(externalBusyIntervalsByTrainer[trainerId] ?? []),
+        ];
+
+        return accumulator;
+      }, {}),
+    });
+
+    return computedWindows
+      .filter((window) => (showOnlyFullMatch ? window.isFullMatch : true))
+      .slice(0, 80);
+  }, [
+    eventBusyIntervalsByTrainer,
+    externalBusyIntervalsByTrainer,
+    minimumDurationHours,
+    selectedTrainerIds,
+    showOnlyFullMatch,
+  ]);
+
+  async function handleSyncFeeds() {
+    try {
+      setSyncingFeeds(true);
+      await syncOwnTrainerCalendarFeeds();
+      toast.success("Feedy iCal zostaly zsynchronizowane.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac kalendarzy.",
+      );
+    } finally {
+      setSyncingFeeds(false);
+    }
+  }
 
   return (
     <PanelSection
@@ -2323,13 +2648,18 @@ export function EventsPage() {
 
     setTrainerEventForm((previous) => {
       const nextOrganizerId = previous.organizerId || availableOrganizers[0]?.id || "";
-      if (previous.organizerId === nextOrganizerId) {
+      const shouldSelfManage = availableOrganizers.length === 0 || previous.selfManagedByTrainer;
+      if (
+        previous.organizerId === nextOrganizerId &&
+        previous.selfManagedByTrainer === shouldSelfManage
+      ) {
         return previous;
       }
 
       return {
         ...previous,
         organizerId: nextOrganizerId,
+        selfManagedByTrainer: shouldSelfManage,
       };
     });
   }, [availableOrganizers, currentUser.role, isCommunityTrainer]);
@@ -2370,11 +2700,7 @@ export function EventsPage() {
     >
       {isCreatorView &&
         (currentUser.role === "trainer" || currentUser.role === "organizer") &&
-        ((currentUser.role === "trainer" &&
-          !isCommunityTrainer &&
-          !trainerEventForm.selfManagedByTrainer &&
-          availableOrganizers.length === 0) ||
-        (currentUser.role === "organizer" && availableTrainers.length === 0) ? (
+        (currentUser.role === "organizer" && availableTrainers.length === 0 ? (
           <EmptyPanelState
             title="Najpierw aktywna relacja"
             description="Aby dodać szkolenie, Przekazujący Wiedzę musi mieć przynajmniej jedną zaakceptowaną relację z organizatorem."
@@ -2461,6 +2787,39 @@ export function EventsPage() {
                   : "Ustaw dwa dni szkolenia, nagłówek miejsca i krótką informację od organizatora."}
               </p>
             </div>
+
+            {currentUser.role === "trainer" &&
+              !isCommunityTrainer &&
+              availableOrganizers.length === 0 && (
+                <div className="mb-6 rounded-[2rem] border border-brand-sky/35 bg-[linear-gradient(135deg,rgba(14,72,139,0.08),rgba(112,170,230,0.16))] p-5 text-brand-navy shadow-soft">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
+                        Tryb samodzielny
+                      </p>
+                      <h4 className="mt-2 text-xl font-semibold">
+                        Możesz od razu utworzyć własne szkolenie
+                      </h4>
+                      <p className="mt-2 max-w-2xl text-sm text-brand-muted">
+                        Nie masz jeszcze aktywnej relacji z organizatorem, więc to wydarzenie
+                        zapisze się jako szkolenie organizowane bezpośrednio przez Ciebie.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          selfManagedByTrainer: true,
+                        }))
+                      }
+                      className="inline-flex items-center justify-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft transition hover:bg-brand-navy/90"
+                    >
+                      Tworzę własne szkolenie
+                    </button>
+                  </div>
+                </div>
+              )}
 
             <div className="grid gap-4 xl:grid-cols-2">
               {currentUser.role === "organizer" && (
@@ -2831,7 +3190,7 @@ export function EventsPage() {
         {events.length === 0 && (
           <EmptyPanelState
             title="Brak wydarzeń"
-            description="Po seedzie albo dodaniu wydarzeń pojawią się tutaj szkolenia."
+            description="Tutaj pojawi? si? szkolenia dopiero po ich r?cznym dodaniu."
           />
         )}
         {sortEventsByDate(events).map((event) => {
@@ -2851,6 +3210,8 @@ export function EventsPage() {
           const collaborationNotice = getEventCollaborationNotice(event);
           const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
           const scheduleDays = getTrainingEventScheduleDays(event);
+          const canOpenEventDetails =
+            !(currentUser.role === "organizer" && isTrainingEventArchived(event));
 
           return (
             <article
@@ -2868,18 +3229,24 @@ export function EventsPage() {
                   <p className="mt-2 text-brand-muted">{event.summary}</p>
                 </div>
                 <div className="flex flex-col items-start gap-3 sm:items-end">
-                  <Link
-                    to={`/panel/szkolenia/${event.id}`}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                  >
-                    Otworz szkolenie
-                  </Link>
+                  {canOpenEventDetails ? (
+                    <Link
+                      to={`/panel/szkolenia/${event.id}`}
+                      className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                    >
+                      Otworz szkolenie
+                    </Link>
+                  ) : (
+                    <span className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-muted">
+                      Zarchiwizowane
+                    </span>
+                  )}
                   <div className="flex flex-wrap gap-2 sm:justify-end">
                     <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
                       {event.isPublished ? "opublikowane" : "ukryte"}
                     </span>
                     <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                      {getTrainingEventStatusLabel(event.status)}
+                      {getEventLifecycleLabel(event)}
                     </span>
                   </div>
                 </div>
@@ -2961,6 +3328,7 @@ export function EventsPage() {
 export function EventManagementPage() {
   const { eventId } = useParams();
   const {
+    archiveTrainingEvent,
     currentUser,
     decideTrainingEventCollaboration,
     manageEnrollmentRequest,
@@ -2968,6 +3336,7 @@ export function EventManagementPage() {
     updateTrainingEventBrandStatus,
     updateTrainingEventManagement,
   } = useAppState();
+  const [archivingEvent, setArchivingEvent] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [movingRequestId, setMovingRequestId] = useState<string | null>(null);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
@@ -3016,6 +3385,7 @@ export function EventManagementPage() {
   }
 
   const canManageEvent = canManageTrainingEvent(event, currentUser);
+  const eventIsArchived = isTrainingEventArchived(event);
   const canDecideCollaboration = canDecideTrainingEventCollaboration(event, currentUser);
   const ownerLabels = getEventOwnerLabel(event, store);
   const detailTitle = getEventCardTitle(event, currentUser, store);
@@ -3067,7 +3437,7 @@ export function EventManagementPage() {
               {event.isPublished ? "opublikowane" : "ukryte"}
             </span>
             <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-              {getTrainingEventStatusLabel(event.status)}
+              {getEventLifecycleLabel(event)}
             </span>
           </div>
         </div>
@@ -3136,7 +3506,13 @@ export function EventManagementPage() {
           </p>
         )}
 
-        {canManageEvent && <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-4">
+        {eventIsArchived && (
+          <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
+            To szkolenie jest zarchiwizowane. Pozostaje widoczne do wgladu, ale nie przyjmuje juz zapisow ani zmian organizatora.
+          </p>
+        )}
+
+        {canManageEvent && !eventIsArchived && <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-4">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <SectionBlockHeading
               title="Ustawienia szkolenia"
@@ -3334,7 +3710,7 @@ export function EventManagementPage() {
           <div className="mt-4 flex flex-wrap gap-3">
             <button
               type="button"
-              disabled={savingSettings}
+              disabled={savingSettings || archivingEvent}
               onClick={async () => {
                 setSavingSettings(true);
 
@@ -3366,6 +3742,33 @@ export function EventManagementPage() {
             >
               {savingSettings ? "Zapisywanie..." : "Zapisz ustawienia"}
             </button>
+            <button
+              type="button"
+              disabled={savingSettings || archivingEvent}
+              onClick={async () => {
+                if (!window.confirm("Zarchiwizowac to szkolenie i wylaczyc nowe zapisy?")) {
+                  return;
+                }
+
+                setArchivingEvent(true);
+
+                try {
+                  await archiveTrainingEvent(event.id);
+                  toast.success("Szkolenie zostalo zarchiwizowane.");
+                } catch (error) {
+                  toast.error(
+                    error instanceof Error
+                      ? error.message
+                      : "Nie udalo sie zarchiwizowac szkolenia.",
+                  );
+                } finally {
+                  setArchivingEvent(false);
+                }
+              }}
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+            >
+              {archivingEvent ? "Archiwizowanie..." : "Zarchiwizuj szkolenie"}
+            </button>
             <Link
               to="/panel/szkolenia"
               className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
@@ -3379,7 +3782,7 @@ export function EventManagementPage() {
         </div>}
       </article>
 
-      {canManageEvent && <div className="space-y-4">
+      {canManageEvent && !eventIsArchived && <div className="space-y-4">
         <SectionBlockHeading
           title="Uczestnicy i zgłoszenia"
           description="Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy."
@@ -3559,6 +3962,14 @@ function PeoplePage({ kind }: { kind: "trainer" | "organizer" }) {
             relation.trainerId === trainerProfile.id && relation.status === "pending",
         )
       : [];
+  const organizerRelationsById =
+    kind === "organizer" && currentUser?.role === "trainer" && trainerProfile
+      ? new Map(
+          store.relations
+            .filter((relation) => relation.trainerId === trainerProfile.id)
+            .map((relation) => [relation.organizerId, relation]),
+        )
+      : null;
 
   if (kind === "organizer" && currentUser?.role === "trainer" && isCommunityTrainer) {
     return <Navigate to="/panel/szkolenia" replace />;
@@ -3650,40 +4061,60 @@ function PeoplePage({ kind }: { kind: "trainer" | "organizer" }) {
           <div className="lg:col-span-2">
             <EmptyPanelState
               title="Brak rekordów"
-              description="Po seedzie Firebase katalog osób będzie widoczny tutaj."
+              description="Katalog pojawi si? tutaj dopiero po dodaniu realnych rekord?w do systemu."
             />
           </div>
         )}
-        {items.map((item) => (
-          <article
-            key={item.id}
-            className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-          >
-            <h3 className="text-2xl font-semibold text-brand-navy">
-              {item.displayName}
-            </h3>
-            <p className="mt-3 text-brand-muted">
-              {"bio" in item ? item.bio : item.description}
-            </p>
-            {"bio" in item && (
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                  {getBrandStatusLabel(item.brandStatus)}
-                </span>
-              </div>
-            )}
-            {kind === "trainer" && currentUser?.role === "admin" && "bio" in item && (
-              <div className="mt-5 max-w-sm">
-                <AdminBrandStatusSelect
-                  value={item.brandStatus}
-                  onChange={(brandStatus) =>
-                    updateTrainerBrandStatus(item.id, brandStatus)
-                  }
+        {items.map((item) => {
+          const organizerRelation =
+            kind === "organizer" && currentUser?.role === "trainer"
+              ? organizerRelationsById?.get(item.id)
+              : null;
+
+          return (
+            <article
+              key={item.id}
+              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+            >
+              <h3 className="text-2xl font-semibold text-brand-navy">
+                {item.displayName}
+              </h3>
+              <p className="mt-3 text-brand-muted">
+                {"bio" in item ? item.bio : item.description}
+              </p>
+              {"bio" in item && (
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                    {getBrandStatusLabel(item.brandStatus)}
+                  </span>
+                </div>
+              )}
+              {organizerRelation && (
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                    relacja: {organizerRelation.status}
+                  </span>
+                </div>
+              )}
+              {organizerRelation?.status === "approved" && (
+                <DetachRelationControls
+                  relationId={organizerRelation.id}
+                  allowArchiveOption
                 />
-              </div>
-            )}
-          </article>
-        ))}
+              )}
+              {kind === "trainer" && currentUser?.role === "admin" && "bio" in item && (
+                <div className="mt-5 max-w-sm">
+                  <AdminBrandStatusSelect
+                    value={item.brandStatus}
+                    onChange={(brandStatus) =>
+                      updateTrainerBrandStatus(item.id, brandStatus)
+                    }
+                  />
+                </div>
+              )}
+            </article>
+          );
+        })}
       </div>
     </PanelSection>
   );
@@ -3754,7 +4185,7 @@ export function ProfileSettingsPage() {
     return null;
   }
 
-  if (currentUser.role === "trainer" && trainerProfile) {
+  if ((currentUser.role === "trainer" || currentUser.role === "admin") && trainerProfile) {
     async function handleTrainerSubmit(event: FormEvent<HTMLFormElement>) {
       event.preventDefault();
       setSaving(true);
@@ -4088,7 +4519,7 @@ export function AccountRequestsPage() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                  {request.requestedRole}
+                  {getAccountRequestRoleLabel(request)}
                 </p>
                 <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
                   {request.displayName}

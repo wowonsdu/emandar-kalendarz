@@ -1,7 +1,7 @@
 export type AppRole = "admin" | "trainer" | "organizer";
 
 export type UserStatus = "active" | "invited";
-export type RelationStatus = "pending" | "approved" | "rejected";
+export type RelationStatus = "pending" | "approved" | "rejected" | "detached";
 export type DecisionStatus = "pending" | "accepted" | "rejected";
 export type EnrollmentFinalStatus =
   | "pending"
@@ -21,12 +21,15 @@ export type EventCollaborationStatus =
 export interface AppUser {
   id: string;
   role: AppRole;
+  roles: AppRole[];
+  primaryRole: AppRole;
   displayName: string;
   email: string;
   phone: string;
   avatarUrl?: string;
   status: UserStatus;
-  profileId?: string;
+  trainerProfileId?: string;
+  organizerProfileId?: string;
   createdAt?: string;
   password?: string;
 }
@@ -36,6 +39,7 @@ export interface TrainerProfile {
   userId: string;
   slug: string;
   displayName: string;
+  sortOrder?: number;
   bio: string;
   specialties: string[];
   locations: string[];
@@ -66,19 +70,9 @@ export interface TrainerOrganizerRelation {
   status: RelationStatus;
   requestedBy: "trainer" | "organizer" | "admin";
   createdAt: string;
-}
-
-export interface GroupRecord {
-  id: string;
-  organizerId: string;
-  trainerId: string;
-  organizerUserId?: string;
-  trainerUserId?: string;
-  name: string;
-  visibility: "private" | "public";
-  location: string;
-  notes: string;
-  createdAt: string;
+  detachedAt?: string;
+  detachedByRole?: AppRole;
+  archivedLinkedEvents?: boolean;
 }
 
 export interface TrainingEventScheduleDay {
@@ -98,9 +92,7 @@ export interface TrainingEvent {
   type: string;
   startsAt: string;
   endsAt: string;
-  dayTwoStartsAt?: string;
-  dayTwoEndsAt?: string;
-  scheduleDays?: TrainingEventScheduleDay[];
+  scheduleDays: TrainingEventScheduleDay[];
   location: string;
   tags?: string[];
   capacity: number;
@@ -115,6 +107,10 @@ export interface TrainingEvent {
   organizerCollaborationStatus?: EventCollaborationStatus;
   selfManagedByTrainer?: boolean;
   createdByRole?: "trainer" | "organizer";
+  archivedAt?: string;
+  archivedByRole?: AppRole;
+  archivedReason?: "relation-detached" | "manual";
+  archivedForOrganizerId?: string | null;
 }
 
 export interface AvailabilitySlot {
@@ -127,6 +123,48 @@ export interface AvailabilitySlot {
   notes: string;
   visibility: "approved-organizers";
   visibleToOrganizerIds?: string[];
+}
+
+export type TrainerCalendarFeedProvider = "google" | "apple" | "ical";
+export type TrainerCalendarFeedSyncStatus = "idle" | "success" | "error";
+
+export interface TrainerCalendarFeed {
+  id: string;
+  trainerId: string;
+  trainerUserId?: string;
+  provider: TrainerCalendarFeedProvider;
+  url: string;
+  enabled: boolean;
+  lastSyncedAt?: string;
+  lastSyncStatus?: TrainerCalendarFeedSyncStatus;
+  lastSyncError?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ExternalBusyInterval {
+  startsAt: string;
+  endsAt: string;
+  source: "emandar" | "ical";
+  sourceLabel?: string;
+}
+
+export interface TrainerExternalBusyMonth {
+  id: string;
+  trainerId: string;
+  monthKey: string;
+  intervals: ExternalBusyInterval[];
+  updatedAt: string;
+}
+
+export interface SharedAvailabilityWindow {
+  startsAt: string;
+  endsAt: string;
+  durationHours: number;
+  availableTrainerIds: string[];
+  missingTrainerIds: string[];
+  availableCount: number;
+  isFullMatch: boolean;
 }
 
 export interface EnrollmentRequest {
@@ -162,7 +200,6 @@ export interface NotificationRecord {
   entityType:
     | "request"
     | "relation"
-    | "group"
     | "availability"
     | "event"
     | "auth"
@@ -174,7 +211,7 @@ export interface AccountRequest {
   displayName: string;
   email: string;
   phone: string;
-  requestedRole: Exclude<AppRole, "admin">;
+  requestedRoles?: Array<Exclude<AppRole, "admin">>;
   notes: string;
   status: AccountRequestStatus;
   createdAt: string;
@@ -185,9 +222,10 @@ export interface DemoStore {
   trainers: TrainerProfile[];
   organizers: OrganizerProfile[];
   relations: TrainerOrganizerRelation[];
-  groups: GroupRecord[];
   trainingEvents: TrainingEvent[];
   availabilitySlots: AvailabilitySlot[];
+  trainerCalendarFeeds: TrainerCalendarFeed[];
+  trainerExternalBusyMonths: TrainerExternalBusyMonth[];
   enrollmentRequests: EnrollmentRequest[];
   notifications: NotificationRecord[];
   accountRequests: AccountRequest[];
@@ -210,16 +248,7 @@ export interface AccountRequestInput {
   displayName: string;
   email: string;
   phone: string;
-  requestedRole: Exclude<AppRole, "admin">;
-  notes: string;
-}
-
-export interface GroupInput {
-  organizerId: string;
-  trainerId: string;
-  name: string;
-  visibility: "private" | "public";
-  location: string;
+  requestedRoles: Array<Exclude<AppRole, "admin">>;
   notes: string;
 }
 
@@ -229,6 +258,11 @@ export interface AvailabilityInput {
   endsAt: string;
   location: string;
   notes: string;
+}
+
+export interface TrainerCalendarFeedInput {
+  provider: TrainerCalendarFeedProvider;
+  url: string;
 }
 
 export interface TrainingEventInput {

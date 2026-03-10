@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateEventCapacityStats,
+  buildSharedAvailabilityWindows,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
   canOrganizerAccessTrainer,
@@ -10,6 +11,7 @@ import {
   getEventFillRate,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
+  isTrainingEventArchived,
   isTrainingEventCollaborationAccepted,
   resolveOrganizerCollaborationStatus,
   sortEventsByFillRate,
@@ -253,23 +255,55 @@ describe("permissions and sorting", () => {
     expect(
       canManageTrainingEvent(event, {
         role: "trainer",
-        profileId: "trainer-1",
+        trainerProfileId: "trainer-1",
       }),
     ).toBe(true);
 
     expect(
       canManageTrainingEvent(event, {
         role: "organizer",
-        profileId: "organizer-1",
+        organizerProfileId: "organizer-1",
       }),
     ).toBe(false);
 
     expect(
       canDecideTrainingEventCollaboration(event, {
         role: "organizer",
-        profileId: "organizer-1",
+        organizerProfileId: "organizer-1",
       }),
     ).toBe(true);
+  });
+
+  it("blocks organizer from archived training while trainer keeps access", () => {
+    const event = {
+      trainerId: "trainer-1",
+      organizerId: "organizer-1",
+      brandStatus: "official" as const,
+      trainerCollaborationStatus: "accepted" as const,
+      organizerCollaborationStatus: "accepted" as const,
+      createdByRole: "trainer" as const,
+      archivedAt: "2026-03-10T10:00:00.000Z",
+    };
+
+    expect(isTrainingEventArchived(event)).toBe(true);
+    expect(
+      canManageTrainingEvent(event, {
+        role: "organizer",
+        organizerProfileId: "organizer-1",
+      }),
+    ).toBe(false);
+    expect(
+      canManageTrainingEvent(event, {
+        role: "trainer",
+        trainerProfileId: "trainer-1",
+      }),
+    ).toBe(true);
+    expect(
+      canDecideTrainingEventCollaboration(event, {
+        role: "organizer",
+        organizerProfileId: "organizer-1",
+      }),
+    ).toBe(false);
   });
 
   it("returns readable collaboration labels", () => {
@@ -305,12 +339,20 @@ describe("permissions and sorting", () => {
     });
   });
 
-  it("falls back to legacy first and second day fields", () => {
+  it("reads schedule days in chronological order", () => {
     const event = {
       startsAt: "2026-05-01T13:00:00.000Z",
-      endsAt: "2026-05-01T19:00:00.000Z",
-      dayTwoStartsAt: "2026-05-02T07:00:00.000Z",
-      dayTwoEndsAt: "2026-05-02T12:00:00.000Z",
+      endsAt: "2026-05-02T12:00:00.000Z",
+      scheduleDays: [
+        {
+          startsAt: "2026-05-02T07:00:00.000Z",
+          endsAt: "2026-05-02T12:00:00.000Z",
+        },
+        {
+          startsAt: "2026-05-01T13:00:00.000Z",
+          endsAt: "2026-05-01T19:00:00.000Z",
+        },
+      ],
     };
 
     expect(getTrainingEventScheduleDays(event)).toEqual([
@@ -323,5 +365,47 @@ describe("permissions and sorting", () => {
         endsAt: "2026-05-02T12:00:00.000Z",
       },
     ]);
+  });
+
+  it("builds shared availability windows for fully shared and partial gaps", () => {
+    const windows = buildSharedAvailabilityWindows({
+      trainerIds: ["trainer-1", "trainer-2"],
+      rangeStart: "2026-03-10T08:00:00.000Z",
+      rangeEnd: "2026-03-11T18:00:00.000Z",
+      minimumDurationHours: 1,
+      busyIntervalsByTrainer: {
+        "trainer-1": [
+          {
+            startsAt: "2026-03-10T09:00:00.000Z",
+            endsAt: "2026-03-10T12:00:00.000Z",
+            source: "emandar",
+          },
+          {
+            startsAt: "2026-03-10T21:00:00.000Z",
+            endsAt: "2026-03-11T15:00:00.000Z",
+            source: "ical",
+          },
+        ],
+        "trainer-2": [
+          {
+            startsAt: "2026-03-10T15:00:00.000Z",
+            endsAt: "2026-03-10T18:00:00.000Z",
+            source: "emandar",
+          },
+        ],
+      },
+    });
+
+    expect(windows[0]).toEqual({
+      startsAt: "2026-03-10T12:00:00.000Z",
+      endsAt: "2026-03-10T15:00:00.000Z",
+      durationHours: 3,
+      availableTrainerIds: ["trainer-1", "trainer-2"],
+      missingTrainerIds: [],
+      availableCount: 2,
+      isFullMatch: true,
+    });
+
+    expect(windows.some((window) => window.availableCount === 1)).toBe(true);
   });
 });

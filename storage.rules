@@ -6,59 +6,97 @@ service firebase.storage {
       return request.auth != null;
     }
 
-    function hasUserDocument() {
-      return isSignedIn() &&
-        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid));
-    }
-
-    function currentUser() {
-      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    function currentUid() {
+      return request.auth == null ? null : request.auth.uid;
     }
 
     function isAdmin() {
-      return (isSignedIn() && request.auth.token.admin == true) ||
-        (hasUserDocument() && currentUser().role == "admin");
+      return isSignedIn() &&
+        ("admin" in request.auth.token) &&
+        request.auth.token.admin == true;
     }
 
-    function enrollmentRequestDoc(requestId) {
-      return firestore.get(/databases/(default)/documents/enrollmentRequests/$(requestId)).data;
+    function enrollmentDoc(requestId) {
+      return firestore.get(/databases/(default)/documents/enrollmentRequests/$(requestId));
     }
 
     function enrollmentRequestExists(requestId) {
       return firestore.exists(/databases/(default)/documents/enrollmentRequests/$(requestId));
     }
 
+    function enrollmentTrainerUserId(requestId) {
+      return enrollmentRequestExists(requestId)
+        ? (
+          enrollmentDoc(requestId).data == null
+            ? null
+            : enrollmentDoc(requestId).data.trainerUserId
+        )
+        : null;
+    }
+
+    function enrollmentOrganizerUserId(requestId) {
+      return enrollmentRequestExists(requestId)
+        ? (
+          enrollmentDoc(requestId).data == null
+            ? null
+            : enrollmentDoc(requestId).data.organizerUserId
+        )
+        : null;
+    }
+
+    function enrollmentSubmitterUid(requestId) {
+      return enrollmentRequestExists(requestId)
+        ? (
+          enrollmentDoc(requestId).data == null
+            ? null
+            : enrollmentDoc(requestId).data.submitterUid
+        )
+        : null;
+    }
+
     function isEnrollmentParticipant(requestId) {
-      return enrollmentRequestExists(requestId) && (
-        isAdmin() ||
-        enrollmentRequestDoc(requestId).trainerUserId == request.auth.uid ||
-        enrollmentRequestDoc(requestId).organizerUserId == request.auth.uid
-      );
+      return isSignedIn() &&
+        enrollmentRequestExists(requestId) &&
+        (
+          isAdmin() ||
+          enrollmentTrainerUserId(requestId) == currentUid() ||
+          enrollmentOrganizerUserId(requestId) == currentUid() ||
+          enrollmentSubmitterUid(requestId) == currentUid()
+        );
+    }
+
+    function isSupportedImageUpload() {
+      return request.resource != null &&
+        request.resource.size < 5 * 1024 * 1024 &&
+        request.resource.contentType.matches("image/(jpeg|png|webp)");
     }
 
     match /enrollment-photos/{requestId}/original {
-      allow read: if isSignedIn() && isEnrollmentParticipant(requestId);
+      allow read: if isEnrollmentParticipant(requestId);
       allow write: if isSignedIn() &&
-        request.resource.size < 5 * 1024 * 1024 &&
-        request.resource.contentType.matches("image/(jpeg|png|webp)");
+        enrollmentRequestExists(requestId) &&
+        enrollmentSubmitterUid(requestId) == currentUid() &&
+        isSupportedImageUpload();
       allow delete: if isAdmin();
     }
 
-    function ownsTrainerProfile(ownerUid) {
-      return isSignedIn() && request.auth.uid == ownerUid;
-    }
-
-    function canManageTrainerAvatar(ownerUid) {
-      return ownsTrainerProfile(ownerUid) || isAdmin();
+    match /seeded/enrollment-photos/{requestId}/original {
+      allow read: if isEnrollmentParticipant(requestId);
+      allow write, delete: if isAdmin();
     }
 
     match /profile-photos/trainers/{ownerUid}/{fileName} {
       allow read: if true;
       allow write: if fileName == "avatar" &&
-        canManageTrainerAvatar(ownerUid) &&
-        request.resource.size < 5 * 1024 * 1024 &&
-        request.resource.contentType.matches("image/(jpeg|png|webp)");
-      allow delete: if fileName == "avatar" && canManageTrainerAvatar(ownerUid);
+        isSupportedImageUpload() &&
+        (ownerUid == currentUid() || isAdmin());
+      allow delete: if fileName == "avatar" &&
+        (ownerUid == currentUid() || isAdmin());
+    }
+
+    match /seeded/profile-photos/trainers/{trainerId}/{fileName} {
+      allow read: if true;
+      allow write, delete: if fileName == "avatar" && isAdmin();
     }
 
     match /{allPaths=**} {

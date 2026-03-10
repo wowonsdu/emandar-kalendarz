@@ -72,7 +72,6 @@ export const router = createBrowserRouter(
             { path: "rejestracje", Component: AccountRequestsPage },
             { path: "zgloszenia", Component: RequestsPage },
             { path: "relacje", Component: RelationsPage },
-            { path: "grupy", element: <Navigate to="/panel/szkolenia" replace /> },
             { path: "terminy", Component: AvailabilityPage },
             { path: "szkolenia", Component: EventsPage },
             { path: "szkolenia/:eventId", Component: EventManagementPage },

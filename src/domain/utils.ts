@@ -3,12 +3,15 @@ import type {
   AppRole,
   DecisionStatus,
   EmandarBrandStatus,
+  ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFinalStatus,
+  SharedAvailabilityWindow,
   TrainingEventScheduleDay,
   TrainerOrganizerRelation,
   TrainingEventStatus,
   TrainingEvent,
+  TrainerProfile,
 } from "./types";
 
 export function deriveEnrollmentFinalStatus(
@@ -54,6 +57,12 @@ export function canOrganizerAccessTrainer(
       relation.trainerId === trainerId &&
       relation.status === "approved",
   );
+}
+
+export function isTrainingEventArchived(
+  event: Pick<TrainingEvent, "archivedAt">,
+) {
+  return Boolean(event.archivedAt);
 }
 
 export function resolveTrainerCollaborationStatus(
@@ -120,6 +129,7 @@ export function canManageTrainingEvent(
   event: Pick<
     TrainingEvent,
     | "brandStatus"
+    | "archivedAt"
     | "createdByRole"
     | "organizerId"
     | "selfManagedByTrainer"
@@ -127,13 +137,17 @@ export function canManageTrainingEvent(
     | "organizerCollaborationStatus"
     | "trainerId"
   >,
-  actor: Pick<AppUser, "role" | "profileId">,
+  actor: Pick<AppUser, "role" | "trainerProfileId" | "organizerProfileId">,
 ) {
   if (actor.role === "admin") {
     return true;
   }
 
-  if (actor.role === "trainer" && actor.profileId === event.trainerId) {
+  if (actor.role === "organizer" && isTrainingEventArchived(event)) {
+    return false;
+  }
+
+  if (actor.role === "trainer" && actor.trainerProfileId === event.trainerId) {
     return (
       isSelfManagedTrainingEvent(event) ||
       resolveTrainerCollaborationStatus(event) === "accepted" ||
@@ -141,7 +155,10 @@ export function canManageTrainingEvent(
     );
   }
 
-  if (actor.role === "organizer" && actor.profileId === event.organizerId) {
+  if (
+    actor.role === "organizer" &&
+    actor.organizerProfileId === event.organizerId
+  ) {
     return (
       resolveOrganizerCollaborationStatus(event) === "accepted" ||
       event.createdByRole === "organizer"
@@ -154,22 +171,30 @@ export function canManageTrainingEvent(
 export function canDecideTrainingEventCollaboration(
   event: Pick<
     TrainingEvent,
+    | "archivedAt"
     | "organizerId"
     | "organizerCollaborationStatus"
     | "trainerCollaborationStatus"
     | "trainerId"
   >,
-  actor: Pick<AppUser, "role" | "profileId">,
+  actor: Pick<AppUser, "role" | "trainerProfileId" | "organizerProfileId">,
 ) {
+  if (isTrainingEventArchived(event)) {
+    return false;
+  }
+
   if (actor.role === "admin") {
     return true;
   }
 
-  if (actor.role === "trainer" && actor.profileId === event.trainerId) {
+  if (actor.role === "trainer" && actor.trainerProfileId === event.trainerId) {
     return resolveTrainerCollaborationStatus(event) === "pending";
   }
 
-  if (actor.role === "organizer" && actor.profileId === event.organizerId) {
+  if (
+    actor.role === "organizer" &&
+    actor.organizerProfileId === event.organizerId
+  ) {
     return resolveOrganizerCollaborationStatus(event) === "pending";
   }
 
@@ -196,43 +221,36 @@ export function sortEventsByDate(events: TrainingEvent[]) {
   );
 }
 
+export function sortTrainerProfiles(trainers: TrainerProfile[]) {
+  return [...trainers].sort((left, right) => {
+    const leftOrder = left.sortOrder ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.sortOrder ?? Number.MAX_SAFE_INTEGER;
+
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+
+    return left.displayName.localeCompare(right.displayName, "pl");
+  });
+}
+
 export function getTrainingEventScheduleDays(
-  event: Pick<
-    TrainingEvent,
-    "startsAt" | "endsAt" | "dayTwoStartsAt" | "dayTwoEndsAt" | "scheduleDays"
-  >,
+  event: Pick<TrainingEvent, "startsAt" | "endsAt" | "scheduleDays">,
 ) {
-  if (event.scheduleDays && event.scheduleDays.length > 0) {
-    return [...event.scheduleDays]
-      .filter((day) => Boolean(day.startsAt) && Boolean(day.endsAt))
-      .sort(
-        (left, right) =>
-          new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
-      );
-  }
+  const scheduleDays = Array.isArray(event.scheduleDays)
+    ? event.scheduleDays
+    : [{ startsAt: event.startsAt, endsAt: event.endsAt }];
 
-  const legacyDays: TrainingEventScheduleDay[] = [
-    {
-      startsAt: event.startsAt,
-      endsAt: event.endsAt,
-    },
-  ];
-
-  if (event.dayTwoStartsAt && event.dayTwoEndsAt) {
-    legacyDays.push({
-      startsAt: event.dayTwoStartsAt,
-      endsAt: event.dayTwoEndsAt,
-    });
-  }
-
-  return legacyDays.filter((day) => Boolean(day.startsAt) && Boolean(day.endsAt));
+  return [...scheduleDays]
+    .filter((day) => Boolean(day.startsAt) && Boolean(day.endsAt))
+    .sort(
+      (left, right) =>
+        new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
+    );
 }
 
 export function getTrainingEventScheduleBounds(
-  event: Pick<
-    TrainingEvent,
-    "startsAt" | "endsAt" | "dayTwoStartsAt" | "dayTwoEndsAt" | "scheduleDays"
-  >,
+  event: Pick<TrainingEvent, "startsAt" | "endsAt" | "scheduleDays">,
 ) {
   const days = getTrainingEventScheduleDays(event);
   const firstDay = days[0];
@@ -339,4 +357,242 @@ export function getRoleLabel(role: AppRole) {
     default:
       return role;
   }
+}
+
+export function hasRole(
+  user: Pick<AppUser, "role" | "roles" | "primaryRole"> | null | undefined,
+  role: AppRole,
+) {
+  if (!user) {
+    return false;
+  }
+
+  if (Array.isArray(user.roles) && user.roles.length > 0) {
+    return user.roles.includes(role);
+  }
+
+  return (user.primaryRole ?? user.role) === role || user.role === role;
+}
+
+export function requireTrainerProfileId(
+  user: Pick<AppUser, "trainerProfileId"> | null | undefined,
+) {
+  const trainerProfileId = user?.trainerProfileId?.trim();
+
+  if (!trainerProfileId) {
+    throw new Error("Konto nie ma aktywnego profilu Przekazującego Wiedzę.");
+  }
+
+  return trainerProfileId;
+}
+
+export function requireOrganizerProfileId(
+  user: Pick<AppUser, "organizerProfileId"> | null | undefined,
+) {
+  const organizerProfileId = user?.organizerProfileId?.trim();
+
+  if (!organizerProfileId) {
+    throw new Error("Konto nie ma aktywnego profilu organizatora.");
+  }
+
+  return organizerProfileId;
+}
+
+function toTimestamp(value: string) {
+  return new Date(value).getTime();
+}
+
+function toIso(value: number) {
+  return new Date(value).toISOString();
+}
+
+function roundUpToHour(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setUTCMinutes(0, 0, 0);
+
+  if (date.getTime() < timestamp) {
+    date.setUTCHours(date.getUTCHours() + 1);
+  }
+
+  return date.getTime();
+}
+
+function roundDownToHour(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setUTCMinutes(0, 0, 0);
+  return date.getTime();
+}
+
+export function mergeBusyIntervals(intervals: ExternalBusyInterval[]) {
+  const sortedIntervals = [...intervals]
+    .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt))
+    .sort((left, right) => toTimestamp(left.startsAt) - toTimestamp(right.startsAt));
+
+  return sortedIntervals.reduce<ExternalBusyInterval[]>((merged, interval) => {
+    const previous = merged[merged.length - 1];
+
+    if (!previous) {
+      merged.push({ ...interval });
+      return merged;
+    }
+
+    if (toTimestamp(interval.startsAt) <= toTimestamp(previous.endsAt)) {
+      previous.endsAt =
+        toTimestamp(interval.endsAt) > toTimestamp(previous.endsAt)
+          ? interval.endsAt
+          : previous.endsAt;
+      previous.sourceLabel = previous.sourceLabel ?? interval.sourceLabel;
+      return merged;
+    }
+
+    merged.push({ ...interval });
+    return merged;
+  }, []);
+}
+
+export function buildSharedAvailabilityWindows({
+  trainerIds,
+  busyIntervalsByTrainer,
+  rangeStart,
+  rangeEnd,
+  minimumDurationHours = 1,
+}: {
+  trainerIds: string[];
+  busyIntervalsByTrainer: Record<string, ExternalBusyInterval[]>;
+  rangeStart: string;
+  rangeEnd: string;
+  minimumDurationHours?: number;
+}) {
+  const uniqueTrainerIds = Array.from(new Set(trainerIds.filter(Boolean)));
+
+  if (uniqueTrainerIds.length === 0) {
+    return [] satisfies SharedAvailabilityWindow[];
+  }
+
+  const rangeStartTimestamp = roundUpToHour(toTimestamp(rangeStart));
+  const rangeEndTimestamp = roundDownToHour(toTimestamp(rangeEnd));
+  const minimumDurationMs = Math.max(1, minimumDurationHours) * 60 * 60 * 1000;
+
+  if (rangeEndTimestamp <= rangeStartTimestamp) {
+    return [] satisfies SharedAvailabilityWindow[];
+  }
+
+  const mergedBusyIntervalsByTrainer = Object.fromEntries(
+    uniqueTrainerIds.map((trainerId) => {
+      const clippedIntervals = (busyIntervalsByTrainer[trainerId] ?? [])
+        .map((interval) => {
+          const startsAt = Math.max(toTimestamp(interval.startsAt), rangeStartTimestamp);
+          const endsAt = Math.min(toTimestamp(interval.endsAt), rangeEndTimestamp);
+
+          return {
+            ...interval,
+            startsAt: toIso(startsAt),
+            endsAt: toIso(endsAt),
+          };
+        })
+        .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt));
+
+      return [trainerId, mergeBusyIntervals(clippedIntervals)];
+    }),
+  ) as Record<string, ExternalBusyInterval[]>;
+
+  const boundaries = Array.from(
+    new Set(
+      [
+        rangeStartTimestamp,
+        rangeEndTimestamp,
+        ...Object.values(mergedBusyIntervalsByTrainer).flatMap((intervals) =>
+          intervals.flatMap((interval) => [
+            toTimestamp(interval.startsAt),
+            toTimestamp(interval.endsAt),
+          ]),
+        ),
+      ]
+        .filter((value) => value >= rangeStartTimestamp && value <= rangeEndTimestamp)
+        .sort((left, right) => left - right),
+    ),
+  );
+
+  const rawWindows: SharedAvailabilityWindow[] = [];
+
+  for (let index = 0; index < boundaries.length - 1; index += 1) {
+    const segmentStart = boundaries[index];
+    const segmentEnd = boundaries[index + 1];
+
+    if (!segmentStart || !segmentEnd || segmentEnd <= segmentStart) {
+      continue;
+    }
+
+    const roundedStart = roundUpToHour(segmentStart);
+    const roundedEnd = roundDownToHour(segmentEnd);
+
+    if (roundedEnd <= roundedStart || roundedEnd - roundedStart < minimumDurationMs) {
+      continue;
+    }
+
+    const availableTrainerIds = uniqueTrainerIds.filter((trainerId) => {
+      const busyIntervals = mergedBusyIntervalsByTrainer[trainerId] ?? [];
+
+      return !busyIntervals.some(
+        (interval) =>
+          roundedStart < toTimestamp(interval.endsAt) &&
+          roundedEnd > toTimestamp(interval.startsAt),
+      );
+    });
+
+    if (availableTrainerIds.length === 0) {
+      continue;
+    }
+
+    const missingTrainerIds = uniqueTrainerIds.filter(
+      (trainerId) => !availableTrainerIds.includes(trainerId),
+    );
+
+    rawWindows.push({
+      startsAt: toIso(roundedStart),
+      endsAt: toIso(roundedEnd),
+      durationHours: Math.round(((roundedEnd - roundedStart) / (60 * 60 * 1000)) * 10) / 10,
+      availableTrainerIds,
+      missingTrainerIds,
+      availableCount: availableTrainerIds.length,
+      isFullMatch: availableTrainerIds.length === uniqueTrainerIds.length,
+    });
+  }
+
+  const mergedWindows = rawWindows.reduce<SharedAvailabilityWindow[]>((windows, window) => {
+    const previous = windows[windows.length - 1];
+
+    if (
+      previous &&
+      previous.endsAt === window.startsAt &&
+      previous.availableTrainerIds.join("|") === window.availableTrainerIds.join("|") &&
+      previous.missingTrainerIds.join("|") === window.missingTrainerIds.join("|")
+    ) {
+      previous.endsAt = window.endsAt;
+      previous.durationHours =
+        Math.round(
+          ((toTimestamp(previous.endsAt) - toTimestamp(previous.startsAt)) /
+            (60 * 60 * 1000)) *
+            10,
+        ) / 10;
+      previous.availableCount = previous.availableTrainerIds.length;
+      previous.isFullMatch = previous.availableCount === uniqueTrainerIds.length;
+      return windows;
+    }
+
+    windows.push({ ...window });
+    return windows;
+  }, []);
+
+  return mergedWindows.sort((left, right) => {
+    if (right.availableCount !== left.availableCount) {
+      return right.availableCount - left.availableCount;
+    }
+
+    if (right.durationHours !== left.durationHours) {
+      return right.durationHours - left.durationHours;
+    }
+
+    return toTimestamp(left.startsAt) - toTimestamp(right.startsAt);
+  });
 }

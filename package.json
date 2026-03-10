@@ -2,12 +2,16 @@
   "name": "@figma/my-make-file",
   "private": true,
   "version": "0.0.1",
+  "main": "functions/index.js",
   "type": "module",
   "scripts": {
+    "backfill:firebase": "node scripts/backfill-firebase.mjs",
     "build": "vite build && node scripts/postbuild.mjs",
     "dev": "vite",
-    "seed:firebase": "node scripts/seed-firebase.mjs",
-    "test": "vitest run"
+    "release:check": "npm run test && npm run test:firebase && npm run build",
+    "test": "vitest run src",
+    "test:firebase": "node tests/firebase/rules/run-rules-tests.mjs",
+    "test:rules": "node tests/firebase/rules/run-rules-tests.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
@@ -48,6 +52,8 @@
     "embla-carousel-react": "8.6.0",
     "firebase": "^12.10.0",
     "firebase-admin": "^13.4.0",
+    "firebase-functions": "^6.5.0",
+    "ical.js": "^2.2.1",
     "input-otp": "1.4.2",
     "lucide-react": "0.487.0",
     "motion": "12.23.24",
@@ -70,8 +76,10 @@
     "vaul": "1.1.2"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
     "@tailwindcss/vite": "4.1.12",
     "@vitejs/plugin-react": "4.7.0",
+    "firebase-tools": "^14.24.2",
     "tailwindcss": "4.1.12",
     "vite": "6.3.5",
     "vitest": "^3.2.4"

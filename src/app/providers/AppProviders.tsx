@@ -8,14 +8,18 @@ import {
 } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { firebaseAuth, isFirebaseConfigured } from "@/lib/firebase";
+import { mapAppError } from "@/domain/errors";
+import { sortTrainerProfiles } from "@/domain/utils";
 import {
   addAvailabilitySlot as addAvailabilitySlotAction,
+  addTrainerCalendarFeed as addTrainerCalendarFeedAction,
+  archiveTrainingEvent as archiveTrainingEventAction,
   createEmptyStore,
-  createGroup as createGroupAction,
   createUnifiedTrainingEvent as createTrainingEventAction,
   decideAccountRequest as decideAccountRequestAction,
   decideEnrollment as decideEnrollmentAction,
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
+  detachRelation as detachRelationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
   decideRelation as decideRelationAction,
   requestRelation as requestRelationAction,
@@ -27,7 +31,10 @@ import {
   subscribePrivateStore,
   subscribePublicStore,
   subscribeUserProfile,
+  syncOwnTrainerCalendarFeeds as syncOwnTrainerCalendarFeedsAction,
+  removeTrainerCalendarFeed as removeTrainerCalendarFeedAction,
   updateTrainingEventBrandStatus as updateTrainingEventBrandStatusAction,
+  updateTrainerCalendarFeedEnabled as updateTrainerCalendarFeedEnabledAction,
   updateTrainingEventManagement as updateTrainingEventManagementAction,
   updateOrganizerProfile as updateOrganizerProfileAction,
   updateTrainerBrandStatus as updateTrainerBrandStatusAction,
@@ -42,8 +49,8 @@ import type {
   DemoStore,
   EmandarBrandStatus,
   EnrollmentFormInput,
-  GroupInput,
   OrganizerProfileUpdateInput,
+  TrainerCalendarFeedInput,
   TrainingEventScheduleDay,
   TrainingEventInput,
   TrainingEventStatus,
@@ -51,13 +58,11 @@ import type {
 } from "@/domain/types";
 
 interface AppStateContextValue {
-  dataMode: string;
   store: DemoStore;
   currentUser: AppUser | null;
   authReady: boolean;
   signIn: (email: string, password: string) => Promise<AppUser>;
   signOut: () => Promise<void>;
-  resetDemo: () => Promise<void>;
   submitEnrollment: (input: EnrollmentFormInput) => Promise<void>;
   submitAccountRequest: (input: AccountRequestInput) => Promise<void>;
   decideAccountRequest: (
@@ -78,10 +83,12 @@ interface AppStateContextValue {
     relationId: string,
     status: "approved" | "rejected",
   ) => Promise<void>;
-  createGroup: (
-    input: Omit<GroupInput, "organizerId"> & { organizerId?: string },
+  detachRelation: (
+    relationId: string,
+    archiveLinkedEvents?: boolean,
   ) => Promise<void>;
   createTrainingEvent: (input: TrainingEventInput) => Promise<void>;
+  archiveTrainingEvent: (eventId: string) => Promise<void>;
   decideTrainingEventCollaboration: (
     eventId: string,
     status: "accepted" | "rejected",
@@ -89,6 +96,10 @@ interface AppStateContextValue {
   addAvailabilitySlot: (
     input: Omit<AvailabilityInput, "trainerId"> & { trainerId?: string },
   ) => Promise<void>;
+  addTrainerCalendarFeed: (input: TrainerCalendarFeedInput) => Promise<void>;
+  updateTrainerCalendarFeedEnabled: (feedId: string, enabled: boolean) => Promise<void>;
+  removeTrainerCalendarFeed: (feedId: string) => Promise<void>;
+  syncOwnTrainerCalendarFeeds: () => Promise<void>;
   updateTrainerProfile: (input: TrainerProfileUpdateInput) => Promise<void>;
   updateOrganizerProfile: (input: OrganizerProfileUpdateInput) => Promise<void>;
   updateTrainerBrandStatus: (
@@ -117,19 +128,32 @@ type StorePatch = Partial<DemoStore>;
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
 
+async function withFriendlyErrors<T>(action: () => Promise<T>) {
+  try {
+    return await action();
+  } catch (error) {
+    throw mapAppError(error);
+  }
+}
+
 function getRoleHomePath(_role: AppRole) {
   return "/panel/dashboard";
 }
 
 function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStore {
+  const trainers = sortTrainerProfiles(privateStore.trainers ?? publicStore.trainers);
+
   return {
     users: privateStore.users ?? publicStore.users,
-    trainers: privateStore.trainers ?? publicStore.trainers,
+    trainers,
     organizers: privateStore.organizers ?? publicStore.organizers,
     relations: privateStore.relations ?? publicStore.relations,
-    groups: privateStore.groups ?? publicStore.groups,
     trainingEvents: privateStore.trainingEvents ?? publicStore.trainingEvents,
     availabilitySlots: privateStore.availabilitySlots ?? publicStore.availabilitySlots,
+    trainerCalendarFeeds:
+      privateStore.trainerCalendarFeeds ?? publicStore.trainerCalendarFeeds,
+    trainerExternalBusyMonths:
+      privateStore.trainerExternalBusyMonths ?? publicStore.trainerExternalBusyMonths,
     enrollmentRequests:
       privateStore.enrollmentRequests ?? publicStore.enrollmentRequests,
     notifications: privateStore.notifications ?? publicStore.notifications,
@@ -229,51 +253,53 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
   const value = useMemo<AppStateContextValue>(
     () => ({
-      dataMode: isFirebaseConfigured ? "firebase" : "demo",
       store,
       currentUser,
       authReady,
       async signIn(email, password) {
-        return signInAction(email, password);
+        return withFriendlyErrors(() => signInAction(email, password));
       },
       async signOut() {
-        await signOutAction();
-      },
-      async resetDemo() {
-        throw new Error("Tryb demo został wyłączony.");
+        await withFriendlyErrors(() => signOutAction());
       },
       async submitEnrollment(input) {
-        await submitEnrollmentAction(input);
+        await withFriendlyErrors(() => submitEnrollmentAction(input));
       },
       async submitAccountRequest(input) {
-        await submitAccountRequestAction(input);
+        await withFriendlyErrors(() => submitAccountRequestAction(input));
       },
       async decideAccountRequest(requestId, status) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await decideAccountRequestAction(requestId, currentUser, status);
+        await withFriendlyErrors(() =>
+          decideAccountRequestAction(requestId, currentUser, status),
+        );
       },
       async decideEnrollment(requestId, decision) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await decideEnrollmentAction(requestId, currentUser, decision);
+        await withFriendlyErrors(() =>
+          decideEnrollmentAction(requestId, currentUser, decision),
+        );
       },
       async manageEnrollmentRequest(requestId, decision, transferTargetEventId) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await manageEnrollmentRequestAction(
-          {
-            requestId,
-            decision,
-            transferTargetEventId,
-          },
-          currentUser,
+        await withFriendlyErrors(() =>
+          manageEnrollmentRequestAction(
+            {
+              requestId,
+              decision,
+              transferTargetEventId,
+            },
+            currentUser,
+          ),
         );
       },
       async requestRelation(trainerId) {
@@ -281,16 +307,25 @@ export function AppProviders({ children }: { children: ReactNode }) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await requestRelationAction(currentUser, trainerId);
+        await withFriendlyErrors(() => requestRelationAction(currentUser, trainerId));
       },
       async decideRelation(relationId, status) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await decideRelationAction(relationId, currentUser, status);
+        await withFriendlyErrors(() =>
+          decideRelationAction(relationId, currentUser, status),
+        );
       },
-      async createGroup(input) {
+      async detachRelation(relationId, archiveLinkedEvents) {
+        throw new Error("Model grup zostal usuniety. Korzystaj z jednego modelu szkolen.");
+
+        await withFriendlyErrors(() =>
+          detachRelationAction(relationId, currentUser, archiveLinkedEvents),
+        );
+      },
+      async __removeCreateGroup() {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
@@ -303,12 +338,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
           throw new Error("Brak profilu organizatora.");
         }
 
-        await createGroupAction(
-          {
-            ...input,
-            organizerId,
-          },
-          currentUser,
+        await withFriendlyErrors(() =>
+          createGroupAction(
+            {
+              ...input,
+              organizerId,
+            },
+            currentUser,
+          ),
         );
       },
       async createTrainingEvent(input) {
@@ -316,19 +353,30 @@ export function AppProviders({ children }: { children: ReactNode }) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await createTrainingEventAction(input, currentUser);
+        await withFriendlyErrors(() => createTrainingEventAction(input, currentUser));
+      },
+      async archiveTrainingEvent(eventId) {
+        if (!currentUser) {
+          throw new Error("Musisz byc zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          archiveTrainingEventAction(eventId, currentUser),
+        );
       },
       async decideTrainingEventCollaboration(eventId, status) {
         if (!currentUser) {
           throw new Error("Musisz byÄ‡ zalogowany.");
         }
 
-        await decideTrainingEventCollaborationAction(
-          {
-            eventId,
-            status,
-          },
-          currentUser,
+        await withFriendlyErrors(() =>
+          decideTrainingEventCollaborationAction(
+            {
+              eventId,
+              status,
+            },
+            currentUser,
+          ),
         );
       },
       async addAvailabilitySlot(input) {
@@ -344,39 +392,75 @@ export function AppProviders({ children }: { children: ReactNode }) {
       throw new Error("Brak profilu Przekazującego Wiedzę.");
         }
 
-        await addAvailabilitySlotAction(
-          {
-            ...input,
-            trainerId,
-          },
-          currentUser,
+        await withFriendlyErrors(() =>
+          addAvailabilitySlotAction(
+            {
+              ...input,
+              trainerId,
+            },
+            currentUser,
+          ),
         );
+      },
+      async addTrainerCalendarFeed(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => addTrainerCalendarFeedAction(input, currentUser));
+      },
+      async updateTrainerCalendarFeedEnabled(feedId, enabled) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateTrainerCalendarFeedEnabledAction(feedId, enabled, currentUser),
+        );
+      },
+      async removeTrainerCalendarFeed(feedId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          removeTrainerCalendarFeedAction(feedId, currentUser),
+        );
+      },
+      async syncOwnTrainerCalendarFeeds() {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => syncOwnTrainerCalendarFeedsAction(currentUser));
       },
       async updateTrainerProfile(input) {
         if (!currentUser) {
           throw new Error("Musisz byc zalogowany.");
         }
 
-        await updateTrainerProfileAction(currentUser, input);
+        await withFriendlyErrors(() => updateTrainerProfileAction(currentUser, input));
       },
       async updateOrganizerProfile(input) {
         if (!currentUser) {
           throw new Error("Musisz byc zalogowany.");
         }
 
-        await updateOrganizerProfileAction(currentUser, input);
+        await withFriendlyErrors(() => updateOrganizerProfileAction(currentUser, input));
       },
       async updateTrainerBrandStatus(trainerId, brandStatus) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await updateTrainerBrandStatusAction(
-          {
-            trainerId,
-            brandStatus,
-          },
-          currentUser,
+        await withFriendlyErrors(() =>
+          updateTrainerBrandStatusAction(
+            {
+              trainerId,
+              brandStatus,
+            },
+            currentUser,
+          ),
         );
       },
       async updateTrainingEventBrandStatus(eventId, brandStatus) {
@@ -384,12 +468,14 @@ export function AppProviders({ children }: { children: ReactNode }) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await updateTrainingEventBrandStatusAction(
-          {
-            eventId,
-            brandStatus,
-          },
-          currentUser,
+        await withFriendlyErrors(() =>
+          updateTrainingEventBrandStatusAction(
+            {
+              eventId,
+              brandStatus,
+            },
+            currentUser,
+          ),
         );
       },
       async updateTrainingEventManagement(
@@ -405,17 +491,19 @@ export function AppProviders({ children }: { children: ReactNode }) {
           throw new Error("Musisz byÄ‡ zalogowany.");
         }
 
-        await updateTrainingEventManagementAction(
-          {
-            eventId,
-            status,
-            capacity,
-            minimumParticipants,
-            tags,
-            scheduleDays,
-            transferTargetEventId,
-          },
-          currentUser,
+        await withFriendlyErrors(() =>
+          updateTrainingEventManagementAction(
+            {
+              eventId,
+              status,
+              capacity,
+              minimumParticipants,
+              tags,
+              scheduleDays,
+              transferTargetEventId,
+            },
+            currentUser,
+          ),
         );
       },
       notificationsCount,

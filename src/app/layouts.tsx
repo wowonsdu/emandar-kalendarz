@@ -78,12 +78,6 @@ export function PublicLayout() {
             >
               Wydarzenia Społeczności
             </NavLink>
-            <NavLink
-              to="/login"
-              className={() => exactNavLinkClass(location.pathname, "/login")}
-            >
-              Logowanie
-            </NavLink>
           </nav>
 
           <div className="flex items-center gap-3">
@@ -181,6 +175,7 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
 
   return [
     ...base,
+    { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
     { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
     { to: "/panel/trenerzy", label: "Przekazujący Wiedzę", icon: Users },
     { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },

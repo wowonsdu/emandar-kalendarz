@@ -990,7 +990,7 @@ function createRecaptchaVerifier(containerId: string) {
 }
 
 function SmsLoginScreen() {
-  const { authReady, currentUser, signIn } = useAppState();
+  const { authReady, currentUser, getRoleHomePath, signIn } = useAppState();
   const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const [phone, setPhone] = useState("");
@@ -1008,7 +1008,7 @@ function SmsLoginScreen() {
   }, []);
 
   if (currentUser) {
-    return <Navigate to="/panel/dashboard" replace />;
+    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
   }
 
   async function handleSendCode(event: FormEvent<HTMLFormElement>) {
@@ -1059,15 +1059,15 @@ function SmsLoginScreen() {
 
     try {
       const result = await confirmationResult.confirm(verificationCode.trim());
-      await fetchAppUser(result.user.uid);
+      const appUser = await fetchAppUser(result.user.uid);
       toast.success("Zalogowano do panelu.");
-      navigate("/panel/dashboard");
+      navigate(getRoleHomePath(appUser.role));
     } catch (error) {
       if (firebaseAuth?.currentUser?.uid) {
         try {
-          await fetchAppUser(firebaseAuth.currentUser.uid);
+          const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
           toast.success("Zalogowano do panelu.");
-          navigate("/panel/dashboard");
+          navigate(getRoleHomePath(appUser.role));
           return;
         } catch {
           toast.info("Numer potwierdzony. Uzupełnij teraz rejestrację konta.");
@@ -1092,11 +1092,14 @@ function SmsLoginScreen() {
 
     try {
       const user = await signIn(emailToUse, demoLoginPassword);
+      const nextRole =
+        user.role !== targetRole && user.roles.includes(targetRole) ? targetRole : user.role;
+
       if (user.role !== targetRole && user.roles.includes(targetRole)) {
         await updateActiveRoleAction(user, targetRole);
       }
       toast.success(`Zalogowano jako ${emailToUse}.`);
-      navigate("/panel/dashboard");
+      navigate(getRoleHomePath(nextRole));
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zalogować kontem demo.",
@@ -1236,7 +1239,7 @@ function SmsLoginScreen() {
 }
 
 function SmsRegisterScreen() {
-  const { currentUser, store, submitAccountRequest } = useAppState();
+  const { currentUser, getRoleHomePath, store, submitAccountRequest } = useAppState();
   const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const prefetchedPhone =
@@ -1285,7 +1288,7 @@ function SmsRegisterScreen() {
   }, []);
 
   if (currentUser) {
-    return <Navigate to="/panel/dashboard" replace />;
+    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
   }
 
   function toggleRole(role: "trainer" | "organizer" | "participant", checked: boolean) {
@@ -1389,8 +1392,15 @@ function SmsRegisterScreen() {
         organizerTrainingIntent: form.organizerTrainingIntent,
         selectedTrainerIds: form.selectedTrainerIds,
       });
+      const authUserId = firebaseAuth?.currentUser?.uid;
+
+      if (authUserId) {
+        const appUser = await fetchAppUser(authUserId);
+        navigate(getRoleHomePath(appUser.role));
+      } else {
+        navigate("/kalendarz");
+      }
       toast.success("Konto zostało utworzone.");
-      navigate("/panel/dashboard");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się utworzyć konta.",
@@ -1655,7 +1665,7 @@ export function LoginPage() {
 }
 
 function LoginPageLegacyUnused() {
-  const { authReady, currentUser, signIn } = useAppState();
+  const { authReady, currentUser, getRoleHomePath, signIn } = useAppState();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -1663,7 +1673,7 @@ function LoginPageLegacyUnused() {
   const [quickLoginEmail, setQuickLoginEmail] = useState<string | null>(null);
 
   if (currentUser) {
-    return <Navigate to="/panel/dashboard" replace />;
+    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -1671,9 +1681,9 @@ function LoginPageLegacyUnused() {
     setLoading(true);
 
     try {
-      await signIn(email, password);
+      const user = await signIn(email, password);
       toast.success("Zalogowano do panelu.");
-      navigate("/panel/dashboard");
+      navigate(getRoleHomePath(user.role));
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zalogować.",
@@ -1691,11 +1701,14 @@ function LoginPageLegacyUnused() {
 
     try {
       const user = await signIn(emailToUse, demoLoginPassword);
+      const nextRole =
+        user.role !== targetRole && user.roles.includes(targetRole) ? targetRole : user.role;
+
       if (user.role !== targetRole && user.roles.includes(targetRole)) {
         await updateActiveRoleAction(user, targetRole);
       }
       toast.success(`Zalogowano jako ${emailToUse}.`);
-      navigate("/panel/dashboard");
+      navigate(getRoleHomePath(nextRole));
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zalogować kontem demo.",
@@ -1817,7 +1830,7 @@ export function RegisterPage() {
 }
 
 function RegisterPageLegacyUnused() {
-  const { currentUser, submitAccountRequest } = useAppState();
+  const { currentUser, getRoleHomePath, submitAccountRequest } = useAppState();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
@@ -1831,7 +1844,7 @@ function RegisterPageLegacyUnused() {
   });
 
   if (currentUser) {
-    return <Navigate to="/panel/dashboard" replace />;
+    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

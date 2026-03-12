@@ -68,6 +68,7 @@ import type {
 interface AppStateContextValue {
   store: DemoStore;
   currentUser: AppUser | null;
+  currentUserReady: boolean;
   availableRoles: AppRole[];
   authReady: boolean;
   signIn: (email: string, password: string) => Promise<AppUser>;
@@ -162,8 +163,8 @@ async function withFriendlyErrors<T>(action: () => Promise<T>) {
   }
 }
 
-function getRoleHomePath(_role: AppRole) {
-  return "/panel/dashboard";
+function getRoleHomePath(role: AppRole) {
+  return role === "participant" ? "/kalendarz" : "/panel/dashboard";
 }
 
 function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStore {
@@ -201,6 +202,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   const [publicStore, setPublicStore] = useState(() => createEmptyStore());
   const [privateStore, setPrivateStore] = useState<StorePatch>({});
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [currentUserReady, setCurrentUserReady] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
 
@@ -221,6 +223,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!firebaseAuth) {
       setAuthReady(true);
+      setCurrentUserReady(true);
       return;
     }
 
@@ -231,9 +234,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
         setAuthUserId(null);
         setCurrentUser(null);
         setPrivateStore({});
+        setCurrentUserReady(true);
         return;
       }
 
+      setCurrentUser(null);
+      setPrivateStore({});
+      setCurrentUserReady(false);
       setAuthUserId(user.uid);
     });
   }, []);
@@ -245,6 +252,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
     return subscribeUserProfile(authUserId, (user) => {
       setCurrentUser(user);
+      setCurrentUserReady(true);
       setPrivateStore((previous) =>
         applyPatch(previous, {
           users: user ? [user] : [],
@@ -285,6 +293,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     () => ({
       store,
       currentUser,
+      currentUserReady,
       availableRoles,
       authReady,
       async signIn(email, password) {
@@ -589,7 +598,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
         );
       },
     }),
-    [authReady, availableRoles, currentUser, notificationsCount, store],
+    [authReady, availableRoles, currentUser, currentUserReady, notificationsCount, store],
   );
 
   return (

@@ -49,8 +49,9 @@ function BrandMark() {
 }
 
 export function PublicLayout() {
-  const { currentUser } = useAppState();
+  const { currentUser, getRoleHomePath } = useAppState();
   const location = useLocation();
+  const userHomePath = currentUser ? getRoleHomePath(currentUser.role) : "/login";
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
@@ -84,11 +85,11 @@ export function PublicLayout() {
           <div className="flex items-center gap-3">
             {currentUser ? (
               <Link
-                to="/panel/dashboard"
+                to={userHomePath}
                 className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-2.5 text-sm font-semibold text-white shadow-soft"
               >
                 <LayoutDashboard size={16} />
-                Panel
+                Moja Przestrzen
               </Link>
             ) : (
               <Link
@@ -123,8 +124,8 @@ export function PublicLayout() {
             <Link to="/wydarzenia-spolecznosci" className="hover:text-brand-navy">
               Wydarzenia spolecznosci
             </Link>
-            <Link to="/login" className="hover:text-brand-navy">
-              Panel
+            <Link to={userHomePath} className="hover:text-brand-navy">
+              {currentUser ? "Moja Przestrzen" : "Panel"}
             </Link>
           </div>
         </div>
@@ -196,10 +197,10 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
 }
 
 export function RequireAuth() {
-  const { authReady, currentUser } = useAppState();
+  const { authReady, currentUser, currentUserReady } = useAppState();
   const location = useLocation();
 
-  if (!authReady) {
+  if (!authReady || !currentUserReady) {
     return null;
   }
 

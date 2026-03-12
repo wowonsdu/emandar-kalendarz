@@ -19,7 +19,10 @@ import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { AppUser, EmandarBrandStatus, TrainingEvent } from "@/domain/types";
 import { updateActiveRole as updateActiveRoleAction } from "@/data/firebaseRepository";
-import { fetchAppUser } from "@/data/firebaseRepository";
+import {
+  ensurePhoneParticipantProfile,
+  fetchAppUser,
+} from "@/data/firebaseRepository";
 import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
@@ -1070,9 +1073,17 @@ function SmsLoginScreen() {
           navigate(getRoleHomePath(appUser.role));
           return;
         } catch {
-          toast.info("Numer potwierdzony. Uzupełnij teraz rejestrację konta.");
-          navigate(`/rejestracja?phone=${encodeURIComponent(phone)}`);
-          return;
+          try {
+            await ensurePhoneParticipantProfile();
+            const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
+            toast.success("Zalogowano do przestrzeni uczestnika.");
+            navigate(getRoleHomePath(appUser.role));
+            return;
+          } catch {
+            toast.info("Numer potwierdzony. Uzupełnij teraz rejestrację konta.");
+            navigate(`/rejestracja?phone=${encodeURIComponent(phone)}`);
+            return;
+          }
         }
       }
 

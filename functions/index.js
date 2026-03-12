@@ -1158,6 +1158,71 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
   return { ok: true, userId: uid, accountCreated: true };
 });
 
+export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (request) => {
+  const { uid, user } = await requireCurrentUser(request, { allowAnonymous: true });
+  const authUser = await auth.getUser(uid);
+  const verifiedPhone = requiredString(
+    authUser.phoneNumber,
+    "Numer telefonu musi zostać najpierw potwierdzony kodem SMS.",
+  );
+
+  if (user) {
+    return { ok: true, userId: uid, accountCreated: false };
+  }
+
+  await auth.setCustomUserClaims(uid, {
+    ...(authUser.customClaims ?? {}),
+    admin: false,
+  });
+
+  const phoneSuffix = verifiedPhone.replace(/\D/g, "").slice(-4) || "konto";
+  const displayName = asString(authUser.displayName) || `Uczestnik ${phoneSuffix}`;
+  const accountRequestRef = db.collection(collections.accountRequests).doc(createId("account-request"));
+  const createdAt = nowIso();
+
+  const batch = db.batch();
+  batch.set(db.collection(collections.users).doc(uid), {
+    displayName,
+    email: authUser.email ?? null,
+    phone: verifiedPhone,
+    avatarUrl: "",
+    avatarPath: null,
+    authProvider: "phone",
+    phoneVerifiedAt: createdAt,
+    status: "active",
+    role: "participant",
+    roles: ["participant"],
+    primaryRole: "participant",
+    trainerProfileId: null,
+    organizerProfileId: null,
+    createdAt,
+  });
+
+  batch.set(accountRequestRef, {
+    displayName,
+    email: authUser.email ?? null,
+    phone: verifiedPhone,
+    requestedRoles: ["participant"],
+    notes: "Konto uczestnika utworzone automatycznie przy pierwszym logowaniu SMS.",
+    status: "approved",
+    authProvider: "phone",
+    organizerTrainingIntent: "",
+    selectedTrainerIds: [],
+    avatarPath: null,
+    submitterUid: uid,
+    createdAt,
+    reviewedAt: createdAt,
+    reviewedByUserId: "phone-login-auto-create",
+    createdUserId: uid,
+    trainerProfileId: null,
+    organizerProfileId: null,
+  });
+
+  await batch.commit();
+
+  return { ok: true, userId: uid, accountCreated: true };
+});
+
 export const approveAccountRequest = onCall(callableOptions(), async (request) => {
   if (request.auth?.token?.admin !== true) {
     throw new HttpsError("permission-denied", "Tylko admin może obsługiwać rejestracje.");

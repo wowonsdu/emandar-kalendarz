@@ -555,6 +555,12 @@ export async function fetchAppUser(userId: string) {
   return normalizeAppUserRecord(snapshot.id, snapshot.data());
 }
 
+export async function ensurePhoneParticipantProfile() {
+  return callFirebaseFunction<undefined, { ok: true; userId: string; accountCreated?: boolean }>(
+    "ensurePhoneParticipantProfile",
+  );
+}
+
 function buildRoleQuery(
   collectionName: string,
   field: string,

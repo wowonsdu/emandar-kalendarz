@@ -14,6 +14,7 @@ import {
   addAvailabilitySlot as addAvailabilitySlotAction,
   addTrainerCalendarFeed as addTrainerCalendarFeedAction,
   archiveTrainingEvent as archiveTrainingEventAction,
+  confirmEnrollmentAttendance as confirmEnrollmentAttendanceAction,
   createEmptyStore,
   createUnifiedTrainingEvent as createTrainingEventAction,
   decideAccountRequest as decideAccountRequestAction,
@@ -40,7 +41,9 @@ import {
   updateActiveRole as updateActiveRoleAction,
   updateTrainingEventManagement as updateTrainingEventManagementAction,
   updateOrganizerProfile as updateOrganizerProfileAction,
+  updateOrganizerNotificationSettings as updateOrganizerNotificationSettingsAction,
   updateTrainerBrandStatus as updateTrainerBrandStatusAction,
+  updateTrainerNotificationSettings as updateTrainerNotificationSettingsAction,
   updateTrainerProfile as updateTrainerProfileAction,
 } from "@/data/firebaseRepository";
 import type {
@@ -53,6 +56,7 @@ import type {
   DemoStore,
   EmandarBrandStatus,
   EnrollmentFormInput,
+  NotificationSettingsUpdateInput,
   OrganizerProfileUpdateInput,
   TrainerCalendarFeedInput,
   TrainingEventScheduleDay,
@@ -113,6 +117,12 @@ interface AppStateContextValue {
   updateTrainerProfile: (input: TrainerProfileUpdateInput) => Promise<void>;
   updateOrganizerProfile: (input: OrganizerProfileUpdateInput) => Promise<void>;
   updateAppSettings: (input: AppSettings) => Promise<void>;
+  updateTrainerNotificationSettings: (
+    input: NotificationSettingsUpdateInput,
+  ) => Promise<void>;
+  updateOrganizerNotificationSettings: (
+    input: NotificationSettingsUpdateInput,
+  ) => Promise<void>;
   updateTrainerBrandStatus: (
     trainerId: string,
     brandStatus: EmandarBrandStatus,
@@ -134,6 +144,10 @@ interface AppStateContextValue {
   notificationsCount: number;
   getRoleHomePath: (role: AppRole) => string;
   resolveEnrollmentPhoto: (path: string) => Promise<string>;
+  confirmEnrollmentAttendance: (
+    token: string,
+    decision: "confirm" | "decline",
+  ) => Promise<void>;
 }
 
 type StorePatch = Partial<DemoStore>;
@@ -488,6 +502,24 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
         await withFriendlyErrors(() => updateAppSettingsAction(input));
       },
+      async updateTrainerNotificationSettings(input) {
+        if (!currentUser) {
+          throw new Error("Musisz byc zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateTrainerNotificationSettingsAction(currentUser, input),
+        );
+      },
+      async updateOrganizerNotificationSettings(input) {
+        if (!currentUser) {
+          throw new Error("Musisz byc zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateOrganizerNotificationSettingsAction(currentUser, input),
+        );
+      },
       async updateTrainerBrandStatus(trainerId, brandStatus) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
@@ -551,6 +583,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
       notificationsCount,
       getRoleHomePath,
       resolveEnrollmentPhoto,
+      async confirmEnrollmentAttendance(token, decision) {
+        await withFriendlyErrors(() =>
+          confirmEnrollmentAttendanceAction(token, decision),
+        );
+      },
     }),
     [authReady, availableRoles, currentUser, notificationsCount, store],
   );

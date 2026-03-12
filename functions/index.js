@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
@@ -24,6 +25,7 @@ const collections = {
   trainerExternalBusyMonths: "trainerExternalBusyMonths",
   enrollmentRequests: "enrollmentRequests",
   notifications: "notifications",
+  smsDispatches: "smsDispatches",
   accountRequests: "accountRequests",
   trainerPublicationApprovals: "trainerPublicationApprovals",
   appMeta: "app_meta",
@@ -32,6 +34,12 @@ const shouldEnforceAppCheck =
   process.env.FUNCTIONS_EMULATOR !== "true" &&
   process.env.ENFORCE_APP_CHECK === "true";
 const PROXY_BASE_URL = "https://api.allorigins.win/raw?url=";
+const PUBLIC_APP_BASE_URL =
+  asString(process.env.EMANDAR_PUBLIC_BASE_URL) ||
+  asString(process.env.PUBLIC_APP_BASE_URL) ||
+  (process.env.FUNCTIONS_EMULATOR === "true"
+    ? "http://127.0.0.1:5173"
+    : "https://odjebao.me/emandar");
 
 function nowIso() {
   return new Date().toISOString();
@@ -250,6 +258,120 @@ function normalizeScheduleDays(scheduleDays) {
   return sortedDays;
 }
 
+function getDefaultNotificationSettings() {
+  return {
+    reminderLeadDays: 7,
+    sendToTrainer: true,
+    sendToOrganizer: true,
+    sendToParticipants: true,
+    requireParticipantSmsConfirmation: false,
+    reminderSmsTemplate:
+      "Przypomnienie o szkoleniu {{event_title}} dnia {{event_date}} w {{event_location}}.",
+    confirmationSmsTemplate:
+      "Czy bierzesz udział w szkoleniu {{event_title}} dnia {{event_date}}? Tak: {{confirm_url}} Nie: {{decline_url}}",
+  };
+}
+
+function normalizeNotificationSettings(value) {
+  const defaults = getDefaultNotificationSettings();
+
+  return {
+    reminderLeadDays:
+      typeof value?.reminderLeadDays === "number" && Number.isFinite(value.reminderLeadDays)
+        ? Math.max(1, Math.min(30, Math.round(value.reminderLeadDays)))
+        : defaults.reminderLeadDays,
+    sendToTrainer:
+      typeof value?.sendToTrainer === "boolean" ? value.sendToTrainer : defaults.sendToTrainer,
+    sendToOrganizer:
+      typeof value?.sendToOrganizer === "boolean"
+        ? value.sendToOrganizer
+        : defaults.sendToOrganizer,
+    sendToParticipants:
+      typeof value?.sendToParticipants === "boolean"
+        ? value.sendToParticipants
+        : defaults.sendToParticipants,
+    requireParticipantSmsConfirmation:
+      typeof value?.requireParticipantSmsConfirmation === "boolean"
+        ? value.requireParticipantSmsConfirmation
+        : defaults.requireParticipantSmsConfirmation,
+    reminderSmsTemplate:
+      typeof value?.reminderSmsTemplate === "string" && value.reminderSmsTemplate.trim()
+        ? value.reminderSmsTemplate.trim()
+        : defaults.reminderSmsTemplate,
+    confirmationSmsTemplate:
+      typeof value?.confirmationSmsTemplate === "string" && value.confirmationSmsTemplate.trim()
+        ? value.confirmationSmsTemplate.trim()
+        : defaults.confirmationSmsTemplate,
+  };
+}
+
+function sanitizeNotificationSettingsInput(input) {
+  const normalized = normalizeNotificationSettings(input);
+
+  return {
+    ...normalized,
+    sendToParticipants:
+      normalized.requireParticipantSmsConfirmation || normalized.sendToParticipants,
+  };
+}
+
+function resolveNotificationSettingsOwnerRole(event) {
+  if (event.organizerId && !isCommunityBrandStatus(event.brandStatus) && !event.selfManagedByTrainer) {
+    return "organizer";
+  }
+
+  return "trainer";
+}
+
+function resolveAttendanceConfirmationStatus(value) {
+  return value === "pending" || value === "confirmed" || value === "declined"
+    ? value
+    : "not-required";
+}
+
+function hashAttendanceToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function buildAttendanceDecisionUrl(token, decision) {
+  return `${PUBLIC_APP_BASE_URL.replace(/\/$/, "")}/potwierdzenie-udzialu/${token}/${decision}`;
+}
+
+function formatEventDateForSms(event) {
+  const firstDay = getTrainingEventScheduleDays(event)[0] ?? {
+    startsAt: event.startsAt,
+  };
+
+  return new Intl.DateTimeFormat("pl-PL", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(firstDay.startsAt));
+}
+
+function renderSmsTemplate(template, values) {
+  return String(template)
+    .replaceAll("{{event_title}}", values.eventTitle ?? "")
+    .replaceAll("{{event_date}}", values.eventDate ?? "")
+    .replaceAll("{{event_location}}", values.eventLocation ?? "")
+    .replaceAll("{{recipient_name}}", values.recipientName ?? "")
+    .replaceAll("{{confirm_url}}", values.confirmUrl ?? "")
+    .replaceAll("{{decline_url}}", values.declineUrl ?? "")
+    .trim();
+}
+
+function buildAttendanceResetFields() {
+  return {
+    attendanceConfirmationStatus: "not-required",
+    attendanceConfirmationRequestedAt: FieldValue.delete(),
+    attendanceConfirmationRespondedAt: FieldValue.delete(),
+    attendanceConfirmationTokenHash: FieldValue.delete(),
+    attendanceConfirmationExpiresAt: FieldValue.delete(),
+  };
+}
+
 function slugifyDisplayName(value) {
   return value
     .normalize("NFD")
@@ -338,6 +460,10 @@ async function findOrganizerProfile(organizerId) {
 
 async function findEvent(eventId) {
   return findDocument(collections.trainingEvents, eventId);
+}
+
+async function findAppUser(userId) {
+  return findDocument(collections.users, userId);
 }
 
 async function getRelationByPair(trainerId, organizerId) {
@@ -463,6 +589,34 @@ async function createNotifications(userIds, title, body, entityType) {
   await Promise.all(uniqueUserIds.map((userId) => createNotification(userId, title, body, entityType)));
 }
 
+async function createSmsDispatchOnce(dispatchId, payload) {
+  const dispatchRef = db.collection(collections.smsDispatches).doc(dispatchId);
+  const existing = await dispatchRef.get();
+
+  if (existing.exists) {
+    return { created: false, status: existing.get("status") ?? "existing" };
+  }
+
+  const recipientPhone = asString(payload.recipientPhone);
+  const providerConfigured = asString(process.env.EMANDAR_SMS_PROVIDER, "");
+  const status = !recipientPhone
+    ? "skipped-no-phone"
+    : providerConfigured
+      ? "pending-provider"
+      : "skipped-no-provider";
+
+  await dispatchRef.set({
+    ...payload,
+    recipientPhone,
+    provider: providerConfigured || null,
+    status,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+
+  return { created: true, status };
+}
+
 function countAcceptedEnrollmentRequests(requests) {
   return requests.filter((request) => request.finalStatus === "accepted").length;
 }
@@ -485,6 +639,24 @@ async function getEnrollmentRequestsForEvent(eventId) {
     id: docSnapshot.id,
     ...docSnapshot.data(),
   }));
+}
+
+async function findEnrollmentRequestByTokenHash(tokenHash) {
+  const snapshot = await db
+    .collection(collections.enrollmentRequests)
+    .where("attendanceConfirmationTokenHash", "==", tokenHash)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const docSnapshot = snapshot.docs[0];
+  return {
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  };
 }
 
 async function syncEventEnrollmentState(eventId) {
@@ -1061,6 +1233,7 @@ export const approveAccountRequest = onCall(callableOptions(), async (request) =
       heroNote: "Profil w trakcie konfiguracji.",
       avatarUrl: "",
       brandStatus: "supported",
+      notificationSettings: getDefaultNotificationSettings(),
     });
   }
 
@@ -1072,6 +1245,7 @@ export const approveAccountRequest = onCall(callableOptions(), async (request) =
       isVisible: false,
       contactName: asString(data.displayName).split(/\s+/)[0] ?? data.displayName,
       location: "",
+      notificationSettings: getDefaultNotificationSettings(),
     });
   }
 
@@ -1331,6 +1505,7 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
     trainerDecision: "pending",
     organizerDecision: "pending",
     finalStatus: "pending",
+    attendanceConfirmationStatus: "not-required",
     requiresOrganizerApproval,
     photoRequired,
     createdAt: nowIso(),
@@ -1443,6 +1618,7 @@ export const decideEnrollment = onCall(callableOptions(), async (request) => {
     {
       ...updates,
       finalStatus,
+      ...(finalStatus === "accepted" ? {} : buildAttendanceResetFields()),
     },
     { merge: true },
   );
@@ -1536,6 +1712,9 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
       trainerDecision: nextTrainerDecision,
       organizerDecision: nextOrganizerDecision,
       finalStatus: nextFinalStatus,
+      ...(nextFinalStatus === "accepted" && targetEvent.id === currentRequest.eventId
+        ? {}
+        : buildAttendanceResetFields()),
       requiresOrganizerApproval: targetRequiresOrganizerApproval,
     },
     { merge: true },
@@ -1556,6 +1735,61 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
   }
 
   return { ok: true };
+});
+
+export const confirmEnrollmentAttendance = onCall(callableOptions(), async (request) => {
+  await requireCurrentUser(request, { allowAnonymous: true });
+
+  const token = requiredString(request.data?.token, "Brak tokenu potwierdzenia.");
+  const decision =
+    request.data?.decision === "confirm" || request.data?.decision === "decline"
+      ? request.data.decision
+      : null;
+
+  if (!decision) {
+    throw new HttpsError("invalid-argument", "Podaj poprawną decyzję potwierdzenia.");
+  }
+
+  const tokenHash = hashAttendanceToken(token);
+  const enrollmentRequest = await findEnrollmentRequestByTokenHash(tokenHash);
+
+  if (!enrollmentRequest) {
+    throw new HttpsError("not-found", "Link potwierdzenia jest nieprawidłowy albo wygasł.");
+  }
+
+  if (enrollmentRequest.finalStatus !== "accepted") {
+    throw new HttpsError("failed-precondition", "To zgłoszenie nie jest już aktywne.");
+  }
+
+  const expiresAt = enrollmentRequest.attendanceConfirmationExpiresAt
+    ? new Date(enrollmentRequest.attendanceConfirmationExpiresAt)
+    : null;
+  if (expiresAt && !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() < Date.now()) {
+    throw new HttpsError("deadline-exceeded", "Link potwierdzenia już wygasł.");
+  }
+
+  const nextStatus = decision === "confirm" ? "confirmed" : "declined";
+  const currentStatus = resolveAttendanceConfirmationStatus(
+    enrollmentRequest.attendanceConfirmationStatus,
+  );
+
+  if (currentStatus === nextStatus) {
+    return { ok: true, requestId: enrollmentRequest.id, status: nextStatus };
+  }
+
+  if (currentStatus === "confirmed" || currentStatus === "declined") {
+    throw new HttpsError("failed-precondition", "To zgłoszenie zostało już wcześniej potwierdzone.");
+  }
+
+  await db.collection(collections.enrollmentRequests).doc(enrollmentRequest.id).set(
+    {
+      attendanceConfirmationStatus: nextStatus,
+      attendanceConfirmationRespondedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return { ok: true, requestId: enrollmentRequest.id, status: nextStatus };
 });
 
 export const updateTrainingEventManagement = onCall(callableOptions(), async (request) => {
@@ -1739,6 +1973,202 @@ export const syncOwnTrainerCalendarFeeds = onCall(callableOptions(), async (requ
 
   return { ok: true };
 });
+
+async function resolveNotificationContextForEvent(event) {
+  const [trainer, organizer] = await Promise.all([
+    findTrainerProfile(event.trainerId),
+    event.organizerId ? findOrganizerProfile(event.organizerId) : Promise.resolve(null),
+  ]);
+
+  if (!trainer) {
+    return null;
+  }
+
+  const ownerRole = resolveNotificationSettingsOwnerRole(event);
+  const settings =
+    ownerRole === "organizer" && organizer
+      ? normalizeNotificationSettings(organizer.notificationSettings)
+      : normalizeNotificationSettings(trainer.notificationSettings);
+
+  return {
+    trainer,
+    organizer,
+    ownerRole,
+    settings,
+  };
+}
+
+function shouldDispatchReminderForEvent(event, settings, now = new Date()) {
+  const firstDay = getTrainingEventScheduleDays(event)[0];
+
+  if (!firstDay) {
+    return false;
+  }
+
+  const startsAt = new Date(firstDay.startsAt);
+  const reminderAt = new Date(
+    startsAt.getTime() - settings.reminderLeadDays * 24 * 60 * 60 * 1000,
+  );
+
+  return now.getTime() >= reminderAt.getTime() && now.getTime() < startsAt.getTime();
+}
+
+async function queueRoleReminderSms(event, settings, role, profile, user) {
+  if (!profile || !user) {
+    return;
+  }
+
+  const shouldSend =
+    role === "trainer" ? settings.sendToTrainer : settings.sendToOrganizer;
+
+  if (!shouldSend) {
+    return;
+  }
+
+  const dispatchId = `${event.id}__${role}__lead-${settings.reminderLeadDays}`;
+  const message = renderSmsTemplate(settings.reminderSmsTemplate, {
+    eventTitle: event.title || event.location,
+    eventDate: formatEventDateForSms(event),
+    eventLocation: event.location || "",
+    recipientName: profile.displayName || user.displayName || "",
+    confirmUrl: "",
+    declineUrl: "",
+  });
+
+  await createSmsDispatchOnce(dispatchId, {
+    eventId: event.id,
+    requestId: null,
+    leadDays: settings.reminderLeadDays,
+    templateKind: "reminder",
+    recipientRole: role,
+    recipientProfileId: profile.id,
+    recipientUserId: user.id,
+    recipientName: profile.displayName || user.displayName || "",
+    recipientPhone: user.phone || "",
+    message,
+  });
+}
+
+async function queueParticipantReminderSms(event, settings, enrollmentRequest) {
+  if (!settings.sendToParticipants || enrollmentRequest.finalStatus !== "accepted") {
+    return;
+  }
+
+  const dispatchId = `${event.id}__${enrollmentRequest.id}__participant__lead-${settings.reminderLeadDays}`;
+  const participantName = asString(enrollmentRequest.imieNazwisko, "Uczestnik");
+  let confirmUrl = "";
+  let declineUrl = "";
+  let tokenHash = null;
+
+  if (settings.requireParticipantSmsConfirmation) {
+    const token = randomUUID();
+    tokenHash = hashAttendanceToken(token);
+    confirmUrl = buildAttendanceDecisionUrl(token, "confirm");
+    declineUrl = buildAttendanceDecisionUrl(token, "decline");
+  }
+
+  const message = renderSmsTemplate(
+    settings.requireParticipantSmsConfirmation
+      ? settings.confirmationSmsTemplate
+      : settings.reminderSmsTemplate,
+    {
+      eventTitle: event.title || event.location,
+      eventDate: formatEventDateForSms(event),
+      eventLocation: event.location || "",
+      recipientName: participantName,
+      confirmUrl,
+      declineUrl,
+    },
+  );
+
+  const dispatch = await createSmsDispatchOnce(dispatchId, {
+    eventId: event.id,
+    requestId: enrollmentRequest.id,
+    leadDays: settings.reminderLeadDays,
+    templateKind: settings.requireParticipantSmsConfirmation
+      ? "confirmation"
+      : "reminder",
+    recipientRole: "participant",
+    recipientProfileId: null,
+    recipientUserId: enrollmentRequest.submitterUid ?? null,
+    recipientName: participantName,
+    recipientPhone: asString(enrollmentRequest.telefon),
+    message,
+  });
+
+  if (
+    settings.requireParticipantSmsConfirmation &&
+    dispatch.created &&
+    dispatch.status === "pending-provider"
+  ) {
+    await db.collection(collections.enrollmentRequests).doc(enrollmentRequest.id).set(
+      {
+        attendanceConfirmationStatus: "pending",
+        attendanceConfirmationRequestedAt: nowIso(),
+        attendanceConfirmationRespondedAt: FieldValue.delete(),
+        attendanceConfirmationTokenHash: tokenHash,
+        attendanceConfirmationExpiresAt:
+          getTrainingEventScheduleDays(event)[0]?.startsAt ?? event.startsAt,
+      },
+      { merge: true },
+    );
+  }
+}
+
+async function processNotificationReminders() {
+  const now = new Date();
+  const eventsSnapshot = await db.collection(collections.trainingEvents).get();
+
+  for (const docSnapshot of eventsSnapshot.docs) {
+    const event = { id: docSnapshot.id, ...docSnapshot.data() };
+
+    if (
+      isTrainingEventArchived(event) ||
+      event.isPublished !== true ||
+      resolveTrainingEventStatus(event.status) === "cancelled" ||
+      !isTrainingEventCollaborationAccepted(event)
+    ) {
+      continue;
+    }
+
+    const context = await resolveNotificationContextForEvent(event);
+
+    if (!context || !shouldDispatchReminderForEvent(event, context.settings, now)) {
+      continue;
+    }
+
+    const [trainerUser, organizerUser, requests] = await Promise.all([
+      findAppUser(context.trainer.userId),
+      context.organizer?.userId ? findAppUser(context.organizer.userId) : Promise.resolve(null),
+      getEnrollmentRequestsForEvent(event.id),
+    ]);
+
+    await queueRoleReminderSms(event, context.settings, "trainer", context.trainer, trainerUser);
+    await queueRoleReminderSms(
+      event,
+      context.settings,
+      "organizer",
+      context.organizer,
+      organizerUser,
+    );
+
+    for (const enrollmentRequest of requests) {
+      await queueParticipantReminderSms(event, context.settings, enrollmentRequest);
+    }
+  }
+}
+
+export const processScheduledNotificationReminders = onSchedule(
+  {
+    region: FUNCTION_REGION,
+    schedule: "every 60 minutes",
+    timeZone: "Europe/Warsaw",
+    retryCount: 0,
+  },
+  async () => {
+    await processNotificationReminders();
+  },
+);
 
 export const onRelationWrite = onDocumentWritten(
   {

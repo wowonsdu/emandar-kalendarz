@@ -69,7 +69,7 @@ export function PublicLayout() {
               to="/trenerzy"
               className={() => exactNavLinkClass(location.pathname, "/trenerzy")}
             >
-              Przekazujący Wiedzę
+              Przekazujacy Wiedze
             </NavLink>
             <NavLink
               to="/wydarzenia-spolecznosci"
@@ -77,7 +77,7 @@ export function PublicLayout() {
                 exactNavLinkClass(location.pathname, "/wydarzenia-spolecznosci")
               }
             >
-              Wydarzenia Społeczności
+              Wydarzenia spolecznosci
             </NavLink>
           </nav>
 
@@ -96,7 +96,7 @@ export function PublicLayout() {
                 className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-2.5 text-sm font-semibold text-brand-navy"
               >
                 <ShieldCheck size={16} />
-                Zaloguj się
+                Zaloguj sie
               </Link>
             )}
           </div>
@@ -111,17 +111,17 @@ export function PublicLayout() {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-8 text-sm text-brand-muted sm:px-6 lg:px-8 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="font-semibold text-brand-navy">Emandar Kalendarz</p>
-            <p>Osobna aplikacja React podpięta do emandar.pl przez link w menu.</p>
+            <p>Osobna aplikacja React podpieta do emandar.pl przez link w menu.</p>
           </div>
           <div className="flex gap-3">
             <Link to="/kalendarz" className="hover:text-brand-navy">
-              Najbliższe szkolenia
+              Najblizsze szkolenia
             </Link>
             <Link to="/trenerzy" className="hover:text-brand-navy">
-              Przekazujący Wiedzę
+              Przekazujacy Wiedze
             </Link>
             <Link to="/wydarzenia-spolecznosci" className="hover:text-brand-navy">
-              Wydarzenia Społeczności
+              Wydarzenia spolecznosci
             </Link>
             <Link to="/login" className="hover:text-brand-navy">
               Panel
@@ -145,14 +145,15 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
       { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
-      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzeń", icon: CalendarDays },
+      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
       {
         to: "/panel/terminy",
-        label: "Terminy Przekazujących Wiedzę",
+        label: "Terminy Przekazujacych Wiedze",
         icon: CalendarDays,
       },
+      { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
       { to: "/panel/relacje", label: "Relacje", icon: ShieldCheck },
-      { to: "/panel/zgloszenia", label: "Zgłoszenia", icon: Bell },
+      { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
     ];
   }
 
@@ -162,8 +163,9 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
         ...base,
         { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
         { to: "/panel/szkolenia", label: "Moje wydarzenia", icon: CalendarDays },
-        { to: "/panel/kreator-wydarzen", label: "Kreator wydarzeń", icon: CalendarDays },
-        { to: "/panel/zgloszenia", label: "Zgłoszenia", icon: Bell },
+        { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
+        { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
+        { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
       ];
     }
 
@@ -171,10 +173,11 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
       { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
-      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzeń", icon: CalendarDays },
-      { to: "/panel/terminy", label: "Dostępność", icon: CalendarDays },
+      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
+      { to: "/panel/terminy", label: "Dostepnosc", icon: CalendarDays },
+      { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
       { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },
-      { to: "/panel/zgloszenia", label: "Zgłoszenia", icon: Bell },
+      { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
     ];
   }
 
@@ -182,12 +185,13 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
     ...base,
     { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
     { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
-    { to: "/panel/trenerzy", label: "Przekazujący Wiedzę", icon: Users },
+    { to: "/panel/trenerzy", label: "Przekazujacy Wiedze", icon: Users },
     { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },
     { to: "/panel/szkolenia", label: "Szkolenia", icon: CalendarDays },
     { to: "/panel/terminy", label: "Terminy", icon: CalendarDays },
+    { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
     { to: "/panel/relacje", label: "Relacje", icon: ShieldCheck },
-    { to: "/panel/zgloszenia", label: "Zgłoszenia", icon: Bell },
+    { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
   ];
 }
 

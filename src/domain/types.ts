@@ -13,12 +13,27 @@ export type AccountRequestStatus = "pending" | "approved" | "rejected";
 export type PublicationApprovalStatus = "pending" | "accepted" | "rejected";
 export type EmandarBrandStatus = "official" | "supported";
 export type TrainingEventStatus = "active" | "confirmed" | "cancelled";
+export type EnrollmentAttendanceConfirmationStatus =
+  | "not-required"
+  | "pending"
+  | "confirmed"
+  | "declined";
 export type EventCollaborationStatus =
   | "pending"
   | "accepted"
   | "rejected"
   | "not-required";
 export type EnrollmentPhotoRequirement = "default" | "required" | "optional";
+
+export interface NotificationSettings {
+  reminderLeadDays: number;
+  sendToTrainer: boolean;
+  sendToOrganizer: boolean;
+  sendToParticipants: boolean;
+  requireParticipantSmsConfirmation: boolean;
+  reminderSmsTemplate: string;
+  confirmationSmsTemplate: string;
+}
 
 export interface AppUser {
   id: string;
@@ -55,6 +70,7 @@ export interface TrainerProfile {
   avatarUploadedAt?: string;
   brandStatus: EmandarBrandStatus;
   defaultEnrollmentPhotoRequired?: boolean;
+  notificationSettings?: NotificationSettings;
 }
 
 export interface OrganizerProfile {
@@ -67,6 +83,7 @@ export interface OrganizerProfile {
   location?: string;
   trainingIntent?: string;
   defaultEnrollmentPhotoRequired?: boolean;
+  notificationSettings?: NotificationSettings;
 }
 
 export interface TrainerOrganizerRelation {
@@ -195,6 +212,9 @@ export interface EnrollmentRequest {
   trainerDecision: DecisionStatus;
   organizerDecision: DecisionStatus;
   finalStatus: EnrollmentFinalStatus;
+  attendanceConfirmationStatus?: EnrollmentAttendanceConfirmationStatus;
+  attendanceConfirmationRequestedAt?: string;
+  attendanceConfirmationRespondedAt?: string;
   createdAt: string;
   requiresOrganizerApproval?: boolean;
 }
@@ -329,6 +349,16 @@ export interface OrganizerProfileUpdateInput {
   location: string;
   description: string;
   defaultEnrollmentPhotoRequired?: boolean;
+}
+
+export interface NotificationSettingsUpdateInput {
+  reminderLeadDays: number;
+  sendToTrainer: boolean;
+  sendToOrganizer: boolean;
+  sendToParticipants: boolean;
+  requireParticipantSmsConfirmation: boolean;
+  reminderSmsTemplate: string;
+  confirmationSmsTemplate: string;
 }
 
 export interface TrainerBrandStatusUpdateInput {

@@ -12,11 +12,26 @@ export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
 export type AccountRequestStatus = "pending" | "approved" | "rejected";
 export type EmandarBrandStatus = "official" | "supported";
 export type TrainingEventStatus = "active" | "confirmed" | "cancelled";
+export type EnrollmentAttendanceConfirmationStatus =
+  | "not-required"
+  | "pending"
+  | "confirmed"
+  | "declined";
 export type EventCollaborationStatus =
   | "pending"
   | "accepted"
   | "rejected"
   | "not-required";
+
+export interface NotificationSettings {
+  reminderLeadDays: number;
+  sendToTrainer: boolean;
+  sendToOrganizer: boolean;
+  sendToParticipants: boolean;
+  requireParticipantSmsConfirmation: boolean;
+  reminderSmsTemplate: string;
+  confirmationSmsTemplate: string;
+}
 
 export interface AppUser {
   id: string;
@@ -49,6 +64,7 @@ export interface TrainerProfile {
   avatarPath?: string;
   avatarUploadedAt?: string;
   brandStatus: EmandarBrandStatus;
+  notificationSettings?: NotificationSettings;
 }
 
 export interface OrganizerProfile {
@@ -59,6 +75,7 @@ export interface OrganizerProfile {
   isVisible: boolean;
   contactName?: string;
   location?: string;
+  notificationSettings?: NotificationSettings;
 }
 
 export interface TrainerOrganizerRelation {
@@ -186,6 +203,9 @@ export interface EnrollmentRequest {
   trainerDecision: DecisionStatus;
   organizerDecision: DecisionStatus;
   finalStatus: EnrollmentFinalStatus;
+  attendanceConfirmationStatus?: EnrollmentAttendanceConfirmationStatus;
+  attendanceConfirmationRequestedAt?: string;
+  attendanceConfirmationRespondedAt?: string;
   createdAt: string;
   requiresOrganizerApproval?: boolean;
 }
@@ -295,6 +315,16 @@ export interface OrganizerProfileUpdateInput {
   contactName: string;
   location: string;
   description: string;
+}
+
+export interface NotificationSettingsUpdateInput {
+  reminderLeadDays: number;
+  sendToTrainer: boolean;
+  sendToOrganizer: boolean;
+  sendToParticipants: boolean;
+  requireParticipantSmsConfirmation: boolean;
+  reminderSmsTemplate: string;
+  confirmationSmsTemplate: string;
 }
 
 export interface TrainerBrandStatusUpdateInput {

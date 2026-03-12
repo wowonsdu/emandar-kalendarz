@@ -32,6 +32,7 @@ import {
 import { Link, Navigate, useLocation, useParams } from "react-router";
 import { toast } from "sonner";
 import { useAppState } from "../providers/AppProviders";
+import { resolveAttendanceConfirmationStatusLabel } from "@/domain/notifications";
 import {
   aggregateEventCapacityStats,
   buildSharedAvailabilityWindows,
@@ -1667,10 +1668,20 @@ export function RequestsPage() {
               <div
                 className={`mt-4 grid gap-4 ${
                   request.requiresOrganizerApproval === false
-                    ? "md:grid-cols-[1fr_1.15fr]"
-                    : "md:grid-cols-[1fr_1fr_1.15fr]"
+                    ? "md:grid-cols-[1fr_1fr_1.15fr]"
+                    : "md:grid-cols-[1fr_1fr_1fr_1.15fr]"
                 }`}
               >
+                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
+                    Potwierdzenie uczestnika
+                  </p>
+                  <p className="mt-2 text-lg font-semibold text-brand-navy">
+                    {resolveAttendanceConfirmationStatusLabel(
+                      request.attendanceConfirmationStatus,
+                    )}
+                  </p>
+                </div>
                 <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
                   <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
                     Decyzja Przekazującego Wiedzę
@@ -3819,6 +3830,12 @@ export function EventManagementPage() {
                 <div className="flex flex-wrap gap-2">
                   <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
                     {request.finalStatus}
+                  </span>
+                  <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                    SMS:{" "}
+                    {resolveAttendanceConfirmationStatusLabel(
+                      request.attendanceConfirmationStatus,
+                    )}
                   </span>
                   <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
                     trener: {request.trainerDecision}

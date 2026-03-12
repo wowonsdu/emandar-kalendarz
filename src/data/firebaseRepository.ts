@@ -50,6 +50,7 @@ import type {
   EnrollmentRequestManagementInput,
   EnrollmentRequest,
   NotificationRecord,
+  NotificationSettingsUpdateInput,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
   TrainerCalendarFeed,
@@ -67,6 +68,7 @@ import type {
   TrainingEventStatus,
   TrainingEvent,
 } from "@/domain/types";
+import { normalizeNotificationSettings } from "@/domain/notifications";
 import {
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
@@ -722,6 +724,16 @@ async function ensureAnonymousSession() {
   }
 
   return auth.currentUser;
+}
+
+function sanitizeNotificationSettingsInput(input: NotificationSettingsUpdateInput) {
+  const normalized = normalizeNotificationSettings(input);
+
+  return {
+    ...normalized,
+    sendToParticipants:
+      normalized.requireParticipantSmsConfirmation || normalized.sendToParticipants,
+  };
 }
 
 async function getTrainerProfile(trainerId: string) {
@@ -2078,6 +2090,39 @@ export async function updateOrganizerProfile(
   });
 }
 
+export async function updateTrainerNotificationSettings(
+  currentUser: AppUser,
+  input: NotificationSettingsUpdateInput,
+) {
+  const { db } = assertReady();
+
+  if (
+    (currentUser.role !== "trainer" && currentUser.role !== "admin") ||
+    !currentUser.trainerProfileId
+  ) {
+    throw new Error("Tylko Przekazujący Wiedzę może zmieniać ustawienia powiadomień.");
+  }
+
+  await updateDoc(doc(db, collections.trainers, currentUser.trainerProfileId), {
+    notificationSettings: sanitizeNotificationSettingsInput(input),
+  });
+}
+
+export async function updateOrganizerNotificationSettings(
+  currentUser: AppUser,
+  input: NotificationSettingsUpdateInput,
+) {
+  const { db } = assertReady();
+
+  if (currentUser.role !== "organizer" || !currentUser.organizerProfileId) {
+    throw new Error("Tylko organizator może zmieniać ustawienia powiadomień.");
+  }
+
+  await updateDoc(doc(db, collections.organizers, currentUser.organizerProfileId), {
+    notificationSettings: sanitizeNotificationSettingsInput(input),
+  });
+}
+
 export async function updateTrainerBrandStatus(
   input: TrainerBrandStatusUpdateInput,
   actor: AppUser,
@@ -2161,6 +2206,23 @@ export async function decideTrainingEventCollaboration(
     `${event.title}: trener ${nextTrainerStatus}, organizator ${nextOrganizerStatus}.`,
     "event",
   );
+}
+
+export async function confirmEnrollmentAttendance(
+  token: string,
+  decision: "confirm" | "decline",
+) {
+  await ensureAnonymousSession();
+  await callFirebaseFunction<
+    {
+      token: string;
+      decision: "confirm" | "decline";
+    },
+    { ok: true; requestId: string; status: "confirmed" | "declined" }
+  >("confirmEnrollmentAttendance", {
+    token: token.trim(),
+    decision,
+  });
 }
 
 export async function updateTrainingEventManagement(

@@ -1,5 +1,7 @@
 import { Navigate, createBrowserRouter } from "react-router";
 import { PanelLayout, PublicLayout, RequireAuth } from "./layouts";
+import { AttendanceConfirmationPage } from "./pages/attendance-confirmation";
+import { NotificationsSettingsPage } from "./pages/notifications";
 import {
   CalendarPage,
   CommunityEventsPage,
@@ -17,9 +19,9 @@ import {
   EventManagementPage,
   EventsPage,
   OrganizerDirectoryPage,
+  ProfileSettingsPage,
   RelationsPage,
   RequestsPage,
-  ProfileSettingsPage,
   TrainerDirectoryPage,
 } from "./pages/panel";
 
@@ -33,7 +35,7 @@ function NotFoundPage() {
         Tego miejsca jeszcze nie ma
       </h1>
       <p className="mt-4 text-lg text-brand-muted">
-        Wróć do kalendarza albo otwórz panel, jeśli szukasz ekranów operacyjnych.
+        Wroc do kalendarza albo otworz panel, jesli szukasz ekranow operacyjnych.
       </p>
     </section>
   );
@@ -53,6 +55,10 @@ export const router = createBrowserRouter(
         { path: "kalendarz/:eventId", Component: EventDetailsPage },
         { path: "trenerzy", Component: TrainersPage },
         { path: "trenerzy/:slug", Component: TrainerDetailsPage },
+        {
+          path: "potwierdzenie-udzialu/:token/:decision",
+          Component: AttendanceConfirmationPage,
+        },
         { path: "login", Component: LoginPage },
         { path: "rejestracja", Component: RegisterPage },
         { path: "start", Component: LandingPage },
@@ -69,6 +75,7 @@ export const router = createBrowserRouter(
             { index: true, element: <Navigate to="/panel/dashboard" replace /> },
             { path: "dashboard", Component: DashboardPage },
             { path: "ustawienia", Component: ProfileSettingsPage },
+            { path: "powiadomienia", Component: NotificationsSettingsPage },
             { path: "rejestracje", Component: AccountRequestsPage },
             { path: "zgloszenia", Component: RequestsPage },
             { path: "relacje", Component: RelationsPage },

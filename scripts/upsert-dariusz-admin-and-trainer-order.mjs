@@ -2,9 +2,11 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import process from "node:process";
+import { getApps, initializeApp, refreshToken } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
 
-const PROJECT_ID = "emandar-c1e15";
 const TRAINER_ID = "trainer-11";
+const ORGANIZER_ID = "organizer-11";
 const DARIUSZ_EMAIL = "dariusz@emandar.pl";
 const LEGACY_ADMIN_EMAIL = "admin@emandar.pl";
 const PASSWORD = "kocham";
@@ -18,6 +20,26 @@ const DOTENV_PATH = resolve(process.cwd(), ".env.local");
 const FIREBASE_CLI_CLIENT_ID =
   "563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com";
 const FIREBASE_CLI_CLIENT_SECRET = "j9iVZfS8kkCEFUPaAeJV0sAi";
+
+function getAdminApp(projectId, refreshTokenValue) {
+  const existing = getApps().find((app) => app.name === "dariusz-upsert");
+  if (existing) {
+    return existing;
+  }
+
+  return initializeApp(
+    {
+      credential: refreshToken({
+        type: "authorized_user",
+        client_id: FIREBASE_CLI_CLIENT_ID,
+        client_secret: FIREBASE_CLI_CLIENT_SECRET,
+        refresh_token: refreshTokenValue,
+      }),
+      projectId,
+    },
+    "dariusz-upsert",
+  );
+}
 
 const trainerSortOrder = new Map([
   ["trainer-11", 1],
@@ -182,106 +204,86 @@ async function writeFirestoreDocument(
   });
 }
 
-async function signInWithPassword(apiKey, email, password) {
-  return firebaseRequest(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        password,
-        returnSecureToken: true,
-      }),
-    },
-  );
-}
-
-async function signUp(apiKey, email, password) {
-  return firebaseRequest(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        password,
-        returnSecureToken: true,
-      }),
-    },
-  );
-}
-
-async function updateAccount(apiKey, idToken, payload) {
-  return firebaseRequest(
-    `https://identitytoolkit.googleapis.com/v1/accounts:update?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        idToken,
-        returnSecureToken: true,
-        ...payload,
-      }),
-    },
-  );
-}
-
-async function ensureDariuszAuthUser(apiKey) {
+async function ensureDariuszAuthUser(auth) {
   try {
-    const signedIn = await signInWithPassword(apiKey, DARIUSZ_EMAIL, PASSWORD);
-    return signedIn.localId;
-  } catch {
-    // continue
-  }
-
-  try {
-    const legacyAdmin = await signInWithPassword(apiKey, LEGACY_ADMIN_EMAIL, PASSWORD);
-    await updateAccount(apiKey, legacyAdmin.idToken, {
+    const existing = await auth.getUserByEmail(DARIUSZ_EMAIL);
+    const updated = await auth.updateUser(existing.uid, {
       email: DARIUSZ_EMAIL,
       password: PASSWORD,
       displayName: "Dariusz",
     });
-    return legacyAdmin.localId;
-  } catch {
-    // continue
+    return updated.uid;
+  } catch (error) {
+    if (error?.code !== "auth/user-not-found") {
+      throw error;
+    }
   }
 
-  const created = await signUp(apiKey, DARIUSZ_EMAIL, PASSWORD);
-  await updateAccount(apiKey, created.idToken, {
+  try {
+    const legacyAdmin = await auth.getUserByEmail(LEGACY_ADMIN_EMAIL);
+    const updated = await auth.updateUser(legacyAdmin.uid, {
+      email: DARIUSZ_EMAIL,
+      password: PASSWORD,
+      displayName: "Dariusz",
+    });
+    return updated.uid;
+  } catch (error) {
+    if (error?.code !== "auth/user-not-found") {
+      throw error;
+    }
+  }
+
+  const created = await auth.createUser({
+    email: DARIUSZ_EMAIL,
+    password: PASSWORD,
     displayName: "Dariusz",
   });
-  return created.localId;
+  return created.uid;
 }
 
 async function main() {
   const env = await loadEnvFile(DOTENV_PATH);
-  const apiKey = env.VITE_FIREBASE_API_KEY;
+  const projectId = env.VITE_FIREBASE_PROJECT_ID;
 
-  if (!apiKey) {
-    throw new Error("Missing VITE_FIREBASE_API_KEY in .env.local.");
+  if (!projectId) {
+    throw new Error("Missing VITE_FIREBASE_PROJECT_ID in .env.local.");
   }
 
   const firebaseToolsConfig = await loadFirebaseToolsConfig();
+  const refreshTokenValue = firebaseToolsConfig?.tokens?.refresh_token;
   const accessToken = await refreshFirebaseToolsAccessToken(firebaseToolsConfig);
-  const authUid = await ensureDariuszAuthUser(apiKey);
+
+  if (!refreshTokenValue) {
+    throw new Error("Missing Firebase CLI refresh token.");
+  }
+
+  const adminApp = getAdminApp(projectId, refreshTokenValue);
+  const auth = getAuth(adminApp);
+  const authUid = await ensureDariuszAuthUser(auth);
   const seededAt = new Date().toISOString();
 
-  await writeFirestoreDocument(PROJECT_ID, accessToken, "users", authUid, {
+  await auth.setCustomUserClaims(authUid, {
+    admin: true,
+  });
+
+  await writeFirestoreDocument(projectId, accessToken, "users", authUid, {
     id: authUid,
     role: "admin",
+    roles: ["admin", "trainer", "organizer"],
+    primaryRole: "admin",
     displayName: "Dariusz",
     email: DARIUSZ_EMAIL,
     phone: "+48 600 100 100",
     avatarUrl: "https://i.pravatar.cc/320?img=12",
     status: "active",
-      trainerProfileId: TRAINER_ID,
+    trainerProfileId: TRAINER_ID,
+    organizerProfileId: ORGANIZER_ID,
     seededFromDemo: true,
     seededAt,
     source: "scripts/upsert-dariusz-admin-and-trainer-order.mjs",
   });
 
-  await writeFirestoreDocument(PROJECT_ID, accessToken, "trainers", TRAINER_ID, {
+  await writeFirestoreDocument(projectId, accessToken, "trainers", TRAINER_ID, {
     id: TRAINER_ID,
     userId: authUid,
     slug: "dariusz",
@@ -298,9 +300,22 @@ async function main() {
     source: "scripts/upsert-dariusz-admin-and-trainer-order.mjs",
   });
 
+  await writeFirestoreDocument(projectId, accessToken, "organizers", ORGANIZER_ID, {
+    id: ORGANIZER_ID,
+    userId: authUid,
+    displayName: "Dariusz",
+    description:
+      "Prowadzi i nadzoruje organizacje szkolen Emandar, spina wspolprace, terminy i decyzje operacyjne.",
+    isVisible: true,
+    contactName: "Dariusz",
+    location: "Warszawa, mazowieckie",
+    seededAt,
+    source: "scripts/upsert-dariusz-admin-and-trainer-order.mjs",
+  });
+
   for (const [trainerId, sortOrder] of trainerSortOrder.entries()) {
     await writeFirestoreDocument(
-      PROJECT_ID,
+      projectId,
       accessToken,
       "trainers",
       trainerId,
@@ -309,7 +324,9 @@ async function main() {
     );
   }
 
-  console.log(`Dariusz is ready. authUid=${authUid}, trainerId=${TRAINER_ID}`);
+  console.log(
+    `Dariusz is ready. authUid=${authUid}, trainerId=${TRAINER_ID}, organizerId=${ORGANIZER_ID}`,
+  );
 }
 
 main().catch((error) => {

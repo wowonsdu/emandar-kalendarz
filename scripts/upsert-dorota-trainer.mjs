@@ -3,7 +3,6 @@ import { resolve } from "node:path";
 import { homedir } from "node:os";
 import process from "node:process";
 
-const PROJECT_ID = "emandar-c1e15";
 const TRAINER_ID = "trainer-10";
 const LEGACY_DEMO_USER_ID = "trainer-user-10";
 const DOROTA_EMAIL = "dorota@emandar.pl";
@@ -196,9 +195,14 @@ async function ensureAuthUser(apiKey) {
 async function main() {
   const env = await loadEnvFile(DOTENV_PATH);
   const apiKey = env.VITE_FIREBASE_API_KEY;
+  const projectId = env.VITE_FIREBASE_PROJECT_ID;
 
   if (!apiKey) {
     throw new Error("Missing VITE_FIREBASE_API_KEY in .env.local.");
+  }
+
+  if (!projectId) {
+    throw new Error("Missing VITE_FIREBASE_PROJECT_ID in .env.local.");
   }
 
   const firebaseToolsConfig = await loadFirebaseToolsConfig();
@@ -206,7 +210,7 @@ async function main() {
   const authUid = await ensureAuthUser(apiKey);
   const seededAt = new Date().toISOString();
 
-  await writeFirestoreDocument(PROJECT_ID, accessToken, "users", authUid, {
+  await writeFirestoreDocument(projectId, accessToken, "users", authUid, {
     id: authUid,
     legacyDemoId: LEGACY_DEMO_USER_ID,
     role: "trainer",
@@ -221,7 +225,7 @@ async function main() {
     source: "scripts/upsert-dorota-trainer.mjs",
   });
 
-  await writeFirestoreDocument(PROJECT_ID, accessToken, "trainers", TRAINER_ID, {
+  await writeFirestoreDocument(projectId, accessToken, "trainers", TRAINER_ID, {
     id: TRAINER_ID,
     userId: authUid,
     slug: "dorota",

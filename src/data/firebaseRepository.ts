@@ -39,6 +39,7 @@ import {
 import type {
   AccountRequest,
   AccountRequestInput,
+  AppSettings,
   AppUser,
   AvailabilityInput,
   AvailabilitySlot,
@@ -52,6 +53,7 @@ import type {
   NotificationRecord,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
+  TrainerPublicationApproval,
   TrainerCalendarFeed,
   TrainerCalendarFeedInput,
   TrainerExternalBusyMonth,
@@ -99,6 +101,8 @@ const collections = {
   trainerExternalBusyMonths: "trainerExternalBusyMonths",
   notifications: "notifications",
   accountRequests: "accountRequests",
+  trainerPublicationApprovals: "trainerPublicationApprovals",
+  appMeta: "app_meta",
 } as const;
 
 export function createEmptyStore(): DemoStore {
@@ -114,6 +118,10 @@ export function createEmptyStore(): DemoStore {
     enrollmentRequests: [],
     notifications: [],
     accountRequests: [],
+    trainerPublicationApprovals: [],
+    appSettings: {
+      signupPhotoRequired: false,
+    },
   };
 }
 
@@ -272,7 +280,10 @@ function normalizeUserRoles(value: unknown, fallbackRole?: string | null) {
   const roles = Array.isArray(value)
     ? value.filter(
         (role): role is AppUser["role"] =>
-          role === "admin" || role === "trainer" || role === "organizer",
+          role === "admin" ||
+          role === "trainer" ||
+          role === "organizer" ||
+          role === "participant",
       )
     : [];
 
@@ -283,12 +294,13 @@ function normalizeUserRoles(value: unknown, fallbackRole?: string | null) {
   if (
     fallbackRole === "admin" ||
     fallbackRole === "trainer" ||
-    fallbackRole === "organizer"
+    fallbackRole === "organizer" ||
+    fallbackRole === "participant"
   ) {
     return [fallbackRole];
   }
 
-  return ["trainer"] satisfies AppUser["roles"];
+  return ["participant"] satisfies AppUser["roles"];
 }
 
 function normalizeAppUserRecord(userId: string, raw: unknown) {
@@ -297,14 +309,22 @@ function normalizeAppUserRecord(userId: string, raw: unknown) {
   const primaryRole =
     normalized.primaryRole === "admin" ||
     normalized.primaryRole === "trainer" ||
-    normalized.primaryRole === "organizer"
+    normalized.primaryRole === "organizer" ||
+    normalized.primaryRole === "participant"
       ? normalized.primaryRole
       : roles[0];
+  const activeRole =
+    normalized.role === "admin" ||
+    normalized.role === "trainer" ||
+    normalized.role === "organizer" ||
+    normalized.role === "participant"
+      ? normalized.role
+      : primaryRole;
 
   return {
     id: userId,
     ...normalized,
-    role: primaryRole,
+    role: roles.includes(activeRole) ? activeRole : primaryRole,
     roles,
     primaryRole,
     trainerProfileId:
@@ -344,7 +364,22 @@ export function buildRelationId(trainerId: string, organizerId: string) {
 
 async function getRelationByPair(trainerId: string, organizerId: string) {
   const { db } = assertReady();
-  const snapshot = await getDoc(doc(db, collections.relations, buildRelationId(trainerId, organizerId)));
+  let snapshot;
+
+  try {
+    snapshot = await getDoc(doc(db, collections.relations, buildRelationId(trainerId, organizerId)));
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      (error as { code?: string }).code === "permission-denied"
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
 
   if (!snapshot.exists()) {
     return null;
@@ -435,6 +470,20 @@ function pushSorted<T extends { createdAt?: string }>(items: T[]) {
   });
 }
 
+function mergeById<T extends { id: string }>(...groups: T[][]) {
+  return Array.from(
+    new Map(groups.flat().map((item) => [item.id, item])).values(),
+  );
+}
+
+function normalizeAppSettings(raw: unknown): AppSettings {
+  const normalized = normalizeValue(raw) as Record<string, unknown>;
+
+  return {
+    signupPhotoRequired: normalized.signupPhotoRequired === true,
+  };
+}
+
 async function mapQuery<T extends { id: string }>(source: Query) {
   const snapshot = await getDocs(source);
   return mapDocs<T>(snapshot.docs);
@@ -444,6 +493,15 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
   const { db } = assertReady();
 
   const unsubs = [
+    onSnapshot(doc(db, collections.appMeta, "publicSettings"), (snapshot) => {
+      onPatch({
+        appSettings: snapshot.exists()
+          ? normalizeAppSettings(snapshot.data())
+          : {
+              signupPhotoRequired: false,
+            },
+      });
+    }),
     subscribeArray<TrainerProfile>(
       query(collection(db, collections.trainers), where("isVisible", "==", true)),
       (trainers) => {
@@ -461,7 +519,7 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
     ),
   ];
 
-  onPatch({ organizers: [] });
+  onPatch({ organizers: [], trainerPublicationApprovals: [] });
 
   return () => {
     unsubs.forEach((unsubscribe) => unsubscribe());
@@ -516,6 +574,16 @@ export function subscribePrivateStore(
   const unsubs: Unsubscribe[] = [];
   const trainerProfileId = currentUser.trainerProfileId;
   const organizerProfileId = currentUser.organizerProfileId;
+  let incomingPublicationApprovals: TrainerPublicationApproval[] = [];
+  let outgoingPublicationApprovals: TrainerPublicationApproval[] = [];
+
+  function syncPublicationApprovals() {
+    onPatch({
+      trainerPublicationApprovals: pushSorted(
+        mergeById(incomingPublicationApprovals, outgoingPublicationApprovals),
+      ),
+    });
+  }
 
   onPatch({ users: [currentUser] });
 
@@ -566,6 +634,16 @@ export function subscribePrivateStore(
   }
 
   if (currentUser.role === "admin") {
+    unsubs.push(
+      subscribeArray<TrainerPublicationApproval>(
+        collection(db, collections.trainerPublicationApprovals),
+        (trainerPublicationApprovals) => {
+          onPatch({
+            trainerPublicationApprovals: pushSorted(trainerPublicationApprovals),
+          });
+        },
+      ),
+    );
     unsubs.push(
       subscribeArray<TrainingEvent>(collection(db, collections.trainingEvents), (items) => {
         onPatch({ trainingEvents: items });
@@ -670,6 +748,31 @@ export function subscribePrivateStore(
     } else {
       onPatch({ enrollmentRequests: [] });
     }
+
+    unsubs.push(
+      subscribeArray<TrainerPublicationApproval>(
+        query(
+          collection(db, collections.trainerPublicationApprovals),
+          where("targetTrainerUserId", "==", currentUser.id),
+        ),
+        (incomingApprovals) => {
+          incomingPublicationApprovals = incomingApprovals;
+          syncPublicationApprovals();
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerPublicationApproval>(
+        query(
+          collection(db, collections.trainerPublicationApprovals),
+          where("requesterUserId", "==", currentUser.id),
+        ),
+        (outgoingApprovals) => {
+          outgoingPublicationApprovals = outgoingApprovals;
+          syncPublicationApprovals();
+        },
+      ),
+    );
   }
 
   if (currentUser.role === "organizer") {
@@ -703,6 +806,32 @@ export function subscribePrivateStore(
     } else {
       onPatch({ enrollmentRequests: [] });
     }
+  }
+
+  if (currentUser.role === "participant") {
+    onPatch({
+      trainingEvents: [],
+      relations: [],
+      availabilitySlots: [],
+      enrollmentRequests: [],
+      trainerCalendarFeeds: [],
+      trainerExternalBusyMonths: [],
+    });
+  }
+
+  if (currentUser.role !== "trainer" && currentUser.role !== "admin") {
+    unsubs.push(
+      subscribeArray<TrainerPublicationApproval>(
+        query(
+          collection(db, collections.trainerPublicationApprovals),
+          where("requesterUserId", "==", currentUser.id),
+        ),
+        (trainerPublicationApprovals) => {
+          outgoingPublicationApprovals = trainerPublicationApprovals;
+          syncPublicationApprovals();
+        },
+      ),
+    );
   }
 
   return () => {
@@ -959,6 +1088,18 @@ export async function signOut() {
   await firebaseSignOut(auth);
 }
 
+export async function updateActiveRole(currentUser: AppUser, role: AppUser["role"]) {
+  const { db } = assertReady();
+
+  if (!currentUser.roles.includes(role)) {
+    throw new Error("Nie mozesz przelaczyc na role, ktorej to konto nie ma.");
+  }
+
+  await updateDoc(doc(db, collections.users, currentUser.id), {
+    role,
+  });
+}
+
 function getFirebaseApiKey() {
   const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
 
@@ -979,10 +1120,10 @@ function slugifyDisplayName(value: string) {
 }
 
 function normalizeRequestedRoles(
-  requestedRoles: Array<"trainer" | "organizer"> | undefined,
+  requestedRoles: Array<"trainer" | "organizer" | "participant"> | undefined,
 ) {
   return Array.from(new Set((requestedRoles ?? []).filter(Boolean))) as Array<
-    "trainer" | "organizer"
+    "trainer" | "organizer" | "participant"
   >;
 }
 
@@ -1037,10 +1178,13 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   const { storage } = assertReady();
   await ensureAnonymousSession();
 
-  if (!["image/jpeg", "image/png", "image/webp"].includes(input.photoFile.type)) {
+  if (
+    input.photoFile &&
+    !["image/jpeg", "image/png", "image/webp"].includes(input.photoFile.type)
+  ) {
     throw new Error("Zdjęcie musi być w formacie JPG, PNG albo WEBP.");
   }
-  if (input.photoFile.size > 5 * 1024 * 1024) {
+  if (input.photoFile && input.photoFile.size > 5 * 1024 * 1024) {
     throw new Error("Zdjęcie nie może być większe niż 5 MB.");
   }
 
@@ -1049,7 +1193,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       EnrollmentFormInput,
       "eventId" | "imieNazwisko" | "telefon" | "polecenieOdKogo" | "wiadomosc"
     >,
-    { requestId: string; photoPath: string }
+    { requestId: string; photoPath: string; photoRequired: boolean }
   >("createEnrollmentDraft", {
     eventId: input.eventId,
     imieNazwisko: input.imieNazwisko,
@@ -1059,14 +1203,21 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   });
 
   try {
-    const metadata: UploadMetadata = { contentType: input.photoFile.type };
-    await uploadBytes(ref(storage, draft.photoPath), input.photoFile, metadata);
+    if (draft.photoRequired && !input.photoFile) {
+      throw new Error("To szkolenie wymaga zdjęcia twarzy.");
+    }
+
+    if (input.photoFile) {
+      const metadata: UploadMetadata = { contentType: input.photoFile.type };
+      await uploadBytes(ref(storage, draft.photoPath), input.photoFile, metadata);
+    }
+
     await callFirebaseFunction<
-      { requestId: string; photoPath: string },
+      { requestId: string; photoPath?: string },
       { ok: true }
     >("finalizeEnrollmentDraft", {
       requestId: draft.requestId,
-      photoPath: draft.photoPath,
+      photoPath: input.photoFile ? draft.photoPath : undefined,
     });
   } catch (error) {
     throw error instanceof Error
@@ -1970,42 +2121,80 @@ export async function createUnifiedTrainingEvent(
   }
 }
 
-export async function submitAccountRequest(input: AccountRequestInput) {
-  await ensureAnonymousSession();
-  await callFirebaseFunction<
-    {
-      displayName: string;
-      email: string;
-      phone: string;
-      requestedRoles: Array<"trainer" | "organizer">;
-      notes: string;
-    },
-    { ok: true }
-  >("submitAccountRequest", {
-    displayName: input.displayName,
-    email: input.email,
-    phone: input.phone,
-    requestedRoles: normalizeRequestedRoles(input.requestedRoles),
-    notes: input.notes,
-  });
-  return;
+async function uploadCurrentUserAvatar(file: File) {
+  const { auth, storage } = assertReady();
 
-  const { db } = assertReady();
-  await ensureAnonymousSession();
+  if (!auth.currentUser) {
+    throw new Error("Najpierw potwierdź numer telefonu.");
+  }
+
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    throw new Error("Zdjęcie musi być w formacie JPG, PNG albo WEBP.");
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    throw new Error("Zdjęcie nie może być większe niż 5 MB.");
+  }
+
+  const avatarPath = `profile-photos/users/${auth.currentUser.uid}/avatar`;
+  const avatarRef = ref(storage, avatarPath);
+  const metadata: UploadMetadata = { contentType: file.type };
+
+  await uploadBytes(avatarRef, file, metadata);
+
+  return {
+    avatarPath,
+    avatarUrl: await getDownloadURL(avatarRef),
+  };
+}
+
+export async function submitAccountRequest(input: AccountRequestInput) {
+  const { auth } = assertReady();
   const requestedRoles = normalizeRequestedRoles(input.requestedRoles);
+  const selectedTrainerIds = Array.from(new Set(input.selectedTrainerIds.filter(Boolean)));
+
+  if (!auth.currentUser || auth.currentUser.isAnonymous) {
+    throw new Error("Najpierw potwierdź numer telefonu kodem SMS.");
+  }
 
   if (requestedRoles.length === 0) {
     throw new Error("Wybierz przynajmniej jeden typ konta.");
   }
 
-  await addDoc(collection(db, collections.accountRequests), {
+  if (
+    (requestedRoles.includes("organizer") || requestedRoles.includes("trainer")) &&
+    selectedTrainerIds.length === 0
+  ) {
+    throw new Error("Wybierz przynajmniej jednego trenera do współpracy.");
+  }
+
+  if (requestedRoles.includes("organizer") && !input.organizerTrainingIntent?.trim()) {
+    throw new Error("Opisz, jakie szkolenia chcesz organizować.");
+  }
+
+  const avatar = input.avatarFile ? await uploadCurrentUserAvatar(input.avatarFile) : null;
+
+  await callFirebaseFunction<
+    {
+      displayName: string;
+      phone: string;
+      requestedRoles: Array<"trainer" | "organizer" | "participant">;
+      notes: string;
+      avatarPath?: string;
+      avatarUrl?: string;
+      organizerTrainingIntent?: string;
+      selectedTrainerIds: string[];
+    },
+    { ok: true; accountCreated?: boolean }
+  >("finalizePhoneRegistration", {
     displayName: input.displayName,
-    email: input.email,
     phone: input.phone,
     requestedRoles,
     notes: input.notes,
-    status: "pending",
-    createdAt: nowIso(),
+    avatarPath: avatar?.avatarPath,
+    avatarUrl: avatar?.avatarUrl,
+    organizerTrainingIntent: input.organizerTrainingIntent?.trim() || undefined,
+    selectedTrainerIds,
   });
 }
 
@@ -2035,6 +2224,7 @@ export async function updateTrainerProfile(
     bio: input.bio.trim(),
     specialties,
     locations,
+    defaultEnrollmentPhotoRequired: input.defaultEnrollmentPhotoRequired === true,
   };
 
   if (input.avatarFile) {
@@ -2075,6 +2265,7 @@ export async function updateOrganizerProfile(
     contactName: input.contactName.trim(),
     location: input.location.trim(),
     description: input.description.trim(),
+    defaultEnrollmentPhotoRequired: input.defaultEnrollmentPhotoRequired === true,
   });
 }
 
@@ -2177,6 +2368,7 @@ export async function updateTrainingEventManagement(
       tags?: string[];
       scheduleDays?: TrainingEventScheduleDay[];
       transferTargetEventId?: string;
+      enrollmentPhotoRequirement?: "default" | "required" | "optional";
     },
     { ok: true }
   >("updateTrainingEventManagement", {
@@ -2187,6 +2379,7 @@ export async function updateTrainingEventManagement(
     tags: input.tags,
     scheduleDays: input.scheduleDays,
     transferTargetEventId: input.transferTargetEventId?.trim() || undefined,
+    enrollmentPhotoRequirement: input.enrollmentPhotoRequirement,
   });
   return;
 
@@ -2447,4 +2640,29 @@ export async function resolveEnrollmentPhoto(path: string) {
   const { storage } = assertReady();
   const blob = await getBlob(ref(storage, path));
   return URL.createObjectURL(blob);
+}
+
+export async function decideTrainerPublicationApproval(
+  approvalId: string,
+  status: "accepted" | "rejected",
+) {
+  await callFirebaseFunction<
+    { approvalId: string; status: "accepted" | "rejected" },
+    { ok: true }
+  >("decideTrainerPublicationApproval", {
+    approvalId,
+    status,
+  });
+}
+
+export async function updateAppSettings(input: AppSettings) {
+  const { db } = assertReady();
+
+  await setDoc(
+    doc(db, collections.appMeta, "publicSettings"),
+    {
+      signupPhotoRequired: input.signupPhotoRequired === true,
+    },
+    { merge: true },
+  );
 }

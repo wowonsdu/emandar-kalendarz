@@ -39,7 +39,7 @@ function NotFoundPage() {
   );
 }
 
-const basename = import.meta.env.DEV ? "/" : "/emandar";
+const basename = (import.meta.env.BASE_URL || "/").replace(/\/$/, "") || "/";
 
 export const router = createBrowserRouter(
   [

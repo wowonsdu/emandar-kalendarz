@@ -905,6 +905,21 @@ export function DashboardPage() {
     return null;
   }
 
+  if (currentUser.role === "participant") {
+    return (
+      <PanelSection
+        eyebrow={getRoleLabel(currentUser.role)}
+        title="Konto uczestnika aktywne"
+        description="Logowanie SMS działa już dla uczestników. Osobny panel uczestnika z historią zapisów dojdzie w kolejnym etapie."
+      >
+        <EmptyPanelState
+          title="Panel uczestnika jeszcze powstaje"
+          description="Na tym etapie konto zostało utworzone poprawnie i możesz już korzystać z logowania SMS."
+        />
+      </PanelSection>
+    );
+  }
+
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
   const organizerProfile = store.organizers.find(
     (item) => item.userId === currentUser.id,
@@ -1738,6 +1753,107 @@ export function RequestsPage() {
           );
         })}
       </div>
+
+      {(currentUser.role === "trainer" || currentUser.role === "admin") && (
+        <div className="space-y-4">
+          <SectionBlockHeading
+            title={
+              isCommunityTrainer
+                ? "Zgody trenerów na publikację"
+                : "Prośby o zgodę na publikację"
+            }
+            description={
+              isCommunityTrainer
+                ? "Tu widzisz wysłane prośby o odblokowanie publikacji wydarzeń społeczności."
+                : "Oficjalny trener akceptuje tutaj konta, które chcą publikować wydarzenia społeczności."
+            }
+          />
+
+          {publicationApprovals.length === 0 && (
+            <EmptyPanelState
+              title="Brak zgód publikacyjnych"
+              description="Nowe prośby o zgodę pojawią się tutaj po rejestracji lub wysłaniu zaproszeń."
+            />
+          )}
+
+          {publicationApprovals.map((approval) => {
+            const requesterTrainer = store.trainers.find(
+              (item) => item.id === approval.requesterTrainerProfileId,
+            );
+            const targetTrainer = store.trainers.find(
+              (item) => item.id === approval.targetTrainerId,
+            );
+            const canDecideApproval =
+              approval.status === "pending" &&
+              (approval.targetTrainerUserId === currentUser.id || currentUser.role === "admin");
+
+            return (
+              <article
+                key={approval.id}
+                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-2xl font-semibold text-brand-navy">
+                      {requesterTrainer?.displayName ?? "Konto społeczności"} →{" "}
+                      {targetTrainer?.displayName ?? "Trener"}
+                    </p>
+                    <p className="mt-2 text-brand-muted">
+                      Status zgody publikacyjnej • utworzona {formatDate(approval.createdAt)}
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
+                    {approval.status}
+                  </span>
+                </div>
+
+                {canDecideApproval && (
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await decideTrainerPublicationApproval(approval.id, "accepted");
+                          toast.success("Zgoda publikacyjna została zaakceptowana.");
+                        } catch (error) {
+                          toast.error(
+                            error instanceof Error
+                              ? error.message
+                              : "Nie udało się zapisać decyzji.",
+                          );
+                        }
+                      }}
+                      className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                    >
+                      <Check size={16} />
+                      Akceptuj
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await decideTrainerPublicationApproval(approval.id, "rejected");
+                          toast.success("Zgoda publikacyjna została odrzucona.");
+                        } catch (error) {
+                          toast.error(
+                            error instanceof Error
+                              ? error.message
+                              : "Nie udało się zapisać decyzji.",
+                          );
+                        }
+                      }}
+                      className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+                    >
+                      <X size={16} />
+                      Odrzuć
+                    </button>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
     </PanelSection>
   );
 }
@@ -1808,7 +1924,13 @@ function DetachRelationControls({
 }
 
 export function RelationsPage() {
-  const { currentUser, decideRelation, requestRelation, store } = useAppState();
+  const {
+    currentUser,
+    decideRelation,
+    decideTrainerPublicationApproval,
+    requestRelation,
+    store,
+  } = useAppState();
   const [selectedTrainer, setSelectedTrainer] = useState(
     store.trainers[0]?.id ?? "",
   );
@@ -1820,12 +1942,23 @@ export function RelationsPage() {
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
 
-  if (currentUser.role === "trainer") {
-    return <Navigate to={isCommunityTrainer ? "/panel/szkolenia" : "/panel/organizatorzy"} replace />;
-  }
   const organizerProfile = store.organizers.find(
     (item) => item.userId === currentUser.id,
   );
+  const publicationApprovals = store.trainerPublicationApprovals.filter((approval) => {
+    if (currentUser.role === "admin") {
+      return true;
+    }
+
+    if (currentUser.role === "trainer") {
+      return (
+        approval.requesterUserId === currentUser.id ||
+        approval.targetTrainerUserId === currentUser.id
+      );
+    }
+
+    return false;
+  });
 
   const relations = store.relations.filter((relation) => {
     if (currentUser.role === "trainer") {
@@ -3345,6 +3478,7 @@ export function EventManagementPage() {
     status: "active" as TrainingEventStatus,
     capacity: "1",
     minimumParticipants: "1",
+    enrollmentPhotoRequirement: "default" as "default" | "required" | "optional",
     tags: "",
     firstDayDate: "",
     scheduleDays: resizeScheduleDayDrafts(2, []),
@@ -3360,6 +3494,7 @@ export function EventManagementPage() {
       status: resolveTrainingEventStatus(event.status),
       capacity: String(event.capacity),
       minimumParticipants: String(resolveMinimumParticipants(event)),
+      enrollmentPhotoRequirement: event.enrollmentPhotoRequirement ?? "default",
       tags: (event.tags ?? []).join(", "),
       ...getScheduleDraftsFromEvent(event),
     });
@@ -3617,6 +3752,29 @@ export function EventManagementPage() {
             </label>
           </div>
 
+          <label className="mt-4 grid gap-2">
+            <span className="text-sm font-semibold text-brand-navy">
+              Zdjęcie w formularzu zapisu
+            </span>
+            <select
+              value={settingsDraft.enrollmentPhotoRequirement}
+              onChange={(changeEvent) =>
+                setSettingsDraft((previous) => ({
+                  ...previous,
+                  enrollmentPhotoRequirement: changeEvent.target.value as
+                    | "default"
+                    | "required"
+                    | "optional",
+                }))
+              }
+              className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+            >
+              <option value="default">Dziedzicz z ustawień właściciela szkolenia</option>
+              <option value="required">Zawsze wymagaj zdjęcia</option>
+              <option value="optional">Zdjęcie opcjonalne</option>
+            </select>
+          </label>
+
           <div className="mt-4 grid gap-4">
             {settingsDraft.scheduleDays.map((day, index) => {
               const draftScheduleDays = buildScheduleDaysFromDrafts(
@@ -3726,6 +3884,8 @@ export function EventManagementPage() {
                       settingsDraft.firstDayDate,
                       settingsDraft.scheduleDays,
                     ),
+                    undefined,
+                    settingsDraft.enrollmentPhotoRequirement,
                   );
                   toast.success("Zapisano ustawienia szkolenia.");
                 } catch (error) {
@@ -4133,6 +4293,7 @@ export function ProfileSettingsPage() {
     currentUser,
     store,
     updateOrganizerProfile,
+    updateAppSettings,
     updateTrainerProfile,
   } = useAppState();
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser?.id);
@@ -4145,12 +4306,17 @@ export function ProfileSettingsPage() {
     specialties: "",
     locations: "",
     avatarFile: null as File | null,
+    defaultEnrollmentPhotoRequired: false,
   });
   const [organizerForm, setOrganizerForm] = useState({
     displayName: "",
     contactName: "",
     location: "",
     description: "",
+    defaultEnrollmentPhotoRequired: false,
+  });
+  const [appSettingsForm, setAppSettingsForm] = useState({
+    signupPhotoRequired: false,
   });
   const [saving, setSaving] = useState(false);
 
@@ -4165,6 +4331,7 @@ export function ProfileSettingsPage() {
       bio: trainerProfile.bio ?? "",
       specialties: trainerProfile.specialties.join(", "),
       locations: trainerProfile.locations.join(", "),
+      defaultEnrollmentPhotoRequired: trainerProfile.defaultEnrollmentPhotoRequired === true,
     }));
   }, [trainerProfile]);
 
@@ -4178,11 +4345,101 @@ export function ProfileSettingsPage() {
       contactName: organizerProfile.contactName ?? "",
       location: organizerProfile.location ?? "",
       description: organizerProfile.description ?? "",
+      defaultEnrollmentPhotoRequired: organizerProfile.defaultEnrollmentPhotoRequired === true,
     });
   }, [organizerProfile]);
 
+  useEffect(() => {
+    setAppSettingsForm({
+      signupPhotoRequired: store.appSettings.signupPhotoRequired === true,
+    });
+  }, [store.appSettings.signupPhotoRequired]);
+
   if (!currentUser) {
     return null;
+  }
+
+  if (currentUser.role === "admin") {
+    async function handleSettingsSubmit(event: FormEvent<HTMLFormElement>) {
+      event.preventDefault();
+      setSaving(true);
+
+      try {
+        await updateAppSettings(appSettingsForm);
+        toast.success("Ustawienia aplikacji zostały zapisane.");
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Nie udało się zapisać ustawień aplikacji.",
+        );
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    return (
+      <PanelSection
+        eyebrow="Profil"
+        title="Ustawienia globalne rejestracji"
+        description="Admin kontroluje tutaj globalne wymagania na publicznej rejestracji."
+      >
+        <form
+          onSubmit={handleSettingsSubmit}
+          className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+        >
+          <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy">
+            <input
+              type="checkbox"
+              checked={appSettingsForm.signupPhotoRequired}
+              onChange={(event) =>
+                setAppSettingsForm({
+                  signupPhotoRequired: event.target.checked,
+                })
+              }
+              className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+            />
+            <span className="grid gap-1">
+              <span className="text-sm font-semibold">
+                Wymagaj zdjęcia przy zakładaniu konta
+              </span>
+              <span className="text-sm text-brand-muted">
+                Gdy ta opcja jest aktywna, publiczna rejestracja SMS nie pozwoli
+                dokończyć konta bez zdjęcia profilowego.
+              </span>
+            </span>
+          </label>
+
+          <label className="mt-5 flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy">
+            <input
+              type="checkbox"
+              checked={organizerForm.defaultEnrollmentPhotoRequired}
+              onChange={(event) =>
+                setOrganizerForm((previous) => ({
+                  ...previous,
+                  defaultEnrollmentPhotoRequired: event.target.checked,
+                }))
+              }
+              className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+            />
+            <span className="grid gap-1">
+              <span className="text-sm font-semibold">
+                Wymagaj zdjÄ™cia w zapisach na moje szkolenia
+              </span>
+              <span className="text-sm text-brand-muted">
+                To ustawienie stanie siÄ™ domyĹ›lnym wymaganiem dla wydarzeĹ„ organizowanych z Twojego profilu.
+              </span>
+            </span>
+          </label>
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+          >
+            {saving ? "Zapisywanie..." : "Zapisz ustawienia"}
+          </button>
+        </form>
+      </PanelSection>
+    );
   }
 
   if ((currentUser.role === "trainer" || currentUser.role === "admin") && trainerProfile) {
@@ -4203,6 +4460,7 @@ export function ProfileSettingsPage() {
             .map((item) => item.trim())
             .filter(Boolean),
           avatarFile: trainerForm.avatarFile,
+          defaultEnrollmentPhotoRequired: trainerForm.defaultEnrollmentPhotoRequired,
         });
         toast.success("Profil Przekazującego Wiedzę został zapisany.");
         setTrainerForm((previous) => ({
@@ -4347,6 +4605,28 @@ export function ProfileSettingsPage() {
                 </span>
               </label>
 
+              <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-white p-4 text-brand-navy">
+                <input
+                  type="checkbox"
+                  checked={trainerForm.defaultEnrollmentPhotoRequired}
+                  onChange={(event) =>
+                    setTrainerForm((previous) => ({
+                      ...previous,
+                      defaultEnrollmentPhotoRequired: event.target.checked,
+                    }))
+                  }
+                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+                />
+                <span className="grid gap-1">
+                  <span className="text-sm font-semibold">
+                    Wymagaj zdjÄ™cia w zapisach na moje szkolenia
+                  </span>
+                  <span className="text-sm text-brand-muted">
+                    To ustawienie staje siÄ™ domyÅ›lne dla szkoleĹ„ bez nadpisania na poziomie wydarzenia.
+                  </span>
+                </span>
+              </label>
+
               <button
                 type="submit"
                 disabled={saving}
@@ -4451,6 +4731,28 @@ export function ProfileSettingsPage() {
                 className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
               />
             </label>
+
+            <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy xl:col-span-2">
+              <input
+                type="checkbox"
+                checked={organizerForm.defaultEnrollmentPhotoRequired}
+                onChange={(event) =>
+                  setOrganizerForm((previous) => ({
+                    ...previous,
+                    defaultEnrollmentPhotoRequired: event.target.checked,
+                  }))
+                }
+                className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+              />
+              <span className="grid gap-1">
+                <span className="text-sm font-semibold">
+                  Wymagaj zdjÄ™cia w zapisach na moje szkolenia
+                </span>
+                <span className="text-sm text-brand-muted">
+                  To ustawienie stanie siÄ™ domyĹ›lnym wymaganiem dla wydarzeĹ„ organizowanych z Twojego profilu.
+                </span>
+              </span>
+            </label>
           </div>
 
           <button
@@ -4480,13 +4782,13 @@ export function ProfileSettingsPage() {
 }
 
 export function AccountRequestsPage() {
-  const { currentUser, decideAccountRequest, store } = useAppState();
+  const { currentUser, store } = useAppState();
 
   if (!currentUser || currentUser.role !== "admin") {
     return (
       <PanelSection
         eyebrow="Rejestracje"
-        title="Wnioski o konto"
+        title="Historia rejestracji"
         description="Ten ekran jest dostępny tylko dla admina."
       >
         <EmptyPanelState
@@ -4500,7 +4802,7 @@ export function AccountRequestsPage() {
   return (
     <PanelSection
       eyebrow="Rejestracje"
-      title="Nowe wnioski o konto"
+      title="Historia rejestracji SMS"
       description="Publiczna rejestracja zapisuje tylko wniosek. Admin może go zaakceptować albo odrzucić bez nadawania roli w ciemno."
     >
       <div className="space-y-4">
@@ -4539,7 +4841,7 @@ export function AccountRequestsPage() {
               {request.notes || "Brak dodatkowych informacji."}
             </p>
 
-            {request.status === "pending" && (
+            {false && request.status === "pending" && (
               <div className="mt-5 flex flex-wrap gap-3">
                 <button
                   type="button"

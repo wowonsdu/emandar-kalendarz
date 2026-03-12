@@ -13,10 +13,11 @@ import {
   Navigate,
   Outlet,
   useLocation,
+  useNavigate,
 } from "react-router";
 import { useAppState } from "./providers/AppProviders";
 import type { AppRole } from "@/domain/types";
-import { isCommunityBrandStatus } from "@/domain/utils";
+import { getRoleLabel, isCommunityBrandStatus } from "@/domain/utils";
 
 function brandNavLinkClass({ isActive }: { isActive: boolean }) {
   return [
@@ -135,6 +136,10 @@ export function PublicLayout() {
 function panelItems(role: AppRole, isCommunityTrainer = false) {
   const base = [{ to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard }];
 
+  if (role === "participant") {
+    return base;
+  }
+
   if (role === "organizer") {
     return [
       ...base,
@@ -202,7 +207,9 @@ export function RequireAuth() {
 }
 
 export function PanelLayout() {
-  const { currentUser, notificationsCount, signOut, store } = useAppState();
+  const { availableRoles, currentUser, notificationsCount, setActiveRole, signOut, store } =
+    useAppState();
+  const navigate = useNavigate();
 
   if (!currentUser) {
     return <Navigate to="/login" replace />;
@@ -224,7 +231,31 @@ export function PanelLayout() {
                 Panel Emandar
               </p>
               <p className="mt-2 text-2xl font-semibold">{currentUser.displayName}</p>
-              <p className="text-sm text-white/70">{currentUser.email}</p>
+              <p className="text-sm text-white/70">
+                {currentUser.email || currentUser.phone || "Konto SMS"}
+              </p>
+              {availableRoles.length > 1 && (
+                <label className="mt-4 grid gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-[0.24em] text-white/60">
+                    Aktywna rola
+                  </span>
+                  <select
+                    value={currentUser.role}
+                    onChange={(event) => {
+                      void setActiveRole(event.target.value as AppRole).then(() => {
+                        navigate("/panel/dashboard");
+                      });
+                    }}
+                    className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white outline-none"
+                  >
+                    {availableRoles.map((role) => (
+                      <option key={role} value={role} className="text-brand-navy">
+                        {getRoleLabel(role)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
 
             <nav className="space-y-2">
@@ -274,7 +305,7 @@ export function PanelLayout() {
             <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-10">
               <div>
                 <p className="text-xs uppercase tracking-[0.32em] text-brand-muted">
-                  {currentUser.role}
+                  {getRoleLabel(currentUser.role)}
                 </p>
                 <h1 className="text-2xl font-semibold text-brand-navy">
                   Panel zarzadzania

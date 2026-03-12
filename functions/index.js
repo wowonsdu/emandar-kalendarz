@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { initializeApp } from "firebase-admin/app";
@@ -12,6 +12,7 @@ initializeApp();
 const db = getFirestore();
 const auth = getAuth();
 const storage = getStorage();
+const FUNCTION_REGION = "europe-west1";
 const collections = {
   users: "users",
   trainers: "trainers",
@@ -24,9 +25,12 @@ const collections = {
   enrollmentRequests: "enrollmentRequests",
   notifications: "notifications",
   accountRequests: "accountRequests",
+  trainerPublicationApprovals: "trainerPublicationApprovals",
   appMeta: "app_meta",
 };
-const shouldEnforceAppCheck = process.env.FUNCTIONS_EMULATOR !== "true";
+const shouldEnforceAppCheck =
+  process.env.FUNCTIONS_EMULATOR !== "true" &&
+  process.env.ENFORCE_APP_CHECK === "true";
 const PROXY_BASE_URL = "https://api.allorigins.win/raw?url=";
 
 function nowIso() {
@@ -35,6 +39,10 @@ function nowIso() {
 
 function createId(prefix) {
   return `${prefix}-${randomUUID()}`;
+}
+
+function buildPublicationApprovalId(requesterTrainerProfileId, targetTrainerId) {
+  return `${requesterTrainerProfileId}__${targetTrainerId}`;
 }
 
 function asString(value, fallback = "") {
@@ -53,11 +61,22 @@ function asNumber(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+async function getPublicSettings() {
+  const snapshot = await db.collection(collections.appMeta).doc("publicSettings").get();
+  return snapshot.exists ? snapshot.data() : {};
+}
+
 function normalizeRoleList(value) {
   return Array.from(
     new Set(
       Array.isArray(value)
-        ? value.filter((role) => role === "trainer" || role === "organizer" || role === "admin")
+        ? value.filter(
+            (role) =>
+              role === "trainer" ||
+              role === "organizer" ||
+              role === "admin" ||
+              role === "participant",
+          )
         : [],
     ),
   );
@@ -67,7 +86,12 @@ function normalizeRequestedRoles(value) {
   return Array.from(
     new Set(
       Array.isArray(value)
-        ? value.filter((role) => role === "trainer" || role === "organizer")
+        ? value.filter(
+            (role) =>
+              role === "trainer" ||
+              role === "organizer" ||
+              role === "participant",
+          )
         : [],
     ),
   );
@@ -358,6 +382,38 @@ function ensureEventCanAcceptEnrollment(event) {
 
   if (event.isPublished !== true) {
     throw new HttpsError("failed-precondition", "To szkolenie nie przyjmuje teraz zgłoszeń.");
+  }
+}
+
+async function isEnrollmentPhotoRequired(event, trainer, organizer) {
+  if (event.enrollmentPhotoRequirement === "required") {
+    return true;
+  }
+
+  if (event.enrollmentPhotoRequirement === "optional") {
+    return false;
+  }
+
+  if (event.organizerId) {
+    return organizer?.defaultEnrollmentPhotoRequired === true;
+  }
+
+  return trainer?.defaultEnrollmentPhotoRequired === true;
+}
+
+async function ensureCommunityTrainerCanPublish(user) {
+  const approvalsSnapshot = await db
+    .collection(collections.trainerPublicationApprovals)
+    .where("requesterUserId", "==", user.id)
+    .where("status", "==", "accepted")
+    .limit(1)
+    .get();
+
+  if (approvalsSnapshot.empty) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Konto wydarzeń społeczności musi mieć przynajmniej jedną zaakceptowaną zgodę trenera przed publikacją.",
+    );
   }
 }
 
@@ -752,64 +808,182 @@ async function rebuildTrainerExternalBusyMonths(trainer) {
 
 function callableOptions() {
   return {
+    region: FUNCTION_REGION,
     enforceAppCheck: shouldEnforceAppCheck,
   };
 }
 
-export const submitAccountRequest = onCall(callableOptions(), async (request) => {
-  const { uid } = await requireCurrentUser(request, { allowAnonymous: true });
+export const finalizePhoneRegistration = onCall(callableOptions(), async (request) => {
+  const { uid, user } = await requireCurrentUser(request, { allowAnonymous: true });
+  const authUser = await auth.getUser(uid);
   const payload = request.data ?? {};
   const displayName = requiredString(payload.displayName, "Podaj imię i nazwisko.");
-  const email = requiredString(payload.email, "Podaj email.").toLowerCase();
-  const phone = requiredString(payload.phone, "Podaj numer telefonu.");
-  const notes = asString(payload.notes);
+  const notes = requiredString(payload.notes, "Dodaj kilka słów o sobie.");
   const requestedRoles = normalizeRequestedRoles(payload.requestedRoles);
+  const organizerTrainingIntent = asString(payload.organizerTrainingIntent);
+  const avatarPath = asString(payload.avatarPath);
+  const avatarUrl = asString(payload.avatarUrl);
+  const selectedTrainerIds = Array.from(
+    new Set(
+      Array.isArray(payload.selectedTrainerIds)
+        ? payload.selectedTrainerIds.map((trainerId) => asString(trainerId)).filter(Boolean)
+        : [],
+    ),
+  );
+  const verifiedPhone = requiredString(
+    authUser.phoneNumber,
+    "Numer telefonu musi zostać najpierw potwierdzony kodem SMS.",
+  );
+  const globalSettings = await getPublicSettings();
+
+  if (user) {
+    return { ok: true, userId: uid, accountCreated: false };
+  }
 
   if (requestedRoles.length === 0) {
     throw new HttpsError("invalid-argument", "Wybierz przynajmniej jeden typ konta.");
   }
 
-  const rateLimitRef = db.collection(collections.appMeta).doc(`account_request_rate_limit_${uid}`);
-  const existingRateLimit = await rateLimitRef.get();
-  const lastSubmittedAt = existingRateLimit.get("lastSubmittedAt");
-  const lastSubmittedTimestamp =
-    typeof lastSubmittedAt?.toDate === "function"
-      ? lastSubmittedAt.toDate().getTime()
-      : null;
-
-  if (lastSubmittedTimestamp && Date.now() - lastSubmittedTimestamp < 60 * 1000) {
-    throw new HttpsError("resource-exhausted", "Poczekaj chwilę przed kolejnym zgłoszeniem.");
+  if (
+    (requestedRoles.includes("organizer") || requestedRoles.includes("trainer")) &&
+    selectedTrainerIds.length === 0
+  ) {
+    throw new HttpsError("invalid-argument", "Wybierz przynajmniej jednego trenera do współpracy.");
   }
 
-  const existingRequest = await db
-    .collection(collections.accountRequests)
-    .where("emailLowercase", "==", email)
-    .limit(1)
-    .get();
-
-  if (!existingRequest.empty) {
-    const currentStatus = existingRequest.docs[0].get("status");
-    if (currentStatus === "pending" || currentStatus === "approved") {
-      throw new HttpsError("already-exists", "Wniosek z tym adresem email już istnieje.");
-    }
+  if (requestedRoles.includes("organizer") && !organizerTrainingIntent) {
+    throw new HttpsError("invalid-argument", "Opisz, jakie szkolenia chcesz organizować.");
   }
 
-  await db.collection(collections.accountRequests).add({
+  if (globalSettings.signupPhotoRequired === true && !avatarPath) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Aktualnie zdjęcie jest wymagane przy zakładaniu konta.",
+    );
+  }
+
+  const trainerProfileId = requestedRoles.includes("trainer") ? createId("trainer") : null;
+  const organizerProfileId = requestedRoles.includes("organizer") ? createId("organizer") : null;
+  const primaryRole = requestedRoles.includes("organizer")
+    ? "organizer"
+    : requestedRoles.includes("trainer")
+      ? "trainer"
+      : "participant";
+  const accountRequestRef = db.collection(collections.accountRequests).doc(createId("account-request"));
+  const trainerTargets = await Promise.all(
+    selectedTrainerIds.map(async (trainerId) => requireTrainerProfile(trainerId)),
+  );
+
+  await auth.setCustomUserClaims(uid, {
+    ...(authUser.customClaims ?? {}),
+    admin: false,
+  });
+
+  const batch = db.batch();
+  batch.set(db.collection(collections.users).doc(uid), {
     displayName,
-    email,
-    emailLowercase: email,
-    phone,
-    requestedRoles,
-    notes,
-    status: "pending",
-    submitterUid: uid,
+    email: authUser.email ?? null,
+    phone: verifiedPhone,
+    avatarUrl: avatarUrl || "",
+    avatarPath: avatarPath || null,
+    authProvider: "phone",
+    phoneVerifiedAt: nowIso(),
+    status: "active",
+    role: primaryRole,
+    roles: requestedRoles,
+    primaryRole,
+    trainerProfileId,
+    organizerProfileId,
     createdAt: nowIso(),
   });
-  await rateLimitRef.set({
-    lastSubmittedAt: FieldValue.serverTimestamp(),
+
+  if (trainerProfileId) {
+    batch.set(db.collection(collections.trainers).doc(trainerProfileId), {
+      userId: uid,
+      slug: slugifyDisplayName(displayName),
+      displayName,
+      sortOrder: 999,
+      bio: notes,
+      specialties: [],
+      locations: [],
+      isVisible: false,
+      heroNote: "Profil w trakcie konfiguracji.",
+      avatarUrl: avatarUrl || "",
+      avatarPath: avatarPath || null,
+      brandStatus: "supported",
+      defaultEnrollmentPhotoRequired: false,
+    });
+  }
+
+  if (organizerProfileId) {
+    batch.set(db.collection(collections.organizers).doc(organizerProfileId), {
+      userId: uid,
+      displayName,
+      description: notes,
+      isVisible: false,
+      contactName: displayName.split(/\s+/)[0] ?? displayName,
+      location: "",
+      trainingIntent: organizerTrainingIntent,
+      defaultEnrollmentPhotoRequired: false,
+    });
+  }
+
+  trainerTargets.forEach((trainer) => {
+    if (organizerProfileId) {
+      batch.set(
+        db.collection(collections.relations).doc(buildRelationId(trainer.id, organizerProfileId)),
+        {
+          trainerId: trainer.id,
+          organizerId: organizerProfileId,
+          trainerUserId: trainer.userId,
+          organizerUserId: uid,
+          status: "pending",
+          requestedBy: "organizer",
+          createdAt: nowIso(),
+        },
+      );
+    }
+
+    if (trainerProfileId) {
+      batch.set(
+        db
+          .collection(collections.trainerPublicationApprovals)
+          .doc(buildPublicationApprovalId(trainerProfileId, trainer.id)),
+        {
+          requesterUserId: uid,
+          requesterTrainerProfileId: trainerProfileId,
+          targetTrainerId: trainer.id,
+          targetTrainerUserId: trainer.userId,
+          status: "pending",
+          createdAt: nowIso(),
+        },
+      );
+    }
   });
 
-  return { ok: true };
+  batch.set(accountRequestRef, {
+    displayName,
+    email: authUser.email ?? null,
+    phone: verifiedPhone,
+    requestedRoles,
+    notes,
+    status: "approved",
+    authProvider: "phone",
+    organizerTrainingIntent,
+    selectedTrainerIds,
+    avatarPath: avatarPath || null,
+    submitterUid: uid,
+    createdAt: nowIso(),
+    reviewedAt: nowIso(),
+    reviewedByUserId: "phone-self-service",
+    createdUserId: uid,
+    trainerProfileId,
+    organizerProfileId,
+  });
+
+  await batch.commit();
+
+  return { ok: true, userId: uid, accountCreated: true };
 });
 
 export const approveAccountRequest = onCall(callableOptions(), async (request) => {
@@ -952,6 +1126,58 @@ export const rejectAccountRequest = onCall(callableOptions(), async (request) =>
   return { ok: true };
 });
 
+export const decideTrainerPublicationApproval = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user) {
+    throw new HttpsError("permission-denied", "Musisz być zalogowany.");
+  }
+
+  const approvalId = requiredString(request.data?.approvalId, "Brak identyfikatora zgody.");
+  const status =
+    request.data?.status === "accepted" || request.data?.status === "rejected"
+      ? request.data.status
+      : null;
+
+  if (!status) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny status zgody.");
+  }
+
+  const approvalRef = db.collection(collections.trainerPublicationApprovals).doc(approvalId);
+  const approvalSnapshot = await approvalRef.get();
+
+  if (!approvalSnapshot.exists) {
+    throw new HttpsError("not-found", "Nie znaleziono zgody publikacyjnej.");
+  }
+
+  const approval = {
+    id: approvalSnapshot.id,
+    ...approvalSnapshot.data(),
+  };
+
+  if (user.role !== "admin" && approval.targetTrainerUserId !== user.id) {
+    throw new HttpsError("permission-denied", "Nie możesz podjąć decyzji dla tej zgody.");
+  }
+
+  await approvalRef.set(
+    {
+      status,
+      decidedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await createNotification(
+    approval.requesterUserId,
+    "Zmieniono status zgody na publikację",
+    status === "accepted"
+      ? "Przynajmniej jeden trener zatwierdził Twoje konto wydarzeń społeczności."
+      : "Jedna z próśb o zgodę na publikację została odrzucona.",
+    "auth",
+  );
+
+  return { ok: true };
+});
+
 export const createUnifiedTrainingEvent = onCall(callableOptions(), async (request) => {
   const { user } = await requireCurrentUser(request);
   if (!user) {
@@ -994,6 +1220,10 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
 
   if (user.role === "organizer" && isCommunityBrandStatus(trainer.brandStatus)) {
     throw new HttpsError("failed-precondition", "Wydarzenia społeczności pozostają po stronie ich właściciela.");
+  }
+
+  if (user.role === "trainer" && isCommunityTrainer && Boolean(input.isPublished)) {
+    await ensureCommunityTrainerCanPublish(user);
   }
 
   const selfManagedByTrainer =
@@ -1059,6 +1289,11 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
           : "pending",
     selfManagedByTrainer: isCommunityTrainer ? true : selfManagedByTrainer,
     createdByRole: user.role,
+    enrollmentPhotoRequirement:
+      input.enrollmentPhotoRequirement === "required" ||
+      input.enrollmentPhotoRequirement === "optional"
+        ? input.enrollmentPhotoRequirement
+        : "default",
   });
 
   return {
@@ -1078,6 +1313,7 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
   const organizer = event.organizerId ? await requireOrganizerProfile(event.organizerId) : null;
   const requiresOrganizerApproval =
     event.requiresOrganizerApproval ?? !isCommunityBrandStatus(event.brandStatus);
+  const photoRequired = await isEnrollmentPhotoRequired(event, trainer, organizer);
   const requestRef = db.collection(collections.enrollmentRequests).doc();
 
   await requestRef.set({
@@ -1096,6 +1332,7 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
     organizerDecision: "pending",
     finalStatus: "pending",
     requiresOrganizerApproval,
+    photoRequired,
     createdAt: nowIso(),
   });
 
@@ -1103,13 +1340,14 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
     ok: true,
     requestId: requestRef.id,
     photoPath: `enrollment-photos/${requestRef.id}/original`,
+    photoRequired,
   };
 });
 
 export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request) => {
   const { uid } = await requireCurrentUser(request, { allowAnonymous: true });
   const requestId = requiredString(request.data?.requestId, "Brak identyfikatora zgłoszenia.");
-  const photoPath = requiredString(request.data?.photoPath, "Brak ścieżki zdjęcia.");
+  const photoPath = asString(request.data?.photoPath);
   const requestRef = db.collection(collections.enrollmentRequests).doc(requestId);
   const enrollmentRequest = await requestRef.get();
 
@@ -1121,16 +1359,33 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
     throw new HttpsError("permission-denied", "To nie jest Twoje zgłoszenie.");
   }
 
-  const [metadata] = await storage.bucket().file(photoPath).getMetadata();
-  await requestRef.set(
-    {
-      photoStatus: "ready",
-      photoPath,
-      photoContentType: metadata.contentType ?? null,
-      photoUploadedAt: nowIso(),
-    },
-    { merge: true },
-  );
+  const photoRequired = enrollmentRequest.get("photoRequired") === true;
+
+  if (!photoPath && photoRequired) {
+    throw new HttpsError("invalid-argument", "To szkolenie wymaga zdjęcia twarzy.");
+  }
+
+  if (photoPath) {
+    const [metadata] = await storage.bucket().file(photoPath).getMetadata();
+    await requestRef.set(
+      {
+        photoStatus: "ready",
+        photoPath,
+        photoContentType: metadata.contentType ?? null,
+        photoUploadedAt: nowIso(),
+      },
+      { merge: true },
+    );
+  } else {
+    await requestRef.set(
+      {
+        photoStatus: "ready",
+        photoPath: null,
+        photoContentType: null,
+      },
+      { merge: true },
+    );
+  }
 
   return {
     ok: true,
@@ -1342,6 +1597,11 @@ export const updateTrainingEventManagement = onCall(callableOptions(), async (re
         capacity: normalizedCapacity,
         minimumParticipants: normalizedMinimumParticipants,
         status: resolveTrainingEventStatus(input.status),
+        enrollmentPhotoRequirement:
+          input.enrollmentPhotoRequirement === "required" ||
+          input.enrollmentPhotoRequirement === "optional"
+            ? input.enrollmentPhotoRequirement
+            : "default",
       },
       { merge: true },
     );
@@ -1409,6 +1669,11 @@ export const updateTrainingEventManagement = onCall(callableOptions(), async (re
       capacity: normalizedCapacity,
       minimumParticipants: normalizedMinimumParticipants,
       status: resolveTrainingEventStatus(input.status),
+      enrollmentPhotoRequirement:
+        input.enrollmentPhotoRequirement === "required" ||
+        input.enrollmentPhotoRequirement === "optional"
+          ? input.enrollmentPhotoRequirement
+          : "default",
     },
     { merge: true },
   );
@@ -1477,6 +1742,7 @@ export const syncOwnTrainerCalendarFeeds = onCall(callableOptions(), async (requ
 
 export const onRelationWrite = onDocumentWritten(
   {
+    region: FUNCTION_REGION,
     document: `${collections.relations}/{relationId}`,
     retry: false,
   },
@@ -1613,6 +1879,7 @@ export const onRelationWrite = onDocumentWritten(
 
 export const onEnrollmentRequestWrite = onDocumentWritten(
   {
+    region: FUNCTION_REGION,
     document: `${collections.enrollmentRequests}/{requestId}`,
     retry: false,
   },
@@ -1662,6 +1929,7 @@ export const onEnrollmentRequestWrite = onDocumentWritten(
 
 export const onTrainingEventWrite = onDocumentWritten(
   {
+    region: FUNCTION_REGION,
     document: `${collections.trainingEvents}/{eventId}`,
     retry: false,
   },

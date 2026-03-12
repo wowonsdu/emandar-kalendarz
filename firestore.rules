@@ -70,9 +70,9 @@ service cloud.firestore {
     }
 
     function isSelfManagedEvent(data) {
-      return data.brandStatus == "supported" ||
+      return optionalField(data, "brandStatus") == "supported" ||
         data.selfManagedByTrainer == true ||
-        data.organizerId == null;
+        optionalField(data, "organizerId") == null;
     }
 
     function trainerOwnsProfile(trainerId) {
@@ -268,37 +268,41 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAdmin() || isOwnUser(userId);
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (
-        isOwnUser(userId) &&
-        request.resource.data.role == resource.data.role &&
-        request.resource.data.roles == resource.data.roles &&
-        request.resource.data.primaryRole == resource.data.primaryRole &&
-        request.resource.data.status == resource.data.status &&
-        request.resource.data.trainerProfileId == resource.data.trainerProfileId &&
-        request.resource.data.organizerProfileId == resource.data.organizerProfileId
-      );
+      allow create, update, delete: if isAdmin() || isOwnUser(userId);
     }
 
     match /trainers/{trainerId} {
       allow get, list: if resource != null && ((resource.data.isVisible == true) || hasAppUserDocument());
-      allow create: if isAdmin() || trainerProfileMatchesRequest(trainerId);
-      allow update: if isAdmin() || (
-        trainerProfileMatchesRequest(trainerId) &&
-        request.resource.data.userId == resource.data.userId &&
-        request.resource.data.brandStatus == resource.data.brandStatus
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.userId == currentUid()
       );
-      allow delete: if isAdmin() || trainerOwnsProfile(trainerId);
+      allow update: if isAdmin() || (
+        isSignedIn() &&
+        resource.data.userId == currentUid() &&
+        request.resource.data.userId == resource.data.userId
+      );
+      allow delete: if isAdmin() || (
+        isSignedIn() &&
+        resource.data.userId == currentUid()
+      );
     }
 
     match /organizers/{organizerId} {
       allow get, list: if resource != null && hasAppUserDocument();
-      allow create: if isAdmin() || organizerProfileMatchesRequest(organizerId);
+      allow create: if isAdmin() || (
+        isSignedIn() &&
+        request.resource.data.userId == currentUid()
+      );
       allow update: if isAdmin() || (
-        organizerProfileMatchesRequest(organizerId) &&
+        isSignedIn() &&
+        resource.data.userId == currentUid() &&
         request.resource.data.userId == resource.data.userId
       );
-      allow delete: if isAdmin() || organizerOwnsProfile(organizerId);
+      allow delete: if isAdmin() || (
+        isSignedIn() &&
+        resource.data.userId == currentUid()
+      );
     }
 
     match /trainerOrganizerRelations/{relationId} {
@@ -374,11 +378,30 @@ service cloud.firestore {
 
     match /accountRequests/{requestId} {
       allow get, list: if isAdmin();
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    match /trainerPublicationApprovals/{approvalId} {
+      allow get, list: if resource != null && (
+        isAdmin() || (
+          isSignedIn() && (
+            resource.data.requesterUserId == currentUid() ||
+            resource.data.targetTrainerUserId == currentUid()
+          )
+        )
+      );
       allow create, update, delete: if false;
     }
 
+    match /app_meta/publicSettings {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if isAdmin();
+    }
+
     match /app_meta/{docId} {
-      allow read, write: if false;
+      allow read, write: if isAdmin();
     }
 
     match /{document=**} {

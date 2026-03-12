@@ -26,7 +26,7 @@ import type { AppRole, AppUser } from "@/domain/types";
 
 type RepositoryModule = typeof import("@/data/firebaseRepository");
 type FirebaseLibModule = typeof import("@/lib/firebase");
-const PROJECT_ID = "emandar-c1e15";
+const PROJECT_ID = "emandar-app";
 const adminApp =
   getApps()[0] ??
   initializeAdminApp({
@@ -279,16 +279,16 @@ function mockFirebaseModule() {
   vi.doMock("@/lib/firebase", async () => {
     const app = initializeClientApp({
       apiKey: "demo-api-key",
-      authDomain: "emandar-c1e15.firebaseapp.com",
+      authDomain: "emandar-app.firebaseapp.com",
       projectId: PROJECT_ID,
-      storageBucket: "emandar-c1e15.firebasestorage.app",
-      messagingSenderId: "816516819122",
-      appId: "1:816516819122:web:74d6303d435df4cfab01ab",
-      measurementId: "G-G663SW8FM8",
+      storageBucket: "emandar-app.firebasestorage.app",
+      messagingSenderId: "354371064589",
+      appId: "1:354371064589:web:4a1eb5976af15ddcd89644",
+      measurementId: "G-MSF27RHND2",
     });
     const auth = getAuth(app);
     const db = getFirestore(app);
-    const functions = getFunctions(app);
+    const functions = getFunctions(app, "europe-west1");
     const storage = getStorage(app);
 
     connectAuthEmulator(auth, "http://127.0.0.1:9098", {
@@ -306,12 +306,12 @@ function mockFirebaseModule() {
     return {
       firebaseConfig: {
         apiKey: "demo-api-key",
-        authDomain: "emandar-c1e15.firebaseapp.com",
+        authDomain: "emandar-app.firebaseapp.com",
         projectId: PROJECT_ID,
-        storageBucket: "emandar-c1e15.firebasestorage.app",
-        messagingSenderId: "816516819122",
-        appId: "1:816516819122:web:74d6303d435df4cfab01ab",
-        measurementId: "G-G663SW8FM8",
+        storageBucket: "emandar-app.firebasestorage.app",
+        messagingSenderId: "354371064589",
+        appId: "1:354371064589:web:4a1eb5976af15ddcd89644",
+        measurementId: "G-MSF27RHND2",
       },
       isFirebaseConfigured: true,
       firebaseApp: app,

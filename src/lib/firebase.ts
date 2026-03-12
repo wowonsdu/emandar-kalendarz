@@ -44,6 +44,8 @@ const env = {
   appCheckDebugToken: readEnv("VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN"),
 };
 
+export const firebaseFunctionsRegion = "europe-west1";
+
 export const firebaseConfig = {
   apiKey: env.apiKey,
   authDomain: env.authDomain,
@@ -82,7 +84,7 @@ export const firebaseAuth = firebaseApp
   : null;
 export const firebaseDb = firebaseApp ? getFirestore(firebaseApp) : null;
 export const firebaseStorage = firebaseApp ? getStorage(firebaseApp) : null;
-export const firebaseFunctions = firebaseApp ? getFunctions(firebaseApp) : null;
+export const firebaseFunctions = firebaseApp ? getFunctions(firebaseApp, firebaseFunctionsRegion) : null;
 
 const shouldUseEmulators = env.useEmulators === "true";
 
@@ -111,6 +113,7 @@ if (shouldUseEmulators && firebaseAuth && firebaseDb && firebaseStorage && fireb
     connectAuthEmulator(firebaseAuth, `http://${authHost.host}:${authHost.port}`, {
       disableWarnings: true,
     });
+    firebaseAuth.settings.appVerificationDisabledForTesting = true;
   }
 
   if (firestoreHost) {
@@ -133,14 +136,15 @@ export function getFirebaseAppCheck() {
     return null;
   }
 
+  if (shouldUseEmulators) {
+    return null;
+  }
+
   if (cachedAppCheck) {
     return cachedAppCheck;
   }
 
-  if (shouldUseEmulators) {
-    (globalThis as typeof globalThis & { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string })
-      .FIREBASE_APPCHECK_DEBUG_TOKEN = env.appCheckDebugToken || true;
-  } else if (!env.appCheckSiteKey) {
+  if (!env.appCheckSiteKey) {
     return null;
   }
 

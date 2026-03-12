@@ -1,4 +1,4 @@
-export type AppRole = "admin" | "trainer" | "organizer";
+export type AppRole = "admin" | "trainer" | "organizer" | "participant";
 
 export type UserStatus = "active" | "invited";
 export type RelationStatus = "pending" | "approved" | "rejected" | "detached";
@@ -10,6 +10,7 @@ export type EnrollmentFinalStatus =
   | "partial";
 export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
 export type AccountRequestStatus = "pending" | "approved" | "rejected";
+export type PublicationApprovalStatus = "pending" | "accepted" | "rejected";
 export type EmandarBrandStatus = "official" | "supported";
 export type TrainingEventStatus = "active" | "confirmed" | "cancelled";
 export type EventCollaborationStatus =
@@ -17,6 +18,7 @@ export type EventCollaborationStatus =
   | "accepted"
   | "rejected"
   | "not-required";
+export type EnrollmentPhotoRequirement = "default" | "required" | "optional";
 
 export interface AppUser {
   id: string;
@@ -24,9 +26,12 @@ export interface AppUser {
   roles: AppRole[];
   primaryRole: AppRole;
   displayName: string;
-  email: string;
+  email?: string | null;
   phone: string;
   avatarUrl?: string;
+  avatarPath?: string;
+  authProvider?: "phone" | "password";
+  phoneVerifiedAt?: string;
   status: UserStatus;
   trainerProfileId?: string;
   organizerProfileId?: string;
@@ -49,6 +54,7 @@ export interface TrainerProfile {
   avatarPath?: string;
   avatarUploadedAt?: string;
   brandStatus: EmandarBrandStatus;
+  defaultEnrollmentPhotoRequired?: boolean;
 }
 
 export interface OrganizerProfile {
@@ -59,6 +65,8 @@ export interface OrganizerProfile {
   isVisible: boolean;
   contactName?: string;
   location?: string;
+  trainingIntent?: string;
+  defaultEnrollmentPhotoRequired?: boolean;
 }
 
 export interface TrainerOrganizerRelation {
@@ -111,6 +119,7 @@ export interface TrainingEvent {
   archivedByRole?: AppRole;
   archivedReason?: "relation-detached" | "manual";
   archivedForOrganizerId?: string | null;
+  enrollmentPhotoRequirement?: EnrollmentPhotoRequirement;
 }
 
 export interface AvailabilitySlot {
@@ -209,12 +218,31 @@ export interface NotificationRecord {
 export interface AccountRequest {
   id: string;
   displayName: string;
-  email: string;
+  email?: string | null;
   phone: string;
   requestedRoles?: Array<Exclude<AppRole, "admin">>;
   notes: string;
   status: AccountRequestStatus;
   createdAt: string;
+  authProvider?: "phone" | "password";
+  organizerTrainingIntent?: string;
+  selectedTrainerIds?: string[];
+  avatarPath?: string;
+}
+
+export interface TrainerPublicationApproval {
+  id: string;
+  requesterUserId: string;
+  requesterTrainerProfileId: string;
+  targetTrainerId: string;
+  targetTrainerUserId: string;
+  status: PublicationApprovalStatus;
+  createdAt: string;
+  decidedAt?: string;
+}
+
+export interface AppSettings {
+  signupPhotoRequired: boolean;
 }
 
 export interface DemoStore {
@@ -229,6 +257,8 @@ export interface DemoStore {
   enrollmentRequests: EnrollmentRequest[];
   notifications: NotificationRecord[];
   accountRequests: AccountRequest[];
+  trainerPublicationApprovals: TrainerPublicationApproval[];
+  appSettings: AppSettings;
 }
 
 export interface AuthSession {
@@ -241,15 +271,17 @@ export interface EnrollmentFormInput {
   telefon: string;
   polecenieOdKogo: string;
   wiadomosc: string;
-  photoFile: File;
+  photoFile?: File | null;
 }
 
 export interface AccountRequestInput {
   displayName: string;
-  email: string;
   phone: string;
   requestedRoles: Array<Exclude<AppRole, "admin">>;
   notes: string;
+  avatarFile?: File | null;
+  organizerTrainingIntent?: string;
+  selectedTrainerIds: string[];
 }
 
 export interface AvailabilityInput {
@@ -288,6 +320,7 @@ export interface TrainerProfileUpdateInput {
   specialties: string[];
   locations: string[];
   avatarFile?: File | null;
+  defaultEnrollmentPhotoRequired?: boolean;
 }
 
 export interface OrganizerProfileUpdateInput {
@@ -295,6 +328,7 @@ export interface OrganizerProfileUpdateInput {
   contactName: string;
   location: string;
   description: string;
+  defaultEnrollmentPhotoRequired?: boolean;
 }
 
 export interface TrainerBrandStatusUpdateInput {
@@ -315,6 +349,7 @@ export interface TrainingEventManagementUpdateInput {
   tags?: string[];
   scheduleDays?: TrainingEventScheduleDay[];
   transferTargetEventId?: string | null;
+  enrollmentPhotoRequirement?: EnrollmentPhotoRequirement;
 }
 
 export interface EnrollmentRequestManagementInput {

@@ -18,6 +18,7 @@ import {
   createUnifiedTrainingEvent as createTrainingEventAction,
   decideAccountRequest as decideAccountRequestAction,
   decideEnrollment as decideEnrollmentAction,
+  decideTrainerPublicationApproval as decideTrainerPublicationApprovalAction,
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   detachRelation as detachRelationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
@@ -34,7 +35,9 @@ import {
   syncOwnTrainerCalendarFeeds as syncOwnTrainerCalendarFeedsAction,
   removeTrainerCalendarFeed as removeTrainerCalendarFeedAction,
   updateTrainingEventBrandStatus as updateTrainingEventBrandStatusAction,
+  updateAppSettings as updateAppSettingsAction,
   updateTrainerCalendarFeedEnabled as updateTrainerCalendarFeedEnabledAction,
+  updateActiveRole as updateActiveRoleAction,
   updateTrainingEventManagement as updateTrainingEventManagementAction,
   updateOrganizerProfile as updateOrganizerProfileAction,
   updateTrainerBrandStatus as updateTrainerBrandStatusAction,
@@ -42,6 +45,7 @@ import {
 } from "@/data/firebaseRepository";
 import type {
   AccountRequestInput,
+  AppSettings,
   AppRole,
   AppUser,
   AvailabilityInput,
@@ -60,14 +64,20 @@ import type {
 interface AppStateContextValue {
   store: DemoStore;
   currentUser: AppUser | null;
+  availableRoles: AppRole[];
   authReady: boolean;
   signIn: (email: string, password: string) => Promise<AppUser>;
   signOut: () => Promise<void>;
+  setActiveRole: (role: AppRole) => Promise<void>;
   submitEnrollment: (input: EnrollmentFormInput) => Promise<void>;
   submitAccountRequest: (input: AccountRequestInput) => Promise<void>;
   decideAccountRequest: (
     requestId: string,
     status: "approved" | "rejected",
+  ) => Promise<void>;
+  decideTrainerPublicationApproval: (
+    approvalId: string,
+    status: "accepted" | "rejected",
   ) => Promise<void>;
   decideEnrollment: (
     requestId: string,
@@ -102,6 +112,7 @@ interface AppStateContextValue {
   syncOwnTrainerCalendarFeeds: () => Promise<void>;
   updateTrainerProfile: (input: TrainerProfileUpdateInput) => Promise<void>;
   updateOrganizerProfile: (input: OrganizerProfileUpdateInput) => Promise<void>;
+  updateAppSettings: (input: AppSettings) => Promise<void>;
   updateTrainerBrandStatus: (
     trainerId: string,
     brandStatus: EmandarBrandStatus,
@@ -118,6 +129,7 @@ interface AppStateContextValue {
     tags?: string[],
     scheduleDays?: TrainingEventScheduleDay[],
     transferTargetEventId?: string,
+    enrollmentPhotoRequirement?: "default" | "required" | "optional",
   ) => Promise<void>;
   notificationsCount: number;
   getRoleHomePath: (role: AppRole) => string;
@@ -158,6 +170,9 @@ function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStor
       privateStore.enrollmentRequests ?? publicStore.enrollmentRequests,
     notifications: privateStore.notifications ?? publicStore.notifications,
     accountRequests: privateStore.accountRequests ?? publicStore.accountRequests,
+    trainerPublicationApprovals:
+      privateStore.trainerPublicationApprovals ?? publicStore.trainerPublicationApprovals,
+    appSettings: privateStore.appSettings ?? publicStore.appSettings,
   };
 }
 
@@ -250,17 +265,26 @@ export function AppProviders({ children }: { children: ReactNode }) {
         (item) => item.userId === currentUser.id && !item.readAt,
       ).length
     : 0;
+  const availableRoles = currentUser?.roles ?? [];
 
   const value = useMemo<AppStateContextValue>(
     () => ({
       store,
       currentUser,
+      availableRoles,
       authReady,
       async signIn(email, password) {
         return withFriendlyErrors(() => signInAction(email, password));
       },
       async signOut() {
         await withFriendlyErrors(() => signOutAction());
+      },
+      async setActiveRole(role) {
+        if (!currentUser) {
+          throw new Error("Musisz byc zalogowany.");
+        }
+
+        await withFriendlyErrors(() => updateActiveRoleAction(currentUser, role));
       },
       async submitEnrollment(input) {
         await withFriendlyErrors(() => submitEnrollmentAction(input));
@@ -275,6 +299,15 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
         await withFriendlyErrors(() =>
           decideAccountRequestAction(requestId, currentUser, status),
+        );
+      },
+      async decideTrainerPublicationApproval(approvalId, status) {
+        if (!currentUser) {
+          throw new Error("Musisz byÄ‡ zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          decideTrainerPublicationApprovalAction(approvalId, status, currentUser),
         );
       },
       async decideEnrollment(requestId, decision) {
@@ -448,6 +481,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
         await withFriendlyErrors(() => updateOrganizerProfileAction(currentUser, input));
       },
+      async updateAppSettings(input) {
+        if (!currentUser) {
+          throw new Error("Musisz byc zalogowany.");
+        }
+
+        await withFriendlyErrors(() => updateAppSettingsAction(input));
+      },
       async updateTrainerBrandStatus(trainerId, brandStatus) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
@@ -486,6 +526,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
         tags,
         scheduleDays,
         transferTargetEventId,
+        enrollmentPhotoRequirement,
       ) {
         if (!currentUser) {
           throw new Error("Musisz byÄ‡ zalogowany.");
@@ -501,6 +542,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
               tags,
               scheduleDays,
               transferTargetEventId,
+              enrollmentPhotoRequirement,
             },
             currentUser,
           ),
@@ -510,7 +552,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
       getRoleHomePath,
       resolveEnrollmentPhoto,
     }),
-    [authReady, currentUser, notificationsCount, store],
+    [authReady, availableRoles, currentUser, notificationsCount, store],
   );
 
   return (

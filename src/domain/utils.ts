@@ -6,6 +6,7 @@ import type {
   ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFinalStatus,
+  OrganizerProfile,
   SharedAvailabilityWindow,
   TrainingEventScheduleDay,
   TrainerOrganizerRelation,
@@ -354,9 +355,31 @@ export function getRoleLabel(role: AppRole) {
       return "Przekazujący Wiedzę";
     case "organizer":
       return "Organizator";
+    case "participant":
+      return "Uczestnik";
     default:
       return role;
   }
+}
+
+export function isEnrollmentPhotoRequiredForEvent(
+  event: Pick<TrainingEvent, "enrollmentPhotoRequirement" | "organizerId">,
+  trainer: Pick<TrainerProfile, "defaultEnrollmentPhotoRequired"> | undefined,
+  organizer: Pick<OrganizerProfile, "defaultEnrollmentPhotoRequired"> | undefined,
+) {
+  if (event.enrollmentPhotoRequirement === "required") {
+    return true;
+  }
+
+  if (event.enrollmentPhotoRequirement === "optional") {
+    return false;
+  }
+
+  if (event.organizerId) {
+    return organizer?.defaultEnrollmentPhotoRequired === true;
+  }
+
+  return trainer?.defaultEnrollmentPhotoRequired === true;
 }
 
 export function hasRole(

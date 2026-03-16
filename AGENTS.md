@@ -34,3 +34,15 @@
 - The frontend already connects to Firebase emulators when `VITE_USE_FIREBASE_EMULATORS=true`.
 - Tests use a separate temporary Firebase emulator config and different ports, so do not change them casually.
 - If `firebase` is not available globally, always use the npm scripts above or `npx firebase`.
+
+## Git Flow Rules
+
+- This repository uses Git Flow with `master` as the production branch and `develop` as the integration branch.
+- Never implement task work directly on `master` or `develop`.
+- For normal work, create branches from `develop` using `feature/<short-name>` or `bugfix/<short-name>`.
+- For urgent production fixes, create branches from `master` using `hotfix/<short-name>`.
+- Merge completed feature and bugfix branches back into `develop`.
+- Merge release and hotfix work back into `master`, and also keep `develop` updated with the same changes.
+- When multiple agents work in parallel, each agent must use a separate branch and avoid sharing a working branch.
+- Before starting work, verify the current branch and create a new Git Flow branch if needed.
+- Before finishing work, merge into the correct long-lived branch instead of leaving changes only on an agent branch.

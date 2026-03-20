@@ -19,10 +19,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { AppUser, EmandarBrandStatus, TrainingEvent } from "@/domain/types";
 import { updateActiveRole as updateActiveRoleAction } from "@/data/firebaseRepository";
-import {
-  ensurePhoneParticipantProfile,
-  fetchAppUser,
-} from "@/data/firebaseRepository";
+import { fetchAppUser } from "@/data/firebaseRepository";
 import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
@@ -110,6 +107,15 @@ const demoLoginSections = [
       { label: "Karolina", email: "karolina@emandar.pl", accent: "Organizator", role: "organizer" },
       { label: "Marek", email: "marek@emandar.pl", accent: "Organizator", role: "organizer" },
       { label: "Organizator Demo", email: "organizator-demo@emandar.pl", accent: "Organizator", role: "organizer" },
+    ],
+  },
+  {
+    title: "Uczestnicy",
+    description: "Konta uczestników do testowania własnego dashboardu, archiwum i przenoszenia zapisów.",
+    accounts: [
+      { label: "Grzegorz Emanowicz", email: "grzegorz.emanowicz@emandar.pl", accent: "Uczestnik", role: "participant" },
+      { label: "Grzegorz Chotnicki", email: "grzegorz.chotnicki@emandar.pl", accent: "Uczestnik", role: "participant" },
+      { label: "Ola Chotnicka", email: "ola.chotnicka@emandar.pl", accent: "Uczestnik", role: "participant" },
     ],
   },
 ] as const;
@@ -353,7 +359,7 @@ export function LandingPage() {
           <p className="mt-6 max-w-3xl text-lg text-brand-muted">
             W tej wersji dane publiczne, logowanie, zgłoszenia i zdjęcia trafiają
             już do Firebase. Możesz przejść do kalendarza, sprawdzić
-            Przekazujących Wiedzę, wejść w Wydarzenia Społeczności albo zalogować się do panelu.
+            Przekazujących Wiedzę albo zalogować się do panelu.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
             <Link
@@ -368,12 +374,6 @@ export function LandingPage() {
               className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
             >
               Poznaj Przekazujących Wiedzę
-            </Link>
-            <Link
-              to="/wydarzenia-spolecznosci"
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
-            >
-              Wydarzenia Społeczności
             </Link>
             <Link
               to="/login"
@@ -399,13 +399,6 @@ export function LandingPage() {
                 "Publiczne profile Przekazujących Wiedzę oraz ich najbliższe wydarzenia.",
               icon: Users,
               to: "/trenerzy",
-            },
-            {
-              title: "Wydarzenia Społeczności",
-              description:
-                "Osobna strona z nieoficjalnymi wydarzeniami wspieranymi przez Emandar.",
-              icon: CalendarDays,
-              to: "/wydarzenia-spolecznosci",
             },
             {
               title: "Panel",
@@ -458,7 +451,7 @@ export function CalendarPage() {
     <EventFeedSection
       eyebrow="Kalendarz"
       title="Najblizsze grupy Emandar"
-      description="Znajdz wydarzenie dla siebie i popros o kontakt. Osobna zakladka Wydarzenia Spolecznosci zbiera inicjatywy niezalezne."
+      description="Znajdz wydarzenie dla siebie i popros o kontakt z osoba prowadzaca lub organizatorem."
       emptyTitle="Brak opublikowanych szkoleń"
       emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
       events={events}
@@ -467,31 +460,7 @@ export function CalendarPage() {
 }
 
 export function CommunityEventsPage() {
-  const { store } = useAppState();
-  const events = useMemo(
-    () =>
-      sortEventsByDate(
-        store.trainingEvents.filter(
-          (item) =>
-            item.isPublished &&
-            !isTrainingEventArchived(item) &&
-            resolveBrandStatus(item.brandStatus) === "supported" &&
-            isTrainingEventCollaborationAccepted(item),
-        ),
-      ),
-    [store.trainingEvents],
-  );
-
-  return (
-    <EventFeedSection
-      eyebrow="Spolecznosc"
-      title="Wydarzenia Spolecznosci"
-      description="To osobna przestrzen dla nieoficjalnych wydarzen wspieranych przez Emandar. Znajdziesz tu niezalezne inicjatywy, kameralne spotkania i szkolenia spolecznosci."
-      emptyTitle="Brak wydarzeń społeczności"
-      emptyDescription="Gdy pojawią się nowe inicjatywy wspierane przez społeczność, zobaczysz je tutaj."
-      events={events}
-    />
-  );
+  return <Navigate to="/kalendarz" replace />;
 }
 
 export function EventDetailsPage() {
@@ -514,13 +483,16 @@ export function EventDetailsPage() {
     return <Navigate to="/kalendarz" replace />;
   }
 
+  if (isCommunityBrandStatus(event.brandStatus)) {
+    return <Navigate to="/kalendarz" replace />;
+  }
+
   if (isTrainingEventArchived(event)) {
-    return <Navigate to={isCommunityBrandStatus(event.brandStatus) ? "/wydarzenia-spolecznosci" : "/kalendarz"} replace />;
+    return <Navigate to="/kalendarz" replace />;
   }
 
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
-  const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventStatus = resolveTrainingEventStatus(event.status);
   const isCancelled = eventStatus === "cancelled";
   const eventTags = getEventTags(event);
@@ -565,7 +537,7 @@ export function EventDetailsPage() {
         wiadomosc: "",
         photoFile: null,
       });
-      navigate(isCommunityEvent ? "/wydarzenia-spolecznosci" : "/kalendarz");
+      navigate("/kalendarz");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać zgłoszenia.",
@@ -610,11 +582,7 @@ export function EventDetailsPage() {
             Maks. {event.capacity} uczestnikow
           </p>
 
-          <div
-            className={`mt-8 grid gap-4 ${
-              isCommunityEvent ? "md:grid-cols-1" : "md:grid-cols-2"
-            }`}
-          >
+          <div className="mt-8 grid gap-4 md:grid-cols-2">
             <div className="rounded-3xl border border-brand-line bg-white p-5">
               <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
                 Przekazujący Wiedzę
@@ -624,19 +592,17 @@ export function EventDetailsPage() {
               </p>
               <p className="mt-2 text-brand-muted">{trainer.heroNote}</p>
             </div>
-            {!isCommunityEvent && (
-              <div className="rounded-3xl border border-brand-line bg-white p-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-                  Organizator
-                </p>
-                <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                    {getPublicOrganizerName(event, undefined, trainer.displayName)}
-                  </p>
-                  <p className="mt-2 text-brand-muted">
-                    {getPublicOrganizerDescription(event, undefined, trainer.heroNote)}
-                  </p>
-                </div>
-              )}
+            <div className="rounded-3xl border border-brand-line bg-white p-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+                Organizator
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+                {getPublicOrganizerName(event, undefined, trainer.displayName)}
+              </p>
+              <p className="mt-2 text-brand-muted">
+                {getPublicOrganizerDescription(event, undefined, trainer.heroNote)}
+              </p>
+            </div>
           </div>
           {eventTags.length > 0 && (
             <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-5">
@@ -668,13 +634,27 @@ export function EventDetailsPage() {
             Chcę poprosić o kontakt w sprawie tego szkolenia
           </h2>
           <p className="mt-3 text-brand-muted">
-            {isCommunityEvent
-              ? "Zgloszenie trafi bezposrednio do osoby prowadzacej to wydarzenie."
-              : "Zgłoszenie trafi jednocześnie do Przekazującego Wiedzę i organizatora."}{" "}
+            Zgłoszenie trafi jednocześnie do Przekazującego Wiedzę i organizatora.{" "}
             {photoRequired
               ? "Zdjęcie jest wymagane i trafia do Firebase Storage tylko dla uprawnionych osób."
               : "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."}
           </p>
+          <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4">
+            <p className="text-sm font-semibold text-brand-navy">
+              Chcesz wrócić do swoich zgłoszeń później?
+            </p>
+            <p className="mt-2 text-sm text-brand-muted">
+              Załóż konto uczestnika dopiero wtedy, gdy chcesz mieć własną przestrzeń
+              do przyszłych zapisów. Najpierw potwierdzisz numer telefonu SMS-em.
+            </p>
+            <Link
+              to={`/rejestracja?role=participant&source=enrollment&eventId=${encodeURIComponent(event.id)}`}
+              className="mt-4 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2.5 text-sm font-semibold text-brand-navy"
+            >
+              Załóż konto
+              <ArrowRight size={14} />
+            </Link>
+          </div>
           {isCancelled && (
             <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
               Zapisy sa wstrzymane, bo to wydarzenie ma status anulowane.
@@ -745,11 +725,7 @@ export function EventDetailsPage() {
                   wiadomosc: event.target.value,
                 }))
               }
-              placeholder={
-                isCommunityEvent
-                  ? "Napisz wiadomosc do osoby prowadzacej wydarzenie"
-                  : "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
-              }
+              placeholder="Napisz wiadomość do Przekazującego Wiedzę i organizatora"
               className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
           </div>
@@ -873,7 +849,7 @@ export function TrainerDetailsPage() {
   }
 
   if (!trainer.isVisible || !isOfficialTrainerProfile(trainer.brandStatus)) {
-    return <Navigate to="/wydarzenia-spolecznosci" replace />;
+    return <Navigate to="/trenerzy" replace />;
   }
 
   const publicEvents = sortEventsByDate(
@@ -1073,17 +1049,9 @@ function SmsLoginScreen() {
           navigate(getRoleHomePath(appUser.role));
           return;
         } catch {
-          try {
-            await ensurePhoneParticipantProfile();
-            const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
-            toast.success("Zalogowano do przestrzeni uczestnika.");
-            navigate(getRoleHomePath(appUser.role));
-            return;
-          } catch {
-            toast.info("Numer potwierdzony. Uzupełnij teraz rejestrację konta.");
-            navigate(`/rejestracja?phone=${encodeURIComponent(phone)}`);
-            return;
-          }
+          toast.info("Numer potwierdzony. Uzupełnij teraz rejestrację konta.");
+          navigate(`/rejestracja?phone=${encodeURIComponent(phone)}`);
+          return;
         }
       }
 
@@ -1097,7 +1065,7 @@ function SmsLoginScreen() {
 
   async function handleQuickLogin(
     emailToUse: string,
-    targetRole: "admin" | "trainer" | "organizer",
+    targetRole: "admin" | "trainer" | "organizer" | "participant",
   ) {
     setQuickLoginEmail(emailToUse);
 
@@ -1253,10 +1221,11 @@ function SmsRegisterScreen() {
   const { currentUser, getRoleHomePath, store, submitAccountRequest } = useAppState();
   const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const searchParams =
+    typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+  const participantSignup = searchParams.get("role") === "participant";
   const prefetchedPhone =
-    typeof window === "undefined"
-      ? ""
-      : new URLSearchParams(window.location.search).get("phone") ?? "";
+    typeof window === "undefined" ? "" : searchParams.get("phone") ?? "";
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
@@ -1268,7 +1237,9 @@ function SmsRegisterScreen() {
   const [form, setForm] = useState({
     displayName: "",
     phone: prefetchedPhone,
-    requestedRoles: ["participant"] as Array<"trainer" | "organizer" | "participant">,
+    requestedRoles: [
+      participantSignup ? "participant" : "organizer",
+    ] as Array<"trainer" | "organizer" | "participant">,
     notes: "",
     organizerTrainingIntent: "",
     selectedTrainerIds: [] as string[],
@@ -1278,8 +1249,7 @@ function SmsRegisterScreen() {
     () => store.trainers.filter((trainer) => !isCommunityBrandStatus(trainer.brandStatus)),
     [store.trainers],
   );
-  const shouldSelectTrainers =
-    form.requestedRoles.includes("organizer") || form.requestedRoles.includes("trainer");
+  const shouldSelectTrainers = !participantSignup;
 
   useEffect(() => {
     if (firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous) {
@@ -1300,15 +1270,6 @@ function SmsRegisterScreen() {
 
   if (currentUser) {
     return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
-  }
-
-  function toggleRole(role: "trainer" | "organizer" | "participant", checked: boolean) {
-    setForm((current) => ({
-      ...current,
-      requestedRoles: checked
-        ? Array.from(new Set([...current.requestedRoles, role]))
-        : current.requestedRoles.filter((item) => item !== role),
-    }));
   }
 
   function toggleTrainer(trainerId: string, checked: boolean) {
@@ -1427,13 +1388,10 @@ function SmsRegisterScreen() {
         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
           Rejestracja
         </p>
-        <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
-          Załóż konto przez numer telefonu
-        </h1>
         <p className="mt-4 max-w-3xl text-lg text-brand-muted">
-          W tym flow zbieramy tylko to, co potrzebne od razu: imię i nazwisko,
-          numer telefonu, zdjęcie, notatkę i typ konta. Logowanie oraz autoryzacja
-          odbywają się wyłącznie przez SMS.
+          {participantSignup
+            ? "Konto uczestnika założysz po potwierdzeniu aktualnego numeru telefonu."
+            : "Publiczna rejestracja jest teraz otwarta tylko dla organizatorów i działa przez numer telefonu."}
         </p>
 
         <form onSubmit={handleSubmit} className="mt-8 grid gap-5">
@@ -1519,55 +1477,21 @@ function SmsRegisterScreen() {
             <div id="register-phone-recaptcha" />
           </div>
 
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Typ konta</span>
-            <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4">
-              <label className="flex items-start gap-3 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("participant")}
-                  onChange={(event) => toggleRole("participant", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Uczestnik</span>
-                  <span className="text-sm text-brand-muted">
-                    Konto gotowe pod logowanie i przyszły panel uczestnika.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("organizer")}
-                  onChange={(event) => toggleRole("organizer", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Organizator</span>
-                  <span className="text-sm text-brand-muted">
-                    Organizujesz oficjalne szkolenia po akceptacji relacji z trenerami.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("trainer")}
-                  onChange={(event) => toggleRole("trainer", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Wydarzenia społeczności</span>
-                  <span className="text-sm text-brand-muted">
-                    Tworzysz własne wydarzenia i prosisz trenerów o zgodę na publikację.
-                  </span>
-                </span>
-              </label>
+          <div className="grid gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Zakres konta</span>
+            <div className="rounded-[2rem] border border-brand-line bg-brand-shell p-4 text-brand-navy">
+              <p className="text-sm font-semibold">
+                {participantSignup ? "Konto uczestnika" : "Konto organizatora"}
+              </p>
+              <p className="mt-2 text-sm text-brand-muted">
+                {participantSignup
+                  ? "To konto przyda Ci się do przyszłych zapisów i własnej przestrzeni uczestnika."
+                  : "Organizujesz oficjalne szkolenia po akceptacji relacji z wybranymi Przekazującymi Wiedzę."}
+              </p>
             </div>
-          </label>
+          </div>
 
-          {form.requestedRoles.includes("organizer") && (
+          {!participantSignup && (
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">
                 Jakie szkolenia chcesz organizować?
@@ -1596,7 +1520,7 @@ function SmsRegisterScreen() {
                 {officialTrainers.length === 0 && (
                   <p className="text-sm text-brand-muted">
                     Brak dostępnych trenerów do wyboru. Dodaj najpierw widoczne profile
-                    trenerów w danych aplikacji albo skorzystaj chwilowo z konta uczestnika.
+                    trenerów w danych aplikacji.
                   </p>
                 )}
                 {officialTrainers.map((trainer) => (
@@ -1641,7 +1565,9 @@ function SmsRegisterScreen() {
           </label>
 
           <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Notatka</span>
+            <span className="text-sm font-semibold text-brand-navy">
+              {participantSignup ? "Kilka słów o sobie" : "Notatka"}
+            </span>
             <textarea
               required
               rows={6}
@@ -1652,7 +1578,11 @@ function SmsRegisterScreen() {
                   notes: event.target.value,
                 }))
               }
-              placeholder="Kilka słów o Tobie. Jakich wartości szukasz w swoim szkoleniu?"
+              placeholder={
+                participantSignup
+                  ? "Napisz kilka słów o sobie i czego szukasz w najbliższych szkoleniach."
+                  : "Kilka słów o Tobie. Jakich wartości szukasz w swoim szkoleniu?"
+              }
               className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
           </label>
@@ -1662,7 +1592,11 @@ function SmsRegisterScreen() {
             disabled={loading || !smsVerified}
             className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
           >
-            {loading ? "Zakładanie konta..." : "Załóż konto"}
+            {loading
+              ? "Zakładanie konta..."
+              : participantSignup
+                ? "Załóż konto uczestnika"
+                : "Załóż konto organizatora"}
             <ArrowRight size={16} />
           </button>
         </form>
@@ -1706,7 +1640,7 @@ function LoginPageLegacyUnused() {
 
   async function handleQuickLogin(
     emailToUse: string,
-    targetRole: "admin" | "trainer" | "organizer",
+    targetRole: "admin" | "trainer" | "organizer" | "participant",
   ) {
     setQuickLoginEmail(emailToUse);
 
@@ -1777,8 +1711,8 @@ function LoginPageLegacyUnused() {
               Dostęp do panelu
             </div>
             <p className="mt-2">
-              Jesteś organizatorem grup? Zarejestruj się, wybierz swojego
-              Przekazującego Wiedzę i poczekaj na akceptację.
+              Jesteś organizatorem grup? Potwierdź numer telefonu, wybierz swojego
+              Przekazującego Wiedzę i załóż konto organizatora.
             </p>
             <Link
               to="/rejestracja"

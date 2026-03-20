@@ -72,14 +72,6 @@ export function PublicLayout() {
             >
               Przekazujacy Wiedze
             </NavLink>
-            <NavLink
-              to="/wydarzenia-spolecznosci"
-              className={() =>
-                exactNavLinkClass(location.pathname, "/wydarzenia-spolecznosci")
-              }
-            >
-              Wydarzenia spolecznosci
-            </NavLink>
           </nav>
 
           <div className="flex items-center gap-3">
@@ -92,13 +84,22 @@ export function PublicLayout() {
                 Moja Przestrzen
               </Link>
             ) : (
-              <Link
-                to="/login"
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-2.5 text-sm font-semibold text-brand-navy"
-              >
-                <ShieldCheck size={16} />
-                Zaloguj sie
-              </Link>
+              <>
+                <Link
+                  to="/login"
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-2.5 text-sm font-semibold text-brand-navy"
+                >
+                  <ShieldCheck size={16} />
+                  Logowanie
+                </Link>
+                <Link
+                  to="/rejestracja"
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-2.5 text-sm font-semibold text-white shadow-soft"
+                >
+                  <ShieldCheck size={16} />
+                  Rejestracja
+                </Link>
+              </>
             )}
           </div>
         </div>
@@ -121,9 +122,6 @@ export function PublicLayout() {
             <Link to="/trenerzy" className="hover:text-brand-navy">
               Przekazujacy Wiedze
             </Link>
-            <Link to="/wydarzenia-spolecznosci" className="hover:text-brand-navy">
-              Wydarzenia spolecznosci
-            </Link>
             <Link to={userHomePath} className="hover:text-brand-navy">
               {currentUser ? "Moja Przestrzen" : "Panel"}
             </Link>
@@ -138,7 +136,10 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
   const base = [{ to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard }];
 
   if (role === "participant") {
-    return base;
+    return [
+      ...base,
+      { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
+    ];
   }
 
   if (role === "organizer") {

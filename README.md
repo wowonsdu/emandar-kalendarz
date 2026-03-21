@@ -1,11 +1,24 @@
 
-  # Nowoczesna strona dla odjebao.me
+# Emandar Kalendarz
 
-  This is a code bundle for Nowoczesna strona dla odjebao.me. The original project is available at https://www.figma.com/design/KHMhhfZ8q8ewGWaGYEdyne/Nowoczesna-strona-dla-odjebao.me.
+React + Firebase application for the public Emandar calendar, trainer directory, community events, and operational panel for trainers, organizers, and admin users.
 
-  ## Running the code
+## Local development
 
-  Run `npm i` to install the dependencies.
+1. Run `npm i`.
+2. Run `npm run dev` for the app against configured Firebase services.
+3. Run `npm run dev:emu` together with `npm run emu:start` for emulator-based work.
 
-  Run `npm run dev` to start the development server.
+## Verification
+
+- `npm test`
+- `npm run test:firebase`
+- `npm run build`
+- `npm run release:check`
+
+## Firebase
+
+- Default project: `emandar-app`
+- Deploy command: `npm run firebase:deploy`
+- Emulator command: `npm run emu:start`
   

@@ -6,7 +6,9 @@ import type {
   ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFinalStatus,
+  EnrollmentRequest,
   OrganizerProfile,
+  ParticipantEnrollmentStatus,
   SharedAvailabilityWindow,
   TrainingEventScheduleDay,
   TrainerOrganizerRelation,
@@ -45,6 +47,40 @@ export function deriveEnrollmentFinalStatus(
   }
 
   return "pending";
+}
+
+export function resolveParticipantEnrollmentStatus(
+  value: ParticipantEnrollmentStatus | null | undefined,
+): ParticipantEnrollmentStatus {
+  return value === "cancelled" ? "cancelled" : "active";
+}
+
+export function isParticipantEnrollmentActive(
+  request: Pick<EnrollmentRequest, "participantStatus" | "finalStatus">,
+) {
+  return (
+    resolveParticipantEnrollmentStatus(request.participantStatus) === "active" &&
+    request.finalStatus !== "rejected"
+  );
+}
+
+export function getParticipantEnrollmentStatusLabel(
+  request: Pick<EnrollmentRequest, "participantStatus" | "finalStatus">,
+) {
+  if (resolveParticipantEnrollmentStatus(request.participantStatus) === "cancelled") {
+    return "zrezygnowano";
+  }
+
+  switch (request.finalStatus) {
+    case "accepted":
+      return "przyjęte";
+    case "partial":
+      return "częściowo przyjęte";
+    case "rejected":
+      return "odrzucone";
+    default:
+      return "oczekuje";
+  }
 }
 
 export function canOrganizerAccessTrainer(

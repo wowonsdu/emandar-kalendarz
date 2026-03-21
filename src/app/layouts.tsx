@@ -72,6 +72,14 @@ export function PublicLayout() {
             >
               Przekazujacy Wiedze
             </NavLink>
+            <NavLink
+              to="/wydarzenia-spolecznosci"
+              className={() =>
+                exactNavLinkClass(location.pathname, "/wydarzenia-spolecznosci")
+              }
+            >
+              Społeczność
+            </NavLink>
           </nav>
 
           <div className="flex items-center gap-3">
@@ -119,6 +127,9 @@ export function PublicLayout() {
             <Link to="/kalendarz" className="hover:text-brand-navy">
               Najblizsze szkolenia
             </Link>
+            <Link to="/wydarzenia-spolecznosci" className="hover:text-brand-navy">
+              Wydarzenia społeczności
+            </Link>
             <Link to="/trenerzy" className="hover:text-brand-navy">
               Przekazujacy Wiedze
             </Link>
@@ -147,7 +158,6 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
       { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
-      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
       {
         to: "/panel/terminy",
         label: "Terminy Przekazujacych Wiedze",
@@ -165,7 +175,6 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
         ...base,
         { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
         { to: "/panel/szkolenia", label: "Moje wydarzenia", icon: CalendarDays },
-        { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
         { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
         { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
       ];
@@ -175,7 +184,6 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
       { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
-      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
       { to: "/panel/terminy", label: "Dostepnosc", icon: CalendarDays },
       { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
       { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },

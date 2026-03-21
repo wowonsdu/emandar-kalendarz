@@ -9,11 +9,14 @@ import {
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  getParticipantEnrollmentStatusLabel,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
+  isParticipantEnrollmentActive,
   isTrainingEventArchived,
   isTrainingEventCollaborationAccepted,
   resolveOrganizerCollaborationStatus,
+  resolveParticipantEnrollmentStatus,
   sortEventsByFillRate,
   sortEventsByDate,
 } from "./utils";
@@ -39,6 +42,42 @@ describe("deriveEnrollmentFinalStatus", () => {
     expect(deriveEnrollmentFinalStatus("accepted", "pending", false)).toBe(
       "accepted",
     );
+  });
+});
+
+describe("participant enrollment status", () => {
+  it("defaults missing participant status to active", () => {
+    expect(resolveParticipantEnrollmentStatus(undefined)).toBe("active");
+  });
+
+  it("treats cancelled enrollment as inactive regardless of review status", () => {
+    expect(
+      isParticipantEnrollmentActive({
+        participantStatus: "cancelled",
+        finalStatus: "accepted",
+      }),
+    ).toBe(false);
+    expect(
+      getParticipantEnrollmentStatusLabel({
+        participantStatus: "cancelled",
+        finalStatus: "accepted",
+      }),
+    ).toBe("zrezygnowano");
+  });
+
+  it("treats rejected enrollment as archived even without participant cancellation", () => {
+    expect(
+      isParticipantEnrollmentActive({
+        participantStatus: "active",
+        finalStatus: "rejected",
+      }),
+    ).toBe(false);
+    expect(
+      getParticipantEnrollmentStatusLabel({
+        participantStatus: "active",
+        finalStatus: "rejected",
+      }),
+    ).toBe("odrzucone");
   });
 });
 

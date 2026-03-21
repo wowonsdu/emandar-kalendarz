@@ -12,26 +12,29 @@ const FIREBASE_TOOLS_PATH = resolve(
   "configstore",
   "firebase-tools.json",
 );
-const DOTENV_PATH = resolve(process.cwd(), ".env.local");
+const DOTENV_PATHS = [
+  resolve(process.cwd(), ".env.local"),
+  resolve(process.cwd(), ".env.production"),
+];
 const FIREBASE_CLI_CLIENT_ID =
   "563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com";
 const FIREBASE_CLI_CLIENT_SECRET = "j9iVZfS8kkCEFUPaAeJV0sAi";
 
 const trainers = [
-  { id: "trainer-11", displayName: "Dariusz", email: "dariusz@emandar.pl", city: "Warszawa" },
-  { id: "trainer-1", displayName: "Jacek", email: "jacek@emandar.pl", city: "Warszawa" },
-  { id: "trainer-2", displayName: "Marcin", email: "marcin@emandar.pl", city: "Kraków" },
-  { id: "trainer-10", displayName: "Dorota", email: "dorota@emandar.pl", city: "Lublin" },
-  { id: "trainer-4", displayName: "Asia", email: "asia@emandar.pl", city: "Wrocław" },
-  { id: "trainer-5", displayName: "Krzysiu", email: "krzysiu@emandar.pl", city: "Poznań" },
-  { id: "trainer-6", displayName: "Klaudia", email: "klaudia@emandar.pl", city: "Gdańsk" },
-  { id: "trainer-3", displayName: "Beata", email: "beata@emandar.pl", city: "Łódź" },
+  { id: "trainer-11", displayName: "Dariusz", email: "dariusz@emandar.pl", phone: "+48 601 100 100", city: "Warszawa" },
+  { id: "trainer-1", displayName: "Jacek", email: "jacek@emandar.pl", phone: "+48 601 100 101", city: "Warszawa" },
+  { id: "trainer-2", displayName: "Marcin", email: "marcin@emandar.pl", phone: "+48 601 100 102", city: "Kraków" },
+  { id: "trainer-10", displayName: "Dorota", email: "dorota@emandar.pl", phone: "+48 601 909 808", city: "Lublin" },
+  { id: "trainer-4", displayName: "Asia", email: "asia@emandar.pl", phone: "+48 601 100 104", city: "Wrocław" },
+  { id: "trainer-5", displayName: "Krzysiu", email: "krzysiu@emandar.pl", phone: "+48 601 100 105", city: "Poznań" },
+  { id: "trainer-6", displayName: "Klaudia", email: "klaudia@emandar.pl", phone: "+48 601 100 106", city: "Gdańsk" },
+  { id: "trainer-3", displayName: "Beata", email: "beata@emandar.pl", phone: "+48 601 100 103", city: "Łódź" },
 ];
 
 const organizers = [
-  { id: "organizer-karolina", displayName: "Karolina", email: "karolina@emandar.pl", city: "Warszawa" },
-  { id: "organizer-marek", displayName: "Marek", email: "marek@emandar.pl", city: "Kraków" },
-  { id: "organizer-demo", displayName: "Organizator Demo", email: "organizator-demo@emandar.pl", city: "Online" },
+  { id: "organizer-karolina", displayName: "Karolina", email: "karolina@emandar.pl", phone: "+48 602 100 201", city: "Warszawa" },
+  { id: "organizer-marek", displayName: "Marek", email: "marek@emandar.pl", phone: "+48 602 100 202", city: "Kraków" },
+  { id: "organizer-demo", displayName: "Organizator Demo", email: "organizator-demo@emandar.pl", phone: "+48 602 100 203", city: "Online" },
 ];
 
 const candidateOrganizers = [
@@ -128,6 +131,24 @@ const pendingAccountRequests = [
   },
 ];
 
+const participantAccounts = [
+  {
+    displayName: "Grzegorz Emanowicz",
+    email: "grzegorz.emanowicz@emandar.pl",
+    phone: "+48 605 100 301",
+  },
+  {
+    displayName: "Grzegorz Chotnicki",
+    email: "grzegorz.chotnicki@emandar.pl",
+    phone: "+48 605 100 302",
+  },
+  {
+    displayName: "Ola Chotnicka",
+    email: "ola.chotnicka@emandar.pl",
+    phone: "+48 605 100 303",
+  },
+];
+
 function getAdminApp(projectId, refreshTokenValue) {
   const existing = getApps().find((app) => app.name === "seed-demo-network");
   if (existing) {
@@ -176,6 +197,16 @@ async function loadEnvFile(filePath) {
   } catch {
     return {};
   }
+}
+
+async function loadEnvFromCandidates() {
+  const merged = {};
+
+  for (const filePath of DOTENV_PATHS) {
+    Object.assign(merged, await loadEnvFile(filePath));
+  }
+
+  return merged;
 }
 
 async function loadFirebaseToolsConfig() {
@@ -325,6 +356,17 @@ function makeSchedule(dayOffset) {
   ];
 }
 
+function getFutureEventCount(trainerIndex) {
+  return 5 + (trainerIndex % 6);
+}
+
+function makeFutureSchedule(dayOffset, durationDays = 2) {
+  return Array.from({ length: durationDays }, (_, index) => ({
+    startsAt: isoDate(dayOffset + index, 10),
+    endsAt: isoDate(dayOffset + index, 17),
+  }));
+}
+
 function buildEventDoc({
   id,
   trainer,
@@ -389,6 +431,153 @@ function buildEventDoc({
   };
 }
 
+function buildFutureTrainingEventDoc({
+  id,
+  trainer,
+  organizer,
+  trainerIndex,
+  eventIndex,
+}) {
+  const startOffset = 21 + trainerIndex * 28 + eventIndex * 9;
+  const durationDays = eventIndex % 3 === 2 ? 3 : 2;
+  const scheduleDays = makeFutureSchedule(startOffset, durationDays);
+  const startsAt = scheduleDays[0].startsAt;
+  const endsAt = scheduleDays[scheduleDays.length - 1].endsAt;
+  const trainingTypes = [
+    "Warsztat",
+    "Warsztat weekendowy",
+    "Spotkanie grupowe",
+    "Intensyw",
+  ];
+
+  return {
+    id,
+    trainerId: trainer.id,
+    organizerId: organizer.id,
+    trainerUserId: trainer.userId,
+    organizerUserId: organizer.userId,
+    title: `${trainer.displayName} | grupa ${eventIndex + 1}`,
+    summary: `Przyszły termin ${trainer.displayName} przygotowany do testowania publicznego kalendarza i zgłoszeń.`,
+    description: `${trainer.displayName} prowadzi kolejne wydarzenie seedowane w przyszłym terminie. Rekord służy do testowania publicznego kalendarza, profilu trenera oraz zapisów uczestników.`,
+    type: trainingTypes[eventIndex % trainingTypes.length],
+    startsAt,
+    endsAt,
+    scheduleDays,
+    location: `${organizer.city} / ${trainer.city}`,
+    tags: ["seed", "przyszłe", trainer.slug ?? trainer.displayName.toLowerCase()],
+    capacity: 14 + ((trainerIndex + eventIndex) % 8),
+    enrolledCount: 0,
+    isPublished: true,
+    imageHint: "future-seed",
+    brandStatus: "official",
+    status: "confirmed",
+    minimumParticipants: 6 + (eventIndex % 4),
+    requiresOrganizerApproval: true,
+    trainerCollaborationStatus: "accepted",
+    organizerCollaborationStatus: "accepted",
+    selfManagedByTrainer: false,
+    createdByRole: eventIndex % 2 === 0 ? "trainer" : "organizer",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function buildParticipantEventDoc({
+  id,
+  trainer,
+  organizer,
+  title,
+  summary,
+  type,
+  dayOffset,
+  status = "confirmed",
+  archivedAt = null,
+  enrolledCount = 0,
+  capacity = 16,
+}) {
+  const scheduleDays = makeSchedule(dayOffset);
+  return {
+    id,
+    trainerId: trainer.id,
+    organizerId: organizer?.id ?? null,
+    trainerUserId: trainer.userId,
+    organizerUserId: organizer?.userId ?? null,
+    title,
+    summary,
+    description: `${title} przygotowane do testowania panelu uczestnika.`,
+    type,
+    startsAt: scheduleDays[0].startsAt,
+    endsAt: scheduleDays[scheduleDays.length - 1].endsAt,
+    scheduleDays,
+    location: organizer ? `${organizer.city} / ${trainer.city}` : trainer.city,
+    tags: ["participant-demo"],
+    capacity,
+    enrolledCount,
+    isPublished: true,
+    imageHint: "participant-demo",
+    brandStatus: "official",
+    status,
+    minimumParticipants: 6,
+    requiresOrganizerApproval: Boolean(organizer),
+    trainerCollaborationStatus: "accepted",
+    organizerCollaborationStatus: organizer ? "accepted" : "not-required",
+    selfManagedByTrainer: !organizer,
+    createdByRole: organizer ? "organizer" : "trainer",
+    archivedAt,
+    archivedReason: archivedAt ? "manual" : null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function buildParticipantEnrollmentDoc({
+  id,
+  event,
+  trainer,
+  organizer,
+  participant,
+  finalStatus,
+  participantStatus = "active",
+  createdAt,
+}) {
+  return {
+    id,
+    eventId: event.id,
+    trainerId: trainer.id,
+    organizerId: organizer?.id ?? null,
+    submitterUid: participant.userId,
+    trainerUserId: trainer.userId,
+    organizerUserId: organizer?.userId ?? null,
+    trainerContactPhone: trainer.phone ?? "+48 601 000 000",
+    trainerContactEmail: trainer.email,
+    organizerContactPhone: organizer?.phone ?? "+48 602 000 000",
+    organizerContactEmail: organizer?.email ?? null,
+    organizerContactName: organizer?.displayName ?? null,
+    imieNazwisko: participant.displayName,
+    telefon: participant.phone,
+    polecenieOdKogo: "Demo panelu uczestnika",
+    wiadomosc: "Scenariusz seedowany do testowania panelu uczestnika.",
+    photoStatus: "ready",
+    trainerDecision:
+      finalStatus === "accepted" || finalStatus === "partial" ? "accepted" : "rejected",
+    organizerDecision:
+      organizer
+        ? finalStatus === "accepted"
+          ? "accepted"
+          : finalStatus === "partial"
+            ? "pending"
+            : "rejected"
+        : "pending",
+    finalStatus,
+    participantStatus,
+    participantActionSource: participantStatus === "cancelled" ? "participant" : "staff",
+    participantManagedAt: participantStatus === "cancelled" ? createdAt : null,
+    attendanceConfirmationStatus: finalStatus === "accepted" ? "pending" : "not-required",
+    requiresOrganizerApproval: Boolean(organizer),
+    createdAt,
+  };
+}
+
 async function seedCandidateOrganizers(projectId, accessToken, auth) {
   const results = [];
 
@@ -433,12 +622,162 @@ async function seedCandidateOrganizers(projectId, accessToken, auth) {
   return results;
 }
 
+async function seedParticipantScenarios(projectId, accessToken, auth) {
+  const seededParticipants = [];
+
+  for (const participant of participantAccounts) {
+    const userId = (await auth.getUserByEmail(participant.email)).uid;
+    seededParticipants.push({ ...participant, userId });
+  }
+
+  const byEmail = new Map(seededParticipants.map((participant) => [participant.email, participant]));
+  const grzegorzE = byEmail.get("grzegorz.emanowicz@emandar.pl");
+  const grzegorzC = byEmail.get("grzegorz.chotnicki@emandar.pl");
+  const ola = byEmail.get("ola.chotnicka@emandar.pl");
+
+  if (!grzegorzE || !grzegorzC || !ola) {
+    throw new Error("Missing seeded participant accounts.");
+  }
+
+  const eventMain = buildParticipantEventDoc({
+    id: "participant-event-main",
+    trainer: trainers[1],
+    organizer: organizers[0],
+    title: "Warsztat oddechowy Warszawa",
+    summary: "Najbliższe szkolenie dla aktywnego uczestnika z pełnym kontaktem do zespołu.",
+    type: "Warsztat stacjonarny",
+    dayOffset: 5,
+    enrolledCount: 2,
+  });
+  const eventTransferTarget = buildParticipantEventDoc({
+    id: "participant-event-transfer-target",
+    trainer: trainers[1],
+    organizer: organizers[0],
+    title: "Warsztat oddechowy Warszawa bis",
+    summary: "Termin docelowy do testowania przeniesienia uczestnika.",
+    type: "Warsztat stacjonarny",
+    dayOffset: 13,
+    status: "active",
+    enrolledCount: 0,
+    capacity: 18,
+  });
+  const eventPending = buildParticipantEventDoc({
+    id: "participant-event-pending",
+    trainer: trainers[3],
+    organizer: organizers[2],
+    title: "Regeneracja i uważność Lublin",
+    summary: "Szkolenie oczekujące jeszcze na pełną akceptację zapisu.",
+    type: "Warsztat weekendowy",
+    dayOffset: 9,
+    status: "active",
+    enrolledCount: 0,
+  });
+  const eventPast = buildParticipantEventDoc({
+    id: "participant-event-past",
+    trainer: trainers[4],
+    organizer: organizers[1],
+    title: "Archiwalne szkolenie Wrocław",
+    summary: "Przeszłe szkolenie do sekcji archiwum uczestnika.",
+    type: "Warsztat stacjonarny",
+    dayOffset: -10,
+    enrolledCount: 1,
+    archivedAt: "2026-03-12T08:00:00.000Z",
+  });
+  const eventTransferSource = buildParticipantEventDoc({
+    id: "participant-event-transfer-source",
+    trainer: trainers[1],
+    organizer: organizers[0],
+    title: "Warsztat oddechowy Kraków grupa A",
+    summary: "Aktywny zapis przeznaczony do testu przeniesienia.",
+    type: "Warsztat stacjonarny",
+    dayOffset: 7,
+    enrolledCount: 1,
+  });
+
+  const participantEvents = [
+    eventMain,
+    eventTransferTarget,
+    eventPending,
+    eventPast,
+    eventTransferSource,
+  ];
+
+  for (const event of participantEvents) {
+    await writeFirestoreDocument(projectId, accessToken, "trainingEvents", event.id, event);
+  }
+
+  const participantEnrollments = [
+    buildParticipantEnrollmentDoc({
+      id: "participant-enrollment-grzegorz-accepted",
+      event: eventMain,
+      trainer: trainers[1],
+      organizer: organizers[0],
+      participant: grzegorzE,
+      finalStatus: "accepted",
+      createdAt: "2026-03-16T08:00:00.000Z",
+    }),
+    buildParticipantEnrollmentDoc({
+      id: "participant-enrollment-grzegorz-pending",
+      event: eventPending,
+      trainer: trainers[3],
+      organizer: organizers[2],
+      participant: grzegorzE,
+      finalStatus: "partial",
+      createdAt: "2026-03-16T09:00:00.000Z",
+    }),
+    buildParticipantEnrollmentDoc({
+      id: "participant-enrollment-grzegorz-archived",
+      event: eventPast,
+      trainer: trainers[4],
+      organizer: organizers[1],
+      participant: grzegorzE,
+      finalStatus: "accepted",
+      participantStatus: "cancelled",
+      createdAt: "2026-03-10T09:00:00.000Z",
+    }),
+    buildParticipantEnrollmentDoc({
+      id: "participant-enrollment-grzegorz-transfer",
+      event: eventTransferSource,
+      trainer: trainers[1],
+      organizer: organizers[0],
+      participant: grzegorzC,
+      finalStatus: "accepted",
+      createdAt: "2026-03-16T10:00:00.000Z",
+    }),
+    buildParticipantEnrollmentDoc({
+      id: "participant-enrollment-ola-archived",
+      event: eventPast,
+      trainer: trainers[4],
+      organizer: organizers[1],
+      participant: ola,
+      finalStatus: "accepted",
+      createdAt: "2026-03-08T09:00:00.000Z",
+    }),
+  ];
+
+  for (const enrollment of participantEnrollments) {
+    await writeFirestoreDocument(
+      projectId,
+      accessToken,
+      "enrollmentRequests",
+      enrollment.id,
+      enrollment,
+    );
+  }
+
+  return {
+    participants: seededParticipants.length,
+    events: participantEvents.length,
+    enrollments: participantEnrollments.length,
+  };
+}
+
 async function main() {
-  const env = await loadEnvFile(DOTENV_PATH);
+  const env = await loadEnvFromCandidates();
   const projectId = env.VITE_FIREBASE_PROJECT_ID;
 
   if (!projectId) {
-    throw new Error("Missing VITE_FIREBASE_PROJECT_ID in .env.local.");
+    throw new Error("Missing VITE_FIREBASE_PROJECT_ID in .env.local or .env.production.");
   }
 
   const firebaseToolsConfig = await loadFirebaseToolsConfig();
@@ -461,7 +800,9 @@ async function main() {
   }
 
   const seededCandidates = await seedCandidateOrganizers(projectId, accessToken, auth);
+  const participantSeed = await seedParticipantScenarios(projectId, accessToken, auth);
   const seededAt = new Date().toISOString();
+  let seededFutureTrainerEvents = 0;
 
   for (const [index, trainer] of trainers.entries()) {
     const approvedOrganizer = organizers[index % organizers.length];
@@ -539,6 +880,27 @@ async function main() {
 
     await writeFirestoreDocument(projectId, accessToken, "trainingEvents", acceptedEvent.id, acceptedEvent);
     await writeFirestoreDocument(projectId, accessToken, "trainingEvents", reviewEvent.id, reviewEvent);
+
+    const futureEventCount = getFutureEventCount(index);
+
+    for (let eventIndex = 0; eventIndex < futureEventCount; eventIndex += 1) {
+      const futureEvent = buildFutureTrainingEventDoc({
+        id: `event-seed-${trainer.id}-future-${eventIndex + 1}`,
+        trainer,
+        organizer: approvedOrganizer,
+        trainerIndex: index,
+        eventIndex,
+      });
+
+      await writeFirestoreDocument(
+        projectId,
+        accessToken,
+        "trainingEvents",
+        futureEvent.id,
+        futureEvent,
+      );
+      seededFutureTrainerEvents += 1;
+    }
   }
 
   for (const [index, organizer] of seededCandidates.entries()) {
@@ -574,7 +936,7 @@ async function main() {
   }
 
   console.log(
-    `Seeded ${trainers.length * 3 + seededCandidates.length} relations, ${trainers.length * 2} events, ${pendingAccountRequests.length} account requests.`,
+    `Seeded ${trainers.length * 3 + seededCandidates.length} relations, ${trainers.length * 2 + seededFutureTrainerEvents + participantSeed.events} events, ${participantSeed.enrollments} participant enrollments and ${pendingAccountRequests.length} account requests.`,
   );
 }
 

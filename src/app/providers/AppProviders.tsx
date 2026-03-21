@@ -19,9 +19,10 @@ import {
   createUnifiedTrainingEvent as createTrainingEventAction,
   decideAccountRequest as decideAccountRequestAction,
   decideEnrollment as decideEnrollmentAction,
-  decideTrainerPublicationApproval as decideTrainerPublicationApprovalAction,
+  decideTrainerAccountApproval as decideTrainerAccountApprovalAction,
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   detachRelation as detachRelationAction,
+  manageOwnEnrollment as manageOwnEnrollmentAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
   decideRelation as decideRelationAction,
   requestRelation as requestRelationAction,
@@ -56,6 +57,7 @@ import type {
   DemoStore,
   EmandarBrandStatus,
   EnrollmentFormInput,
+  ParticipantEnrollmentManagementInput,
   NotificationSettingsUpdateInput,
   OrganizerProfileUpdateInput,
   TrainerCalendarFeedInput,
@@ -80,7 +82,7 @@ interface AppStateContextValue {
     requestId: string,
     status: "approved" | "rejected",
   ) => Promise<void>;
-  decideTrainerPublicationApproval: (
+  decideTrainerAccountApproval: (
     approvalId: string,
     status: "accepted" | "rejected",
   ) => Promise<void>;
@@ -91,6 +93,11 @@ interface AppStateContextValue {
   manageEnrollmentRequest: (
     requestId: string,
     decision: DecisionStatus,
+    transferTargetEventId?: string,
+  ) => Promise<void>;
+  manageOwnEnrollment: (
+    requestId: string,
+    action: ParticipantEnrollmentManagementInput["action"],
     transferTargetEventId?: string,
   ) => Promise<void>;
   requestRelation: (trainerId: string) => Promise<void>;
@@ -164,7 +171,7 @@ async function withFriendlyErrors<T>(action: () => Promise<T>) {
 }
 
 function getRoleHomePath(role: AppRole) {
-  return role === "participant" ? "/kalendarz" : "/panel/dashboard";
+  return role === "participant" ? "/panel/dashboard" : "/panel/dashboard";
 }
 
 function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStore {
@@ -185,8 +192,8 @@ function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStor
       privateStore.enrollmentRequests ?? publicStore.enrollmentRequests,
     notifications: privateStore.notifications ?? publicStore.notifications,
     accountRequests: privateStore.accountRequests ?? publicStore.accountRequests,
-    trainerPublicationApprovals:
-      privateStore.trainerPublicationApprovals ?? publicStore.trainerPublicationApprovals,
+    trainerAccountApprovals:
+      privateStore.trainerAccountApprovals ?? publicStore.trainerAccountApprovals,
     appSettings: privateStore.appSettings ?? publicStore.appSettings,
   };
 }
@@ -324,13 +331,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
           decideAccountRequestAction(requestId, currentUser, status),
         );
       },
-      async decideTrainerPublicationApproval(approvalId, status) {
+      async decideTrainerAccountApproval(approvalId, status) {
         if (!currentUser) {
           throw new Error("Musisz byÄ‡ zalogowany.");
         }
 
         await withFriendlyErrors(() =>
-          decideTrainerPublicationApprovalAction(approvalId, status, currentUser),
+          decideTrainerAccountApprovalAction(approvalId, status, currentUser),
         );
       },
       async decideEnrollment(requestId, decision) {
@@ -358,6 +365,22 @@ export function AppProviders({ children }: { children: ReactNode }) {
           ),
         );
       },
+      async manageOwnEnrollment(requestId, action, transferTargetEventId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          manageOwnEnrollmentAction(
+            {
+              requestId,
+              action,
+              transferTargetEventId,
+            },
+            currentUser,
+          ),
+        );
+      },
       async requestRelation(trainerId) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
@@ -375,33 +398,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
         );
       },
       async detachRelation(relationId, archiveLinkedEvents) {
-        throw new Error("Model grup zostal usuniety. Korzystaj z jednego modelu szkolen.");
-
-        await withFriendlyErrors(() =>
-          detachRelationAction(relationId, currentUser, archiveLinkedEvents),
-        );
-      },
-      async __removeCreateGroup() {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        const organizerId =
-          input.organizerId ??
-          store.organizers.find((item) => item.userId === currentUser.id)?.id;
-
-        if (!organizerId) {
-          throw new Error("Brak profilu organizatora.");
-        }
-
         await withFriendlyErrors(() =>
-          createGroupAction(
-            {
-              ...input,
-              organizerId,
-            },
-            currentUser,
-          ),
+          detachRelationAction(relationId, currentUser, archiveLinkedEvents),
         );
       },
       async createTrainingEvent(input) {

@@ -27,7 +27,7 @@ const collections = {
   notifications: "notifications",
   smsDispatches: "smsDispatches",
   accountRequests: "accountRequests",
-  trainerPublicationApprovals: "trainerPublicationApprovals",
+  trainerAccountApprovals: "trainerAccountApprovals",
   appMeta: "app_meta",
 };
 const shouldEnforceAppCheck =
@@ -49,8 +49,8 @@ function createId(prefix) {
   return `${prefix}-${randomUUID()}`;
 }
 
-function buildPublicationApprovalId(requesterTrainerProfileId, targetTrainerId) {
-  return `${requesterTrainerProfileId}__${targetTrainerId}`;
+function buildAccountApprovalId(requesterUserId, targetTrainerId) {
+  return `${requesterUserId}__${targetTrainerId}`;
 }
 
 function asString(value, fallback = "") {
@@ -67,6 +67,88 @@ function requiredString(value, message) {
 
 function asNumber(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizePendingRoles(value) {
+  return Array.from(
+    new Set(
+      Array.isArray(value)
+        ? value.filter((role) => role === "trainer" || role === "organizer")
+        : [],
+    ),
+  );
+}
+
+function normalizeStringList(value) {
+  return Array.from(
+    new Set(
+      Array.isArray(value)
+        ? value.map((item) => asString(item)).filter(Boolean)
+        : [],
+    ),
+  );
+}
+
+function normalizePhoneLookupKey(value) {
+  const trimmed = asString(value);
+  if (!trimmed) {
+    return "";
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) {
+    return "";
+  }
+
+  if (trimmed.startsWith("+")) {
+    return digits;
+  }
+
+  if (digits.startsWith("00")) {
+    return digits.slice(2);
+  }
+
+  if (digits.length === 9) {
+    return `48${digits}`;
+  }
+
+  return digits;
+}
+
+function resolveAccountApprovalStatus(approvals) {
+  if (approvals.some((approval) => approval.status === "accepted")) {
+    return "approved";
+  }
+
+  if (approvals.length > 0 && approvals.every((approval) => approval.status === "rejected")) {
+    return "rejected";
+  }
+
+  return "pending";
+}
+
+function resolveUnlockedRoles(pendingRoles, approvalStatus) {
+  if (approvalStatus !== "approved") {
+    return ["participant"];
+  }
+
+  return Array.from(new Set(["participant", ...pendingRoles]));
+}
+
+function resolvePreferredRole(pendingRoles, approvalStatus) {
+  if (approvalStatus !== "approved") {
+    return "participant";
+  }
+
+  if (pendingRoles.includes("organizer")) {
+    return "organizer";
+  }
+
+  if (pendingRoles.includes("trainer")) {
+    return "trainer";
+  }
+
+  return "participant";
 }
 
 async function getPublicSettings() {
@@ -152,6 +234,10 @@ function deriveEnrollmentFinalStatus(
   }
 
   return "pending";
+}
+
+function resolveParticipantEnrollmentStatus(value) {
+  return value === "cancelled" ? "cancelled" : "active";
 }
 
 function resolveOrganizerCollaborationStatus(event) {
@@ -466,6 +552,128 @@ async function findAppUser(userId) {
   return findDocument(collections.users, userId);
 }
 
+async function requireAppUser(userId) {
+  return requireDocument(collections.users, userId, "Nie znaleziono konta użytkownika.");
+}
+
+async function syncUserAccountApprovalState(userId) {
+  const userRef = db.collection(collections.users).doc(userId);
+  const userSnapshot = await userRef.get();
+
+  if (!userSnapshot.exists) {
+    return null;
+  }
+
+  const user = {
+    id: userSnapshot.id,
+    ...userSnapshot.data(),
+  };
+  const pendingRoles = normalizePendingRoles(user.pendingRoles);
+  const selectedTrainerIds = normalizeStringList(user.selectedTrainerIds);
+  const approvalsSnapshot = await db
+    .collection(collections.trainerAccountApprovals)
+    .where("requesterUserId", "==", userId)
+    .get();
+  const approvals = approvalsSnapshot.docs.map((snapshot) => ({
+    id: snapshot.id,
+    ...snapshot.data(),
+  }));
+  const approvedTrainerIds = approvals
+    .filter((approval) => approval.status === "accepted")
+    .map((approval) => approval.targetTrainerId);
+  const approvalStatus =
+    approvals.length === 0 && user.accountApprovalStatus === "approved"
+      ? "approved"
+      : resolveAccountApprovalStatus(approvals);
+  const unlockedRoles = resolveUnlockedRoles(pendingRoles, approvalStatus);
+  const preferredRole = resolvePreferredRole(pendingRoles, approvalStatus);
+  const nextPrimaryRole = unlockedRoles.includes(user.primaryRole) ? user.primaryRole : preferredRole;
+  const nextRole = unlockedRoles.includes(user.role) ? user.role : nextPrimaryRole;
+
+  await userRef.set(
+    {
+      accountApprovalStatus: approvalStatus,
+      approvedTrainerIds,
+      pendingRoles,
+      selectedTrainerIds,
+      roles: unlockedRoles,
+      primaryRole: nextPrimaryRole,
+      role: nextRole,
+    },
+    { merge: true },
+  );
+
+  return {
+    ...user,
+    accountApprovalStatus: approvalStatus,
+    approvedTrainerIds,
+    pendingRoles,
+    selectedTrainerIds,
+    roles: unlockedRoles,
+    primaryRole: nextPrimaryRole,
+    role: nextRole,
+  };
+}
+
+async function attachEnrollmentsByPhoneToUser(userId, phoneNumber) {
+  const normalizedPhone = normalizePhoneLookupKey(phoneNumber);
+  if (!normalizedPhone) {
+    return 0;
+  }
+
+  const matchingRequestsSnapshot = await db
+    .collection(collections.enrollmentRequests)
+    .where("normalizedPhone", "==", normalizedPhone)
+    .get();
+
+  if (matchingRequestsSnapshot.empty) {
+    return 0;
+  }
+
+  const uniqueSubmitterIds = Array.from(
+    new Set(
+      matchingRequestsSnapshot.docs
+        .map((snapshot) => asString(snapshot.get("submitterUid")))
+        .filter(Boolean),
+    ),
+  );
+  const userDocs = await Promise.all(uniqueSubmitterIds.map((candidateUid) => findAppUser(candidateUid)));
+  const userDocsById = new Map(
+    userDocs.filter(Boolean).map((entry) => [entry.id, entry]),
+  );
+
+  const batch = db.batch();
+  let linkedCount = 0;
+
+  matchingRequestsSnapshot.docs.forEach((snapshot) => {
+    const submitterUid = asString(snapshot.get("submitterUid"));
+    if (submitterUid === userId) {
+      return;
+    }
+
+    const existingUser = submitterUid ? userDocsById.get(submitterUid) : null;
+    if (existingUser && existingUser.id !== userId) {
+      return;
+    }
+
+    batch.set(
+      snapshot.ref,
+      {
+        submitterUid: userId,
+        normalizedPhone,
+      },
+      { merge: true },
+    );
+    linkedCount += 1;
+  });
+
+  if (linkedCount > 0) {
+    await batch.commit();
+  }
+
+  return linkedCount;
+}
+
 async function getRelationByPair(trainerId, organizerId) {
   const snapshot = await db.collection(collections.relations).doc(buildRelationId(trainerId, organizerId)).get();
   if (!snapshot.exists) {
@@ -528,17 +736,13 @@ async function isEnrollmentPhotoRequired(event, trainer, organizer) {
 }
 
 async function ensureCommunityTrainerCanPublish(user) {
-  const approvalsSnapshot = await db
-    .collection(collections.trainerPublicationApprovals)
-    .where("requesterUserId", "==", user.id)
-    .where("status", "==", "accepted")
-    .limit(1)
-    .get();
+  const isApprovedAccount =
+    user.accountApprovalStatus === "approved" || user.accountApprovalStatus == null;
 
-  if (approvalsSnapshot.empty) {
+  if (!isApprovedAccount) {
     throw new HttpsError(
       "failed-precondition",
-      "Konto wydarzeń społeczności musi mieć przynajmniej jedną zaakceptowaną zgodę trenera przed publikacją.",
+      "Konto wydarzeń społeczności musi zostać wcześniej zaakceptowane przez trenera.",
     );
   }
 }
@@ -618,7 +822,11 @@ async function createSmsDispatchOnce(dispatchId, payload) {
 }
 
 function countAcceptedEnrollmentRequests(requests) {
-  return requests.filter((request) => request.finalStatus === "accepted").length;
+  return requests.filter(
+    (request) =>
+      request.finalStatus === "accepted" &&
+      resolveParticipantEnrollmentStatus(request.participantStatus) === "active",
+  ).length;
 }
 
 function resolveManagedEventStatus(currentStatus, acceptedCount, minimumParticipants) {
@@ -1016,11 +1224,8 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     throw new HttpsError("invalid-argument", "Wybierz przynajmniej jeden typ konta.");
   }
 
-  if (
-    (requestedRoles.includes("organizer") || requestedRoles.includes("trainer")) &&
-    selectedTrainerIds.length === 0
-  ) {
-    throw new HttpsError("invalid-argument", "Wybierz przynajmniej jednego trenera do współpracy.");
+  if (selectedTrainerIds.length === 0) {
+    throw new HttpsError("invalid-argument", "Wybierz przynajmniej jednego trenera, do którego chodzisz na grupę.");
   }
 
   if (requestedRoles.includes("organizer") && !organizerTrainingIntent) {
@@ -1036,15 +1241,12 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
 
   const trainerProfileId = requestedRoles.includes("trainer") ? createId("trainer") : null;
   const organizerProfileId = requestedRoles.includes("organizer") ? createId("organizer") : null;
-  const primaryRole = requestedRoles.includes("organizer")
-    ? "organizer"
-    : requestedRoles.includes("trainer")
-      ? "trainer"
-      : "participant";
+  const pendingRoles = requestedRoles.filter((role) => role === "trainer" || role === "organizer");
   const accountRequestRef = db.collection(collections.accountRequests).doc(createId("account-request"));
   const trainerTargets = await Promise.all(
     selectedTrainerIds.map(async (trainerId) => requireTrainerProfile(trainerId)),
   );
+  const createdAt = nowIso();
 
   await auth.setCustomUserClaims(uid, {
     ...(authUser.customClaims ?? {}),
@@ -1059,14 +1261,18 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     avatarUrl: avatarUrl || "",
     avatarPath: avatarPath || null,
     authProvider: "phone",
-    phoneVerifiedAt: nowIso(),
+    phoneVerifiedAt: createdAt,
     status: "active",
-    role: primaryRole,
-    roles: requestedRoles,
-    primaryRole,
+    role: "participant",
+    roles: ["participant"],
+    primaryRole: "participant",
+    pendingRoles,
+    accountApprovalStatus: "pending",
+    selectedTrainerIds,
+    approvedTrainerIds: [],
     trainerProfileId,
     organizerProfileId,
-    createdAt: nowIso(),
+    createdAt,
   });
 
   if (trainerProfileId) {
@@ -1111,26 +1317,26 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
           organizerUserId: uid,
           status: "pending",
           requestedBy: "organizer",
-          createdAt: nowIso(),
+          createdAt,
         },
       );
     }
 
-    if (trainerProfileId) {
-      batch.set(
-        db
-          .collection(collections.trainerPublicationApprovals)
-          .doc(buildPublicationApprovalId(trainerProfileId, trainer.id)),
-        {
-          requesterUserId: uid,
-          requesterTrainerProfileId: trainerProfileId,
-          targetTrainerId: trainer.id,
-          targetTrainerUserId: trainer.userId,
-          status: "pending",
-          createdAt: nowIso(),
-        },
-      );
-    }
+    batch.set(
+      db
+        .collection(collections.trainerAccountApprovals)
+        .doc(buildAccountApprovalId(uid, trainer.id)),
+      {
+        requesterUserId: uid,
+        requesterDisplayName: displayName,
+        requesterPhone: verifiedPhone,
+        targetTrainerId: trainer.id,
+        targetTrainerUserId: trainer.userId,
+        requestedRoles,
+        status: "pending",
+        createdAt,
+      },
+    );
   });
 
   batch.set(accountRequestRef, {
@@ -1145,8 +1351,8 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     selectedTrainerIds,
     avatarPath: avatarPath || null,
     submitterUid: uid,
-    createdAt: nowIso(),
-    reviewedAt: nowIso(),
+    createdAt,
+    reviewedAt: createdAt,
     reviewedByUserId: "phone-self-service",
     createdUserId: uid,
     trainerProfileId,
@@ -1154,73 +1360,17 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
   });
 
   await batch.commit();
+  await attachEnrollmentsByPhoneToUser(uid, verifiedPhone);
 
   return { ok: true, userId: uid, accountCreated: true };
 });
 
 export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (request) => {
-  const { uid, user } = await requireCurrentUser(request, { allowAnonymous: true });
-  const authUser = await auth.getUser(uid);
-  const verifiedPhone = requiredString(
-    authUser.phoneNumber,
-    "Numer telefonu musi zostać najpierw potwierdzony kodem SMS.",
+  void request;
+  throw new HttpsError(
+    "failed-precondition",
+    "Automatyczne zakładanie konta uczestnika jest wyłączone. Użyj formularza rejestracji.",
   );
-
-  if (user) {
-    return { ok: true, userId: uid, accountCreated: false };
-  }
-
-  await auth.setCustomUserClaims(uid, {
-    ...(authUser.customClaims ?? {}),
-    admin: false,
-  });
-
-  const phoneSuffix = verifiedPhone.replace(/\D/g, "").slice(-4) || "konto";
-  const displayName = asString(authUser.displayName) || `Uczestnik ${phoneSuffix}`;
-  const accountRequestRef = db.collection(collections.accountRequests).doc(createId("account-request"));
-  const createdAt = nowIso();
-
-  const batch = db.batch();
-  batch.set(db.collection(collections.users).doc(uid), {
-    displayName,
-    email: authUser.email ?? null,
-    phone: verifiedPhone,
-    avatarUrl: "",
-    avatarPath: null,
-    authProvider: "phone",
-    phoneVerifiedAt: createdAt,
-    status: "active",
-    role: "participant",
-    roles: ["participant"],
-    primaryRole: "participant",
-    trainerProfileId: null,
-    organizerProfileId: null,
-    createdAt,
-  });
-
-  batch.set(accountRequestRef, {
-    displayName,
-    email: authUser.email ?? null,
-    phone: verifiedPhone,
-    requestedRoles: ["participant"],
-    notes: "Konto uczestnika utworzone automatycznie przy pierwszym logowaniu SMS.",
-    status: "approved",
-    authProvider: "phone",
-    organizerTrainingIntent: "",
-    selectedTrainerIds: [],
-    avatarPath: null,
-    submitterUid: uid,
-    createdAt,
-    reviewedAt: createdAt,
-    reviewedByUserId: "phone-login-auto-create",
-    createdUserId: uid,
-    trainerProfileId: null,
-    organizerProfileId: null,
-  });
-
-  await batch.commit();
-
-  return { ok: true, userId: uid, accountCreated: true };
 });
 
 export const approveAccountRequest = onCall(callableOptions(), async (request) => {
@@ -1365,7 +1515,7 @@ export const rejectAccountRequest = onCall(callableOptions(), async (request) =>
   return { ok: true };
 });
 
-export const decideTrainerPublicationApproval = onCall(callableOptions(), async (request) => {
+export const decideTrainerAccountApproval = onCall(callableOptions(), async (request) => {
   const { user } = await requireCurrentUser(request);
   if (!user) {
     throw new HttpsError("permission-denied", "Musisz być zalogowany.");
@@ -1381,11 +1531,11 @@ export const decideTrainerPublicationApproval = onCall(callableOptions(), async 
     throw new HttpsError("invalid-argument", "Podaj poprawny status zgody.");
   }
 
-  const approvalRef = db.collection(collections.trainerPublicationApprovals).doc(approvalId);
+  const approvalRef = db.collection(collections.trainerAccountApprovals).doc(approvalId);
   const approvalSnapshot = await approvalRef.get();
 
   if (!approvalSnapshot.exists) {
-    throw new HttpsError("not-found", "Nie znaleziono zgody publikacyjnej.");
+    throw new HttpsError("not-found", "Nie znaleziono prośby o zatwierdzenie konta.");
   }
 
   const approval = {
@@ -1401,16 +1551,20 @@ export const decideTrainerPublicationApproval = onCall(callableOptions(), async 
     {
       status,
       decidedAt: nowIso(),
+      decidedByUserId: user.id,
     },
     { merge: true },
   );
+  const syncedUser = await syncUserAccountApprovalState(approval.requesterUserId);
 
   await createNotification(
     approval.requesterUserId,
-    "Zmieniono status zgody na publikację",
+    "Zmieniono status zatwierdzenia konta",
     status === "accepted"
-      ? "Przynajmniej jeden trener zatwierdził Twoje konto wydarzeń społeczności."
-      : "Jedna z próśb o zgodę na publikację została odrzucona.",
+      ? "Jeden z trenerów zaakceptował Twoje konto. Jeśli wybrano dodatkowe role, zostały właśnie odblokowane."
+      : syncedUser?.accountApprovalStatus === "rejected"
+        ? "Wszyscy wybrani trenerzy odrzucili Twoje konto. Nadal możesz śledzić własne zgłoszenia jako uczestnik."
+        : "Jedna z próśb o zatwierdzenie konta została odrzucona. Konto nadal czeka na pozostałych trenerów.",
     "auth",
   );
 
@@ -1545,11 +1699,14 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
   const { uid } = await requireCurrentUser(request, { allowAnonymous: true });
   const input = request.data ?? {};
   const eventId = requiredString(input.eventId, "Brak identyfikatora szkolenia.");
+  const participantPhone = requiredString(input.telefon, "Podaj numer telefonu.");
   const event = await requireEvent(eventId);
   ensureEventCanAcceptEnrollment(event);
 
   const trainer = await requireTrainerProfile(event.trainerId);
   const organizer = event.organizerId ? await requireOrganizerProfile(event.organizerId) : null;
+  const trainerUser = await requireAppUser(trainer.userId);
+  const organizerUser = organizer?.userId ? await requireAppUser(organizer.userId) : null;
   const requiresOrganizerApproval =
     event.requiresOrganizerApproval ?? !isCommunityBrandStatus(event.brandStatus);
   const photoRequired = await isEnrollmentPhotoRequired(event, trainer, organizer);
@@ -1562,8 +1719,14 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
     submitterUid: uid,
     trainerUserId: trainer.userId,
     organizerUserId: organizer?.userId ?? null,
+    trainerContactPhone: asString(trainerUser.phone) || null,
+    trainerContactEmail: asString(trainerUser.email) || null,
+    organizerContactPhone: asString(organizerUser?.phone) || null,
+    organizerContactEmail: asString(organizerUser?.email) || null,
+    organizerContactName: asString(organizer?.contactName || organizer?.displayName) || null,
     imieNazwisko: requiredString(input.imieNazwisko, "Podaj imię i nazwisko."),
-    telefon: requiredString(input.telefon, "Podaj numer telefonu."),
+    telefon: participantPhone,
+    normalizedPhone: normalizePhoneLookupKey(participantPhone),
     polecenieOdKogo: asString(input.polecenieOdKogo),
     wiadomosc: asString(input.wiadomosc),
     photoStatus: "pending",
@@ -1734,6 +1897,10 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
 
   const targetTrainer = await requireTrainerProfile(targetEvent.trainerId);
   const targetOrganizer = targetEvent.organizerId ? await requireOrganizerProfile(targetEvent.organizerId) : null;
+  const targetTrainerUser = await requireAppUser(targetTrainer.userId);
+  const targetOrganizerUser = targetOrganizer?.userId
+    ? await requireAppUser(targetOrganizer.userId)
+    : null;
   const targetRequiresOrganizerApproval =
     targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
 
@@ -1774,6 +1941,11 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
       organizerId: targetEvent.organizerId ?? null,
       trainerUserId: targetTrainer.userId,
       organizerUserId: targetOrganizer?.userId ?? null,
+      trainerContactPhone: asString(targetTrainerUser.phone) || null,
+      trainerContactEmail: asString(targetTrainerUser.email) || null,
+      organizerContactPhone: asString(targetOrganizerUser?.phone) || null,
+      organizerContactEmail: asString(targetOrganizerUser?.email) || null,
+      organizerContactName: asString(targetOrganizer?.contactName || targetOrganizer?.displayName) || null,
       trainerDecision: nextTrainerDecision,
       organizerDecision: nextOrganizerDecision,
       finalStatus: nextFinalStatus,
@@ -1798,6 +1970,162 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
       "request",
     );
   }
+
+  return { ok: true };
+});
+
+export const manageOwnEnrollment = onCall(callableOptions(), async (request) => {
+  const { uid, user } = await requireCurrentUser(request);
+  if (!user) {
+    throw new HttpsError("permission-denied", "Musisz być zalogowany.");
+  }
+
+  const input = request.data ?? {};
+  const requestId = requiredString(input.requestId, "Brak identyfikatora zgłoszenia.");
+  const action = input.action === "cancel" || input.action === "transfer" ? input.action : null;
+
+  if (!action) {
+    throw new HttpsError("invalid-argument", "Podaj poprawną akcję uczestnika.");
+  }
+
+  const enrollmentRef = db.collection(collections.enrollmentRequests).doc(requestId);
+  const enrollmentSnapshot = await enrollmentRef.get();
+  if (!enrollmentSnapshot.exists) {
+    throw new HttpsError("not-found", "Nie znaleziono zgłoszenia.");
+  }
+
+  const currentRequest = {
+    id: enrollmentSnapshot.id,
+    ...enrollmentSnapshot.data(),
+  };
+
+  if (currentRequest.submitterUid !== uid) {
+    throw new HttpsError("permission-denied", "Możesz zarządzać tylko własnym zgłoszeniem.");
+  }
+
+  if (resolveParticipantEnrollmentStatus(currentRequest.participantStatus) === "cancelled") {
+    throw new HttpsError("failed-precondition", "To zgłoszenie zostało już wcześniej anulowane.");
+  }
+
+  const sourceEvent = await requireEvent(currentRequest.eventId);
+  const sourceEndsAt = new Date(sourceEvent.endsAt);
+  if (
+    isTrainingEventArchived(sourceEvent) ||
+    (Number.isFinite(sourceEndsAt.getTime()) && sourceEndsAt.getTime() < Date.now())
+  ) {
+    throw new HttpsError("failed-precondition", "To szkolenie jest już w archiwum uczestnika.");
+  }
+
+  if (action === "cancel") {
+    await enrollmentRef.set(
+      {
+        participantStatus: "cancelled",
+        participantManagedAt: nowIso(),
+        participantActionSource: "participant",
+        ...buildAttendanceResetFields(),
+      },
+      { merge: true },
+    );
+
+    await syncEventEnrollmentState(sourceEvent.id);
+    await createNotifications(
+      [currentRequest.trainerUserId, currentRequest.organizerUserId],
+      "Uczestnik zrezygnował ze szkolenia",
+      `${currentRequest.imieNazwisko} zrezygnował(a) z udziału w ${sourceEvent.title}.`,
+      "request",
+    );
+
+    return { ok: true };
+  }
+
+  const targetEventId = requiredString(
+    input.transferTargetEventId,
+    "Wybierz docelowe szkolenie do przeniesienia.",
+  );
+  if (targetEventId === sourceEvent.id) {
+    throw new HttpsError("failed-precondition", "Wybierz inne szkolenie docelowe.");
+  }
+
+  const targetEvent = await requireEvent(targetEventId);
+  ensureEventCanAcceptEnrollment(targetEvent);
+
+  const targetEndsAt = new Date(targetEvent.endsAt);
+  if (Number.isFinite(targetEndsAt.getTime()) && targetEndsAt.getTime() <= Date.now()) {
+    throw new HttpsError("failed-precondition", "Nie możesz przenieść się na zakończone szkolenie.");
+  }
+
+  if (targetEvent.type !== sourceEvent.type) {
+    throw new HttpsError("failed-precondition", "Możesz przenieść się tylko na szkolenie tego samego typu.");
+  }
+
+  const targetRequests = await getEnrollmentRequestsForEvent(targetEvent.id);
+  if (countAcceptedEnrollmentRequests(targetRequests) >= Math.max(1, asNumber(targetEvent.capacity, 1))) {
+    throw new HttpsError("failed-precondition", "To szkolenie nie ma już wolnych miejsc.");
+  }
+
+  const targetTrainer = await requireTrainerProfile(targetEvent.trainerId);
+  const targetTrainerUser = await requireAppUser(targetTrainer.userId);
+  const targetOrganizer = targetEvent.organizerId
+    ? await requireOrganizerProfile(targetEvent.organizerId)
+    : null;
+  const targetOrganizerUser = targetOrganizer?.userId
+    ? await requireAppUser(targetOrganizer.userId)
+    : null;
+  const targetRequiresOrganizerApproval =
+    targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
+
+  const nextTrainerDecision =
+    currentRequest.trainerId === targetEvent.trainerId ? currentRequest.trainerDecision : "pending";
+  const nextOrganizerDecision = targetRequiresOrganizerApproval
+    ? currentRequest.organizerId === targetEvent.organizerId
+      ? currentRequest.organizerDecision
+      : "pending"
+    : "pending";
+
+  await enrollmentRef.set(
+    {
+      eventId: targetEvent.id,
+      trainerId: targetEvent.trainerId,
+      organizerId: targetEvent.organizerId ?? null,
+      trainerUserId: targetTrainer.userId,
+      organizerUserId: targetOrganizer?.userId ?? null,
+      trainerContactPhone: asString(targetTrainerUser.phone) || null,
+      trainerContactEmail: asString(targetTrainerUser.email) || null,
+      organizerContactPhone: asString(targetOrganizerUser?.phone) || null,
+      organizerContactEmail: asString(targetOrganizerUser?.email) || null,
+      organizerContactName: asString(targetOrganizer?.contactName || targetOrganizer?.displayName) || null,
+      trainerDecision: nextTrainerDecision,
+      organizerDecision: nextOrganizerDecision,
+      finalStatus: deriveEnrollmentFinalStatus(
+        nextTrainerDecision,
+        nextOrganizerDecision,
+        targetRequiresOrganizerApproval,
+      ),
+      requiresOrganizerApproval: targetRequiresOrganizerApproval,
+      participantStatus: "active",
+      participantManagedAt: nowIso(),
+      participantActionSource: "participant",
+      ...buildAttendanceResetFields(),
+    },
+    { merge: true },
+  );
+
+  await Promise.all([
+    syncEventEnrollmentState(sourceEvent.id),
+    syncEventEnrollmentState(targetEvent.id),
+  ]);
+
+  await createNotifications(
+    [
+      currentRequest.trainerUserId,
+      currentRequest.organizerUserId,
+      targetTrainer.userId,
+      targetOrganizer?.userId,
+    ],
+    "Uczestnik przeniósł zgłoszenie",
+    `${currentRequest.imieNazwisko} przeniósł(a) się z ${sourceEvent.title} do ${targetEvent.title}.`,
+    "request",
+  );
 
   return { ok: true };
 });

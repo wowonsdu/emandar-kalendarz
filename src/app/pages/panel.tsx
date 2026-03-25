@@ -834,6 +834,43 @@ function SectionBlockHeading({
   );
 }
 
+function EventScopeSwitch({
+  activeScope,
+  mineLabel,
+  onChange,
+}: {
+  activeScope: "all" | "mine";
+  mineLabel: string;
+  onChange: (scope: "all" | "mine") => void;
+}) {
+  return (
+    <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-brand-line bg-white p-1 shadow-soft">
+      <button
+        type="button"
+        onClick={() => onChange("all")}
+        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+          activeScope === "all"
+            ? "bg-brand-navy text-white"
+            : "text-brand-muted hover:text-brand-navy"
+        }`}
+      >
+        Wszystkie wydarzenia
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("mine")}
+        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
+          activeScope === "mine"
+            ? "bg-brand-navy text-white"
+            : "text-brand-muted hover:text-brand-navy"
+        }`}
+      >
+        {mineLabel}
+      </button>
+    </div>
+  );
+}
+
 function getCommunityChartColor(status: TrainingEventStatus | undefined) {
   return resolveTrainingEventStatus(status) === "confirmed"
     ? "#0ea5a4"
@@ -2939,64 +2976,68 @@ export function EventsPage() {
   );
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
   const isCreatorView = location.pathname.endsWith("/kreator-wydarzen");
-
-  if (currentUser.role === "participant") {
-    const participantRecords = getParticipantEnrollmentRecords(store);
-    const activeRecords = participantRecords.filter((record) => !record.isArchived);
-    const archivedRecords = participantRecords.filter((record) => record.isArchived);
-
-    return (
-      <PanelSection
-        eyebrow="Szkolenia"
-        title="Moje szkolenia"
-        description="Zarządzaj swoimi zapisami, sprawdzaj kontakty do prowadzących i miej pod ręką archiwum wcześniejszych szkoleń."
-      >
-        <div className="space-y-4">
-          <SectionBlockHeading
-            title="Aktywne"
-            description="Nadchodzące szkolenia oraz zapisy, które są jeszcze w toku akceptacji."
-          />
-          {activeRecords.length === 0 ? (
-            <EmptyPanelState
-              title="Brak aktywnych szkoleń"
-              description="Kiedy zapiszesz się na nowe szkolenie, pojawi się ono tutaj."
-            />
-          ) : (
-            activeRecords.map((record) => (
-              <ParticipantEnrollmentCard key={record.request.id} record={record} />
-            ))
-          )}
-        </div>
-
-        <div className="space-y-4">
-          <SectionBlockHeading
-            title="Archiwum"
-            description="Zakończone, odrzucone lub anulowane uczestnictwa."
-          />
-          {archivedRecords.length === 0 ? (
-            <EmptyPanelState
-              title="Archiwum jest jeszcze puste"
-              description="Wcześniejsze szkolenia i anulowane zapisy będą widoczne tutaj."
-            />
-          ) : (
-            archivedRecords.map((record) => (
-              <ParticipantEnrollmentCard key={record.request.id} record={record} />
-            ))
-          )}
-        </div>
-      </PanelSection>
-    );
-  }
-
-  const events = useMemo(
+  const isParticipant = currentUser.role === "participant";
+  const isAdmin = currentUser.role === "admin";
+  const [eventScope, setEventScope] = useState<"all" | "mine">("all");
+  const participantRecords = useMemo(
+    () => (isParticipant ? getParticipantEnrollmentRecords(store) : []),
+    [isParticipant, store],
+  );
+  const activeParticipantRecords = useMemo(
+    () => participantRecords.filter((record) => !record.isArchived),
+    [participantRecords],
+  );
+  const archivedParticipantRecords = useMemo(
+    () => participantRecords.filter((record) => record.isArchived),
+    [participantRecords],
+  );
+  const publicEvents = useMemo(
+    () => sortEventsByDate(store.publicTrainingEvents.filter((event) => event.isPublished)),
+    [store.publicTrainingEvents],
+  );
+  const ownEvents = useMemo(
     () =>
       currentUser.role === "trainer"
         ? store.trainingEvents.filter((item) => item.trainerId === trainerProfile?.id)
         : currentUser.role === "organizer"
           ? store.trainingEvents.filter((item) => item.organizerId === organizerProfile?.id)
-          : store.trainingEvents,
-    [currentUser.role, organizerProfile?.id, store.trainingEvents, trainerProfile?.id],
+          : currentUser.role === "admin"
+            ? store.trainingEvents
+            : [],
+    [
+      currentUser.role,
+      organizerProfile?.id,
+      store.trainingEvents,
+      trainerProfile?.id,
+    ],
   );
+  const showingAllEvents = !isAdmin && !isCreatorView && eventScope === "all";
+  const listedEvents = useMemo(
+    () => (showingAllEvents ? publicEvents : sortEventsByDate(ownEvents)),
+    [ownEvents, publicEvents, showingAllEvents],
+  );
+  const mineLabel = isParticipant
+    ? "Moje szkolenia"
+    : isCommunityTrainer
+      ? "Moje wydarzenia"
+      : "Moje szkolenia";
+  const sectionTitle = isCreatorView
+    ? "Kreator wydarzeń"
+    : showingAllEvents
+      ? "Wszystkie wydarzenia"
+      : isParticipant
+        ? "Moje szkolenia"
+        : currentUser.role === "trainer" || currentUser.role === "organizer"
+          ? mineLabel
+          : "Lista wydarzeń";
+  const sectionDescription = isCreatorView
+    ? "Tutaj dodajesz nowe wydarzenia bez mieszania tego z listą już utworzonych pozycji."
+    : showingAllEvents
+      ? "Przeglądaj pełny publiczny kalendarz opublikowanych wydarzeń i dopiero potem przełączaj się na własny widok operacyjny."
+      : isParticipant
+        ? "Zarządzaj swoimi zapisami, sprawdzaj kontakty do prowadzących i miej pod ręką archiwum wcześniejszych szkoleń."
+        : "To jest warstwa operacyjna wydarzeń, które pochodzą bezpośrednio z Firestore.";
+
   const availableOrganizers = useMemo(
     () =>
       currentUser.role === "trainer" && !isCommunityTrainer
@@ -3054,14 +3095,6 @@ export function EventsPage() {
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [savingEventId, setSavingEventId] = useState<string | null>(null);
 
-  if (
-    isCreatorView &&
-    currentUser.role !== "trainer" &&
-    currentUser.role !== "organizer"
-  ) {
-    return <Navigate to="/panel/szkolenia" replace />;
-  }
-
   useEffect(() => {
     if (currentUser.role !== "trainer" || isCommunityTrainer) {
       return;
@@ -3103,21 +3136,19 @@ export function EventsPage() {
     });
   }, [availableTrainers, currentUser.role]);
 
+  if (
+    isCreatorView &&
+    currentUser.role !== "trainer" &&
+    currentUser.role !== "organizer"
+  ) {
+    return <Navigate to="/panel/szkolenia" replace />;
+  }
+
   return (
     <PanelSection
       eyebrow="Szkolenia"
-      title={
-        isCreatorView
-          ? "Kreator wydarzeń"
-          : currentUser.role === "trainer" || currentUser.role === "organizer"
-            ? "Moje szkolenia"
-            : "Lista wydarzeń"
-      }
-      description={
-        isCreatorView
-          ? "Tutaj dodajesz nowe wydarzenia bez mieszania tego z listą już utworzonych pozycji."
-          : "To jest warstwa operacyjna wydarzeń, które pochodzą bezpośrednio z Firestore."
-      }
+      title={sectionTitle}
+      description={sectionDescription}
       action={
         !isCreatorView &&
         (currentUser.role === "trainer" || currentUser.role === "organizer") ? (
@@ -3131,6 +3162,16 @@ export function EventsPage() {
         ) : undefined
       }
     >
+      {!isCreatorView && !isAdmin ? (
+        <div className="flex justify-start">
+          <EventScopeSwitch
+            activeScope={eventScope}
+            mineLabel={mineLabel}
+            onChange={setEventScope}
+          />
+        </div>
+      ) : null}
+
       {isCreatorView &&
         (currentUser.role === "trainer" || currentUser.role === "organizer") &&
         (currentUser.role === "organizer" && availableTrainers.length === 0 ? (
@@ -3619,31 +3660,74 @@ export function EventsPage() {
           </form>
         ))}
 
-      {!isCreatorView && <div className="space-y-4">
-        {events.length === 0 && (
-          <EmptyPanelState
-            title="Brak wydarzeń"
-            description="Tutaj pojawi? si? szkolenia dopiero po ich r?cznym dodaniu."
-          />
-        )}
-        {sortEventsByDate(events).map((event) => {
+      {!isCreatorView && isParticipant && eventScope === "mine" ? (
+        <div className="space-y-6">
+          <div className="space-y-4">
+            <SectionBlockHeading
+              title="Aktywne"
+              description="Nadchodzące szkolenia oraz zapisy, które są jeszcze w toku akceptacji."
+            />
+            {activeParticipantRecords.length === 0 ? (
+              <EmptyPanelState
+                title="Brak aktywnych szkoleń"
+                description="Kiedy zapiszesz się na nowe szkolenie, pojawi się ono tutaj."
+              />
+            ) : (
+              activeParticipantRecords.map((record) => (
+                <ParticipantEnrollmentCard key={record.request.id} record={record} />
+              ))
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <SectionBlockHeading
+              title="Archiwum"
+              description="Zakończone, odrzucone lub anulowane uczestnictwa."
+            />
+            {archivedParticipantRecords.length === 0 ? (
+              <EmptyPanelState
+                title="Archiwum jest jeszcze puste"
+                description="Wcześniejsze szkolenia i anulowane zapisy będą widoczne tutaj."
+              />
+            ) : (
+              archivedParticipantRecords.map((record) => (
+                <ParticipantEnrollmentCard key={record.request.id} record={record} />
+              ))
+            )}
+          </div>
+        </div>
+      ) : !isCreatorView ? (
+        <div className="space-y-4">
+          {listedEvents.length === 0 && (
+            <EmptyPanelState
+              title={showingAllEvents ? "Brak opublikowanych wydarzeń" : "Brak wydarzeń"}
+              description={
+                showingAllEvents
+                  ? "Kiedy w kalendarzu pojawią się nowe opublikowane szkolenia, zobaczysz je tutaj."
+                  : "Tutaj pojawią się szkolenia dopiero po ich ręcznym dodaniu."
+              }
+            />
+          )}
+          {listedEvents.map((event) => {
           const eventRequests = store.enrollmentRequests.filter(
             (item) => item.eventId === event.id,
           );
           const activeRequestsCount = eventRequests.filter(
             (item) => item.finalStatus !== "rejected",
           ).length;
-          const canDecideCollaboration = canDecideTrainingEventCollaboration(
-            event,
-            currentUser,
-          );
+          const canDecideCollaboration =
+            !showingAllEvents &&
+            canDecideTrainingEventCollaboration(event, currentUser);
           const ownerLabels = getEventOwnerLabel(event, store);
           const listTitle = getEventCardTitle(event, currentUser, store);
           const locationParts = getEventLocationParts(event.location);
-          const collaborationNotice = getEventCollaborationNotice(event);
+          const collaborationNotice = showingAllEvents
+            ? null
+            : getEventCollaborationNotice(event);
           const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
           const scheduleDays = getTrainingEventScheduleDays(event);
           const canOpenEventDetails =
+            !showingAllEvents &&
             !(currentUser.role === "organizer" && isTrainingEventArchived(event));
 
           return (
@@ -3662,7 +3746,14 @@ export function EventsPage() {
                   <p className="mt-2 text-brand-muted">{event.summary}</p>
                 </div>
                 <div className="flex flex-col items-start gap-3 sm:items-end">
-                  {canOpenEventDetails ? (
+                  {showingAllEvents ? (
+                    <Link
+                      to={`/kalendarz/${event.id}`}
+                      className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                    >
+                      Zobacz w kalendarzu
+                    </Link>
+                  ) : canOpenEventDetails ? (
                     <Link
                       to={`/panel/szkolenia/${event.id}`}
                       className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
@@ -3690,10 +3781,15 @@ export function EventsPage() {
                   <span>{scheduleRangeLabel}</span>
                   <span>{event.enrolledCount}/{event.capacity} miejsc</span>
                   <span>Prog: {resolveMinimumParticipants(event)} osob</span>
-                  <span>Aktywne zgloszenia: {activeRequestsCount}</span>
-                  {currentUser.role !== "organizer" && (
+                  {!showingAllEvents ? (
+                    <span>Aktywne zgloszenia: {activeRequestsCount}</span>
+                  ) : null}
+                  {showingAllEvents || currentUser.role !== "organizer" ? (
                     <span>Organizator: {ownerLabels.organizerName}</span>
-                  )}
+                  ) : null}
+                  {showingAllEvents ? (
+                    <span>Przekazujący Wiedzę: {ownerLabels.trainerName}</span>
+                  ) : null}
                 </div>
                 <div
                   className={`grid gap-3 ${
@@ -3753,7 +3849,8 @@ export function EventsPage() {
             </article>
           );
         })}
-      </div>}
+        </div>
+      ) : null}
     </PanelSection>
   );
 }

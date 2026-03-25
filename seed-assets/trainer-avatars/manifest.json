@@ -1,6 +1,6 @@
 {
-  "projectId": "emandar-app",
-  "storageBucket": "emandar-app.firebasestorage.app",
+  "projectId": "emandar-prod",
+  "storageBucket": "emandar-prod.firebasestorage.app",
   "backedUpAt": "2026-03-21T09:33:00+01:00",
   "contentType": "image/jpeg",
   "trainers": [

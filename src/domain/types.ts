@@ -289,6 +289,7 @@ export interface DemoStore {
   organizers: OrganizerProfile[];
   relations: TrainerOrganizerRelation[];
   trainingEvents: TrainingEvent[];
+  publicTrainingEvents: TrainingEvent[];
   availabilitySlots: AvailabilitySlot[];
   trainerCalendarFeeds: TrainerCalendarFeed[];
   trainerExternalBusyMonths: TrainerExternalBusyMonth[];

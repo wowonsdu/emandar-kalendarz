@@ -18,7 +18,8 @@ React + Firebase application for the public Emandar calendar, trainer directory,
 
 ## Firebase
 
-- Default project: `emandar-app`
+- Default project: `emandar-prod`
+- Web app: `emandar-kalendarz-web`
 - Deploy command: `npm run firebase:deploy`
 - Emulator command: `npm run emu:start`
   

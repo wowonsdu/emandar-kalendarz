@@ -33,6 +33,13 @@ import {
   sortEventsByDate,
 } from "@/domain/utils";
 import { firebaseAuth } from "@/lib/firebase";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/app/components/ui/dialog";
 import { useAppState } from "../providers/AppProviders";
 
 function formatDate(date: string) {
@@ -503,13 +510,22 @@ export function EventDetailsPage() {
   const { eventId } = useParams();
   const { currentUser, store, submitEnrollment } = useAppState();
   const navigate = useNavigate();
+  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const event = store.trainingEvents.find((item) => item.id === eventId);
   const trainer = store.trainers.find((item) => item.id === event?.trainerId);
   const organizer = store.organizers.find((item) => item.id === event?.organizerId);
   const [loading, setLoading] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [confirmingCode, setConfirmingCode] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
+  const [smsVerified, setSmsVerified] = useState(
+    Boolean(firebaseAuth?.currentUser?.phoneNumber),
+  );
   const [form, setForm] = useState({
     imieNazwisko: "",
-    telefon: "",
+    telefon: firebaseAuth?.currentUser?.phoneNumber ?? "",
     polecenieOdKogo: "",
     wiadomosc: "",
     photoFile: null as File | null,
@@ -531,6 +547,13 @@ export function EventDetailsPage() {
   const canManage = canManagePublicEvent(event, currentUser);
   const photoRequired = isEnrollmentPhotoRequiredForEvent(event, trainer, organizer);
 
+  useEffect(() => {
+    return () => {
+      recaptchaRef.current?.clear();
+      recaptchaRef.current = null;
+    };
+  }, []);
+
   function handleFileChange(fileEvent: ChangeEvent<HTMLInputElement>) {
     const nextFile = fileEvent.target.files?.[0] ?? null;
     setForm((current) => ({
@@ -539,20 +562,26 @@ export function EventDetailsPage() {
     }));
   }
 
-  async function handleSubmit(submitEvent: FormEvent<HTMLFormElement>) {
-    submitEvent.preventDefault();
-
-    if (photoRequired && !form.photoFile) {
-      toast.error("Dodaj zdjęcie twarzy.");
-      return;
+  function validateEnrollmentForm() {
+    if (!form.imieNazwisko.trim()) {
+      throw new Error("Podaj imię i nazwisko.");
     }
 
+    normalizePhoneNumberForSms(form.telefon);
+
+    if (photoRequired && !form.photoFile) {
+      throw new Error("Dodaj zdjęcie twarzy.");
+    }
+  }
+
+  async function submitEnrollmentRequest(phoneOverride?: string) {
     setLoading(true);
+
     try {
       await submitEnrollment({
         eventId: event.id,
         imieNazwisko: form.imieNazwisko,
-        telefon: form.telefon,
+        telefon: phoneOverride ?? form.telefon,
         polecenieOdKogo: form.polecenieOdKogo,
         wiadomosc: form.wiadomosc,
         photoFile: form.photoFile,
@@ -562,6 +591,10 @@ export function EventDetailsPage() {
           ? "Zgłoszenie i zdjęcie zostały zapisane."
           : "Zgłoszenie zostało zapisane.",
       );
+      setConfirmationResult(null);
+      setVerificationCode("");
+      setSmsVerified(false);
+      setIsSmsDialogOpen(false);
       setForm({
         imieNazwisko: "",
         telefon: "",
@@ -574,13 +607,105 @@ export function EventDetailsPage() {
           ? "/wydarzenia-spolecznosci"
           : "/kalendarz",
       );
+      return true;
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać zgłoszenia.",
       );
+      return false;
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSendCode() {
+    if (!firebaseAuth) {
+      toast.error("Firebase Auth nie jest skonfigurowany.");
+      return;
+    }
+
+    setSendingCode(true);
+
+    try {
+      const normalizedPhone = normalizePhoneNumberForSms(form.telefon);
+      if (!recaptchaRef.current) {
+        recaptchaRef.current = createRecaptchaVerifier("enrollment-phone-recaptcha");
+      }
+
+      const result = await signInWithPhoneNumber(
+        firebaseAuth,
+        normalizedPhone,
+        recaptchaRef.current,
+      );
+
+      setForm((current) => ({
+        ...current,
+        telefon: normalizedPhone,
+      }));
+      setVerificationCode("");
+      setConfirmationResult(result);
+      setSmsVerified(false);
+      setIsSmsDialogOpen(true);
+      toast.success("Kod SMS został wysłany.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
+      );
+      recaptchaRef.current?.clear();
+      recaptchaRef.current = null;
+    } finally {
+      setSendingCode(false);
+    }
+  }
+
+  async function handleConfirmCode() {
+    if (!confirmationResult) {
+      toast.error("Najpierw wyślij kod SMS.");
+      return;
+    }
+
+    setConfirmingCode(true);
+
+    try {
+      const result = await confirmationResult.confirm(verificationCode.trim());
+      const confirmedPhone = result.user.phoneNumber ?? form.telefon;
+
+      setForm((current) => ({
+        ...current,
+        telefon: confirmedPhone,
+      }));
+      setSmsVerified(true);
+      setVerificationCode("");
+      toast.success("Numer telefonu został potwierdzony.");
+      await submitEnrollmentRequest(confirmedPhone);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
+      );
+    } finally {
+      setConfirmingCode(false);
+    }
+  }
+
+  async function handleSubmit(submitEvent: FormEvent<HTMLFormElement>) {
+    submitEvent.preventDefault();
+
+    try {
+      validateEnrollmentForm();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Uzupełnij wymagane pola formularza.",
+      );
+      return;
+    }
+
+    if (smsVerified) {
+      await submitEnrollmentRequest();
+      return;
+    }
+
+    setIsSmsDialogOpen(true);
+    await handleSendCode();
   }
 
   return (
@@ -666,9 +791,6 @@ export function EventDetailsPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
             Formularz dołączenia
           </p>
-          <h2 className="mt-4 text-3xl font-semibold text-brand-navy">
-            Chcę poprosić o kontakt w sprawie tego szkolenia
-          </h2>
           <p className="mt-3 text-brand-muted">
             Zgłoszenie trafi do Przekazującego Wiedzę
             {organizer ? " i organizatora." : "."}{" "}
@@ -676,22 +798,6 @@ export function EventDetailsPage() {
               ? "Zdjęcie jest wymagane i trafia do Firebase Storage tylko dla uprawnionych osób."
               : "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."}
           </p>
-          <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4">
-            <p className="text-sm font-semibold text-brand-navy">
-              Chcesz wrócić do swoich zgłoszeń później?
-            </p>
-            <p className="mt-2 text-sm text-brand-muted">
-              Załóż konto na ten sam numer telefonu, a to zgłoszenie pokaże się potem
-              automatycznie w Twojej sekcji szkoleń po zalogowaniu.
-            </p>
-            <Link
-              to={`/rejestracja?role=participant&source=enrollment&eventId=${encodeURIComponent(event.id)}`}
-              className="mt-4 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2.5 text-sm font-semibold text-brand-navy"
-            >
-              Załóż konto
-              <ArrowRight size={14} />
-            </Link>
-          </div>
           {isCancelled && (
             <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
               Zapisy sa wstrzymane, bo to wydarzenie ma status anulowane.
@@ -714,15 +820,19 @@ export function EventDetailsPage() {
             <input
               required
               value={form.telefon}
-              onChange={(event) =>
+              disabled={smsVerified}
+              onChange={(event) => {
+                setConfirmationResult(null);
+                setVerificationCode("");
                 setForm((current) => ({
                   ...current,
                   telefon: event.target.value,
-                }))
-              }
+                }));
+              }}
               placeholder="Numer telefonu"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
             />
+            <div id="enrollment-phone-recaptcha" className="sr-only" />
             <input
               value={form.polecenieOdKogo}
               onChange={(event) =>
@@ -791,6 +901,84 @@ export function EventDetailsPage() {
           </div>
         </form>
       </div>
+      <Dialog open={isSmsDialogOpen} onOpenChange={setIsSmsDialogOpen}>
+        <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
+          <div className="bg-white p-6 sm:p-7">
+            <DialogHeader className="text-left">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                Weryfikacja SMS
+              </p>
+              <DialogTitle className="text-2xl font-semibold text-brand-navy">
+                Potwierdź zgłoszenie kodem SMS
+              </DialogTitle>
+              <DialogDescription className="text-sm leading-6 text-brand-muted">
+                {sendingCode
+                  ? "Wysyłamy kod SMS na podany numer telefonu. Poczekaj chwilę."
+                  : confirmationResult
+                    ? (
+                        <>
+                          Wpisz kod wysłany na numer{" "}
+                          <span className="font-semibold text-brand-navy">{form.telefon}</span>.
+                          Po potwierdzeniu od razu wyślemy zgłoszenie.
+                        </>
+                      )
+                    : "Jeśli kod nie dotarł albo wysyłka się nie powiodła, możesz spróbować ponownie z tego okna."}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="mt-6 grid gap-4">
+              {sendingCode ? (
+                <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-6 text-center text-sm font-semibold text-brand-navy">
+                  Wysyłanie kodu SMS...
+                </div>
+              ) : confirmationResult ? (
+                <input
+                  value={verificationCode}
+                  onChange={(event) => setVerificationCode(event.target.value)}
+                  placeholder="Kod z SMS"
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+              ) : (
+                <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-6 text-sm text-brand-muted">
+                  Kod nie jest jeszcze gotowy do potwierdzenia.
+                </div>
+              )}
+              <div className="flex flex-wrap items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsSmsDialogOpen(false)}
+                  className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+                >
+                  Wróć do formularza
+                </button>
+                <button
+                  type="button"
+                  disabled={sendingCode}
+                  onClick={() => void handleSendCode()}
+                  className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                >
+                  {confirmationResult ? "Wyślij kod ponownie" : "Wyślij kod ponownie"}
+                  <Phone size={16} />
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    sendingCode ||
+                    !confirmationResult ||
+                    confirmingCode ||
+                    verificationCode.trim().length === 0 ||
+                    loading
+                  }
+                  onClick={() => void handleConfirmCode()}
+                  className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {confirmingCode || loading ? "Potwierdzanie..." : "Potwierdź kod"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -1270,6 +1458,7 @@ function SmsRegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
+  const [checkingExistingAccount, setCheckingExistingAccount] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [smsVerified, setSmsVerified] = useState(
@@ -1308,7 +1497,7 @@ function SmsRegisterScreen() {
     };
   }, []);
 
-  if (currentUser) {
+  if (currentUser && !checkingExistingAccount) {
     return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
   }
 
@@ -1381,7 +1570,24 @@ function SmsRegisterScreen() {
     setConfirmingCode(true);
 
     try {
-      await confirmationResult.confirm(verificationCode.trim());
+      setCheckingExistingAccount(true);
+      const result = await confirmationResult.confirm(verificationCode.trim());
+      const confirmedPhone = result.user.phoneNumber ?? form.phone;
+
+      setForm((current) => ({
+        ...current,
+        phone: confirmedPhone,
+      }));
+
+      try {
+        await fetchAppUser(result.user.uid);
+        toast.success("Masz już konto. Zostałeś zalogowany i przeniesiony do kalendarza.");
+        navigate("/kalendarz", { replace: true });
+        return;
+      } catch {
+        // No app profile yet. Continue with the registration form.
+      }
+
       setSmsVerified(true);
       toast.success("Numer telefonu został potwierdzony.");
     } catch (error) {
@@ -1389,6 +1595,7 @@ function SmsRegisterScreen() {
         error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
       );
     } finally {
+      setCheckingExistingAccount(false);
       setConfirmingCode(false);
     }
   }
@@ -1418,14 +1625,7 @@ function SmsRegisterScreen() {
         organizerTrainingIntent: form.organizerTrainingIntent,
         selectedTrainerIds: form.selectedTrainerIds,
       });
-      const authUserId = firebaseAuth?.currentUser?.uid;
-
-      if (authUserId) {
-        const appUser = await fetchAppUser(authUserId);
-        navigate(getRoleHomePath(appUser.role));
-      } else {
-        navigate("/kalendarz");
-      }
+      navigate("/kalendarz");
       toast.success("Konto zostało utworzone i czeka na akceptację trenera.");
     } catch (error) {
       toast.error(

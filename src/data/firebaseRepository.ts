@@ -116,6 +116,7 @@ export function createEmptyStore(): DemoStore {
     organizers: [],
     relations: [],
     trainingEvents: [],
+    publicTrainingEvents: [],
     availabilitySlots: [],
     trainerCalendarFeeds: [],
     trainerExternalBusyMonths: [],
@@ -553,7 +554,7 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
         where("isPublished", "==", true),
       ),
       (trainingEvents) => {
-        onPatch({ trainingEvents });
+        onPatch({ trainingEvents, publicTrainingEvents: trainingEvents });
       },
     ),
   ];

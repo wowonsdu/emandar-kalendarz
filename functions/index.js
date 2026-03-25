@@ -39,7 +39,7 @@ const PUBLIC_APP_BASE_URL =
   asString(process.env.PUBLIC_APP_BASE_URL) ||
   (process.env.FUNCTIONS_EMULATOR === "true"
     ? "http://127.0.0.1:5173"
-    : "https://odjebao.me/emandar");
+    : "https://panel.ceo/emandar");
 
 function nowIso() {
   return new Date().toISOString();
@@ -51,6 +51,10 @@ function createId(prefix) {
 
 function buildAccountApprovalId(requesterUserId, targetTrainerId) {
   return `${requesterUserId}__${targetTrainerId}`;
+}
+
+function buildPhoneAccountRequestId(userId) {
+  return `phone-registration__${userId}`;
 }
 
 function asString(value, fallback = "") {
@@ -1242,7 +1246,10 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
   const trainerProfileId = requestedRoles.includes("trainer") ? createId("trainer") : null;
   const organizerProfileId = requestedRoles.includes("organizer") ? createId("organizer") : null;
   const pendingRoles = requestedRoles.filter((role) => role === "trainer" || role === "organizer");
-  const accountRequestRef = db.collection(collections.accountRequests).doc(createId("account-request"));
+  const accountRequestRef = db
+    .collection(collections.accountRequests)
+    .doc(buildPhoneAccountRequestId(uid));
+  const userRef = db.collection(collections.users).doc(uid);
   const trainerTargets = await Promise.all(
     selectedTrainerIds.map(async (trainerId) => requireTrainerProfile(trainerId)),
   );
@@ -1253,116 +1260,126 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     admin: false,
   });
 
-  const batch = db.batch();
-  batch.set(db.collection(collections.users).doc(uid), {
-    displayName,
-    email: authUser.email ?? null,
-    phone: verifiedPhone,
-    avatarUrl: avatarUrl || "",
-    avatarPath: avatarPath || null,
-    authProvider: "phone",
-    phoneVerifiedAt: createdAt,
-    status: "active",
-    role: "participant",
-    roles: ["participant"],
-    primaryRole: "participant",
-    pendingRoles,
-    accountApprovalStatus: "pending",
-    selectedTrainerIds,
-    approvedTrainerIds: [],
-    trainerProfileId,
-    organizerProfileId,
-    createdAt,
-  });
+  const registrationResult = await db.runTransaction(async (transaction) => {
+    const existingUserSnapshot = await transaction.get(userRef);
 
-  if (trainerProfileId) {
-    batch.set(db.collection(collections.trainers).doc(trainerProfileId), {
-      userId: uid,
-      slug: slugifyDisplayName(displayName),
+    if (existingUserSnapshot.exists) {
+      return { accountCreated: false };
+    }
+
+    transaction.set(userRef, {
       displayName,
-      sortOrder: 999,
-      bio: notes,
-      specialties: [],
-      locations: [],
-      isVisible: false,
-      heroNote: "Profil w trakcie konfiguracji.",
+      email: authUser.email ?? null,
+      phone: verifiedPhone,
       avatarUrl: avatarUrl || "",
       avatarPath: avatarPath || null,
-      brandStatus: "supported",
-      defaultEnrollmentPhotoRequired: false,
+      authProvider: "phone",
+      phoneVerifiedAt: createdAt,
+      status: "active",
+      role: "participant",
+      roles: ["participant"],
+      primaryRole: "participant",
+      pendingRoles,
+      accountApprovalStatus: "pending",
+      selectedTrainerIds,
+      approvedTrainerIds: [],
+      trainerProfileId,
+      organizerProfileId,
+      createdAt,
     });
-  }
 
-  if (organizerProfileId) {
-    batch.set(db.collection(collections.organizers).doc(organizerProfileId), {
-      userId: uid,
-      displayName,
-      description: notes,
-      isVisible: false,
-      contactName: displayName.split(/\s+/)[0] ?? displayName,
-      location: "",
-      trainingIntent: organizerTrainingIntent,
-      defaultEnrollmentPhotoRequired: false,
-    });
-  }
+    if (trainerProfileId) {
+      transaction.set(db.collection(collections.trainers).doc(trainerProfileId), {
+        userId: uid,
+        slug: slugifyDisplayName(displayName),
+        displayName,
+        sortOrder: 999,
+        bio: notes,
+        specialties: [],
+        locations: [],
+        isVisible: false,
+        heroNote: "Profil w trakcie konfiguracji.",
+        avatarUrl: avatarUrl || "",
+        avatarPath: avatarPath || null,
+        brandStatus: "supported",
+        defaultEnrollmentPhotoRequired: false,
+      });
+    }
 
-  trainerTargets.forEach((trainer) => {
     if (organizerProfileId) {
-      batch.set(
-        db.collection(collections.relations).doc(buildRelationId(trainer.id, organizerProfileId)),
+      transaction.set(db.collection(collections.organizers).doc(organizerProfileId), {
+        userId: uid,
+        displayName,
+        description: notes,
+        isVisible: false,
+        contactName: displayName.split(/\s+/)[0] ?? displayName,
+        location: "",
+        trainingIntent: organizerTrainingIntent,
+        defaultEnrollmentPhotoRequired: false,
+      });
+    }
+
+    trainerTargets.forEach((trainer) => {
+      if (organizerProfileId) {
+        transaction.set(
+          db.collection(collections.relations).doc(buildRelationId(trainer.id, organizerProfileId)),
+          {
+            trainerId: trainer.id,
+            organizerId: organizerProfileId,
+            trainerUserId: trainer.userId,
+            organizerUserId: uid,
+            status: "pending",
+            requestedBy: "organizer",
+            createdAt,
+          },
+        );
+      }
+
+      transaction.set(
+        db
+          .collection(collections.trainerAccountApprovals)
+          .doc(buildAccountApprovalId(uid, trainer.id)),
         {
-          trainerId: trainer.id,
-          organizerId: organizerProfileId,
-          trainerUserId: trainer.userId,
-          organizerUserId: uid,
+          requesterUserId: uid,
+          requesterDisplayName: displayName,
+          requesterPhone: verifiedPhone,
+          targetTrainerId: trainer.id,
+          targetTrainerUserId: trainer.userId,
+          requestedRoles,
           status: "pending",
-          requestedBy: "organizer",
           createdAt,
         },
       );
-    }
+    });
 
-    batch.set(
-      db
-        .collection(collections.trainerAccountApprovals)
-        .doc(buildAccountApprovalId(uid, trainer.id)),
-      {
-        requesterUserId: uid,
-        requesterDisplayName: displayName,
-        requesterPhone: verifiedPhone,
-        targetTrainerId: trainer.id,
-        targetTrainerUserId: trainer.userId,
-        requestedRoles,
-        status: "pending",
-        createdAt,
-      },
-    );
+    transaction.set(accountRequestRef, {
+      displayName,
+      email: authUser.email ?? null,
+      phone: verifiedPhone,
+      requestedRoles,
+      notes,
+      status: "approved",
+      authProvider: "phone",
+      organizerTrainingIntent,
+      selectedTrainerIds,
+      avatarPath: avatarPath || null,
+      submitterUid: uid,
+      createdAt,
+      reviewedAt: createdAt,
+      reviewedByUserId: "phone-self-service",
+      createdUserId: uid,
+      trainerProfileId,
+      organizerProfileId,
+    });
+
+    return { accountCreated: true };
   });
 
-  batch.set(accountRequestRef, {
-    displayName,
-    email: authUser.email ?? null,
-    phone: verifiedPhone,
-    requestedRoles,
-    notes,
-    status: "approved",
-    authProvider: "phone",
-    organizerTrainingIntent,
-    selectedTrainerIds,
-    avatarPath: avatarPath || null,
-    submitterUid: uid,
-    createdAt,
-    reviewedAt: createdAt,
-    reviewedByUserId: "phone-self-service",
-    createdUserId: uid,
-    trainerProfileId,
-    organizerProfileId,
-  });
+  if (registrationResult.accountCreated) {
+    await attachEnrollmentsByPhoneToUser(uid, verifiedPhone);
+  }
 
-  await batch.commit();
-  await attachEnrollmentsByPhoneToUser(uid, verifiedPhone);
-
-  return { ok: true, userId: uid, accountCreated: true };
+  return { ok: true, userId: uid, accountCreated: registrationResult.accountCreated };
 });
 
 export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (request) => {

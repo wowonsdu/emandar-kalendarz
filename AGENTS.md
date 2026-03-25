@@ -1,7 +1,7 @@
 # Local Runbook
 
 - Use local Firebase CLI through npm scripts from `package.json`.
-- Default Firebase project for this repo is `emandar-app`.
+- Default Firebase project for this repo is `emandar-prod`.
 - Firebase web config lives in `.env.local`.
 - Emulator-specific frontend env lives in `.env.emulators`.
 
@@ -10,8 +10,8 @@
 - `npm run firebase -- --version` checks the local Firebase CLI version.
 - `npm run firebase:login` logs into Firebase CLI.
 - `npm run firebase:projects` lists available Firebase projects.
-- `npm run firebase:use` switches the repo to project `emandar-app`.
-- `npm run firebase:deploy` deploys functions, Firestore rules, and Storage rules to `emandar-app`.
+- `npm run firebase:use` switches the repo to project `emandar-prod`.
+- `npm run firebase:deploy` deploys functions, Firestore rules, Firestore indexes, and Storage rules to `emandar-prod`.
 - `npm run emu:start` starts Firebase emulators for Auth, Firestore, Storage, and Functions.
 - `npm run emu:start:data` starts the same emulators with import/export persistence in `.firebase-emulator-data`.
 - `npm run dev` starts the normal Vite app against live Firebase config from `.env.local`.
@@ -26,7 +26,7 @@
   1. Run `npm run build`
   2. Copy `dist/` to `root@51.68.143.29:/opt/panel.ceo/emandar/` with `rsync -az --delete`
   3. Verify `https://panel.ceo/emandar/` and the current hashed asset URL both return `200`
-- The older FTP deploy script targets `odjebao.me/emandar-kalendarz`; do not use it for the primary production deploy unless the target is explicitly changed.
+- The legacy FTP deploy script is deprecated for this repo; use the `panel.ceo` deploy flow instead.
 
 ## Local startup
 

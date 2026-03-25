@@ -98,8 +98,8 @@ case "$PROJECT_NAME" in
     PUBLIC_URLS=("https://gdzieciegniecie.pl/")
     ;;
   "emandar-kalendarz")
-    REMOTE_ROOTS=("/domains/odjebao.me/public_html/emandar-kalendarz")
-    PUBLIC_URLS=("https://odjebao.me/emandar-kalendarz/")
+    echo "Use bash scripts/deploy-panel-ceo.sh for emandar-kalendarz." >&2
+    exit 1
     ;;
   *)
     echo "No deploy target mapping for project: $PROJECT_NAME" >&2

@@ -183,6 +183,7 @@ function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStor
     organizers: privateStore.organizers ?? publicStore.organizers,
     relations: privateStore.relations ?? publicStore.relations,
     trainingEvents: privateStore.trainingEvents ?? publicStore.trainingEvents,
+    publicTrainingEvents: privateStore.publicTrainingEvents ?? publicStore.publicTrainingEvents,
     availabilitySlots: privateStore.availabilitySlots ?? publicStore.availabilitySlots,
     trainerCalendarFeeds:
       privateStore.trainerCalendarFeeds ?? publicStore.trainerCalendarFeeds,

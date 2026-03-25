@@ -69,7 +69,7 @@ Usage:
 
 Optional:
   --avatar-url "https://example.com/avatar.jpg"
-  --project-id "emandar-app"
+  --project-id "emandar-prod"
   --help
 
 Notes:

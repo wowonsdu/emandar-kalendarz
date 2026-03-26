@@ -4,6 +4,7 @@ import { AttendanceConfirmationPage } from "./pages/attendance-confirmation";
 import { NotificationsSettingsPage } from "./pages/notifications";
 import {
   CalendarPage,
+  CommunityEventReviewPage,
   CommunityEventsPage,
   EventDetailsPage,
   LandingPage,
@@ -52,6 +53,7 @@ export const router = createBrowserRouter(
         { index: true, element: <Navigate to="/kalendarz" replace /> },
         { path: "kalendarz", Component: CalendarPage },
         { path: "wydarzenia-spolecznosci", Component: CommunityEventsPage },
+        { path: "moderacja-wydarzenia/:token", Component: CommunityEventReviewPage },
         { path: "kalendarz/:eventId", Component: EventDetailsPage },
         { path: "trenerzy", Component: TrainersPage },
         { path: "trenerzy/:slug", Component: TrainerDetailsPage },

@@ -78,7 +78,7 @@ export function PublicLayout() {
                 exactNavLinkClass(location.pathname, "/wydarzenia-spolecznosci")
               }
             >
-              Wydarzenia spolecznosci
+              Społeczność
             </NavLink>
           </nav>
 
@@ -92,13 +92,22 @@ export function PublicLayout() {
                 Moja Przestrzen
               </Link>
             ) : (
-              <Link
-                to="/login"
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-2.5 text-sm font-semibold text-brand-navy"
-              >
-                <ShieldCheck size={16} />
-                Zaloguj sie
-              </Link>
+              <>
+                <Link
+                  to="/login"
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-2.5 text-sm font-semibold text-brand-navy"
+                >
+                  <ShieldCheck size={16} />
+                  Logowanie
+                </Link>
+                <Link
+                  to="/rejestracja"
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-2.5 text-sm font-semibold text-white shadow-soft"
+                >
+                  <ShieldCheck size={16} />
+                  Rejestracja
+                </Link>
+              </>
             )}
           </div>
         </div>
@@ -118,11 +127,11 @@ export function PublicLayout() {
             <Link to="/kalendarz" className="hover:text-brand-navy">
               Najblizsze szkolenia
             </Link>
+            <Link to="/wydarzenia-spolecznosci" className="hover:text-brand-navy">
+              Wydarzenia społeczności
+            </Link>
             <Link to="/trenerzy" className="hover:text-brand-navy">
               Przekazujacy Wiedze
-            </Link>
-            <Link to="/wydarzenia-spolecznosci" className="hover:text-brand-navy">
-              Wydarzenia spolecznosci
             </Link>
             <Link to={userHomePath} className="hover:text-brand-navy">
               {currentUser ? "Moja Przestrzen" : "Panel"}
@@ -138,7 +147,10 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
   const base = [{ to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard }];
 
   if (role === "participant") {
-    return base;
+    return [
+      ...base,
+      { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
+    ];
   }
 
   if (role === "organizer") {
@@ -146,7 +158,6 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
       { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
-      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
       {
         to: "/panel/terminy",
         label: "Terminy Przekazujacych Wiedze",
@@ -164,7 +175,6 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
         ...base,
         { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
         { to: "/panel/szkolenia", label: "Moje wydarzenia", icon: CalendarDays },
-        { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
         { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
         { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
       ];
@@ -174,7 +184,6 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
       { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
-      { to: "/panel/kreator-wydarzen", label: "Kreator wydarzen", icon: CalendarDays },
       { to: "/panel/terminy", label: "Dostepnosc", icon: CalendarDays },
       { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
       { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },

@@ -61,6 +61,12 @@ service cloud.firestore {
       return isSignedIn() && currentUid() == userId;
     }
 
+    function canSwitchOwnRole(userId) {
+      return isOwnUser(userId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["role"]) &&
+        request.resource.data.role in resource.data.roles;
+    }
+
     function isArchived(data) {
       return ("archivedAt" in data) && data.archivedAt != null;
     }
@@ -268,7 +274,8 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAdmin() || isOwnUser(userId);
-      allow create, update, delete: if isAdmin() || isOwnUser(userId);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || canSwitchOwnRole(userId);
     }
 
     match /trainers/{trainerId} {
@@ -383,6 +390,18 @@ service cloud.firestore {
     }
 
     match /trainerPublicationApprovals/{approvalId} {
+      allow get, list: if resource != null && (
+        isAdmin() || (
+          isSignedIn() && (
+            resource.data.requesterUserId == currentUid() ||
+            resource.data.targetTrainerUserId == currentUid()
+          )
+        )
+      );
+      allow create, update, delete: if false;
+    }
+
+    match /trainerAccountApprovals/{approvalId} {
       allow get, list: if resource != null && (
         isAdmin() || (
           isSignedIn() && (

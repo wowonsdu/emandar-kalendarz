@@ -6,7 +6,9 @@ import type {
   ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFinalStatus,
+  EnrollmentRequest,
   OrganizerProfile,
+  ParticipantEnrollmentStatus,
   SharedAvailabilityWindow,
   TrainingEventScheduleDay,
   TrainerOrganizerRelation,
@@ -45,6 +47,40 @@ export function deriveEnrollmentFinalStatus(
   }
 
   return "pending";
+}
+
+export function resolveParticipantEnrollmentStatus(
+  value: ParticipantEnrollmentStatus | null | undefined,
+): ParticipantEnrollmentStatus {
+  return value === "cancelled" ? "cancelled" : "active";
+}
+
+export function isParticipantEnrollmentActive(
+  request: Pick<EnrollmentRequest, "participantStatus" | "finalStatus">,
+) {
+  return (
+    resolveParticipantEnrollmentStatus(request.participantStatus) === "active" &&
+    request.finalStatus !== "rejected"
+  );
+}
+
+export function getParticipantEnrollmentStatusLabel(
+  request: Pick<EnrollmentRequest, "participantStatus" | "finalStatus">,
+) {
+  if (resolveParticipantEnrollmentStatus(request.participantStatus) === "cancelled") {
+    return "zrezygnowano";
+  }
+
+  switch (request.finalStatus) {
+    case "accepted":
+      return "przyjęte";
+    case "partial":
+      return "częściowo przyjęte";
+    case "rejected":
+      return "odrzucone";
+    default:
+      return "oczekuje";
+  }
 }
 
 export function canOrganizerAccessTrainer(
@@ -131,6 +167,7 @@ export function canManageTrainingEvent(
     TrainingEvent,
     | "brandStatus"
     | "archivedAt"
+    | "creatorUserId"
     | "createdByRole"
     | "organizerId"
     | "selfManagedByTrainer"
@@ -138,7 +175,7 @@ export function canManageTrainingEvent(
     | "organizerCollaborationStatus"
     | "trainerId"
   >,
-  actor: Pick<AppUser, "role" | "trainerProfileId" | "organizerProfileId">,
+  actor: Pick<AppUser, "id" | "role" | "trainerProfileId" | "organizerProfileId">,
 ) {
   if (actor.role === "admin") {
     return true;
@@ -164,6 +201,10 @@ export function canManageTrainingEvent(
       resolveOrganizerCollaborationStatus(event) === "accepted" ||
       event.createdByRole === "organizer"
     );
+  }
+
+  if (actor.role === "participant" && actor.id === event.creatorUserId) {
+    return true;
   }
 
   return false;

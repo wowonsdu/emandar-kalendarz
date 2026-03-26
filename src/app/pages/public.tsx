@@ -19,10 +19,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type { AppUser, EmandarBrandStatus, TrainingEvent } from "@/domain/types";
 import { updateActiveRole as updateActiveRoleAction } from "@/data/firebaseRepository";
-import {
-  ensurePhoneParticipantProfile,
-  fetchAppUser,
-} from "@/data/firebaseRepository";
+import { fetchAppUser } from "@/data/firebaseRepository";
 import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
@@ -36,6 +33,13 @@ import {
   sortEventsByDate,
 } from "@/domain/utils";
 import { firebaseAuth } from "@/lib/firebase";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/app/components/ui/dialog";
 import { useAppState } from "../providers/AppProviders";
 
 function formatDate(date: string) {
@@ -112,11 +116,20 @@ const demoLoginSections = [
       { label: "Organizator Demo", email: "organizator-demo@emandar.pl", accent: "Organizator", role: "organizer" },
     ],
   },
+  {
+    title: "Uczestnicy",
+    description: "Konta uczestników do testowania własnego dashboardu, archiwum i przenoszenia zapisów.",
+    accounts: [
+      { label: "Grzegorz Emanowicz", email: "grzegorz.emanowicz@emandar.pl", accent: "Uczestnik", role: "participant" },
+      { label: "Grzegorz Chotnicki", email: "grzegorz.chotnicki@emandar.pl", accent: "Uczestnik", role: "participant" },
+      { label: "Ola Chotnicka", email: "ola.chotnicka@emandar.pl", accent: "Uczestnik", role: "participant" },
+    ],
+  },
 ] as const;
 
 function getPublicOrganizerName(event: TrainingEvent, organizerName?: string, trainerName?: string) {
   if (isSelfManagedTrainingEvent(event)) {
-    return firstName(trainerName);
+    return firstName(trainerName || event.creatorDisplayName);
   }
 
   return firstName(organizerName) || "Zespół Emandar";
@@ -128,10 +141,26 @@ function getPublicOrganizerDescription(
   trainerHeroNote?: string,
 ) {
   if (isSelfManagedTrainingEvent(event)) {
-    return trainerHeroNote ?? "";
+    return trainerHeroNote ?? "Szczegóły organizacyjne otrzymasz po zgłoszeniu.";
   }
 
   return organizerDescription || "Szczegóły organizacyjne otrzymasz po zgłoszeniu.";
+}
+
+function getPublicLeadName(event: TrainingEvent, trainerName?: string) {
+  return trainerName || event.creatorDisplayName || "Gospodarz wydarzenia";
+}
+
+function getPublicLeadDescription(event: TrainingEvent, trainerHeroNote?: string) {
+  if (trainerHeroNote?.trim()) {
+    return trainerHeroNote.trim();
+  }
+
+  if (isCommunityBrandStatus(event.brandStatus)) {
+    return "To wydarzenie społeczności jest prowadzone bezpośrednio przez jego autora.";
+  }
+
+  return "Osoba prowadząca skontaktuje się po wysłaniu zgłoszenia.";
 }
 
 function getEventTags(event: TrainingEvent) {
@@ -157,6 +186,10 @@ function canManagePublicEvent(event: TrainingEvent, currentUser: AppUser | null)
       currentUser.organizerProfileId === event.organizerId &&
       !isTrainingEventArchived(event)
     );
+  }
+
+  if (currentUser.role === "participant") {
+    return currentUser.id === event.creatorUserId;
   }
 
   return false;
@@ -199,15 +232,15 @@ function EventFeedSection({
   events: TrainingEvent[];
 }) {
   return (
-    <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="mb-10 max-w-3xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.32em] text-brand-sky-deep">
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+      <div className="mb-6 max-w-3xl">
+        <p className="text-base font-semibold uppercase tracking-[0.28em] text-brand-navy sm:text-lg">
           {eyebrow}
         </p>
-        <h1 className="mt-3 text-4xl font-semibold text-brand-navy sm:text-5xl">
-          {title}
-        </h1>
-        <p className="mt-4 text-lg text-brand-muted">{description}</p>
+        <p className="mt-2 text-lg text-brand-muted">
+          <span className="text-brand-muted">{title}. </span>
+          {description}
+        </p>
       </div>
 
       <div className="grid gap-6">
@@ -221,7 +254,13 @@ function EventFeedSection({
   );
 }
 
-function EventCard({ eventId }: { eventId: string }) {
+function EventCard({
+  eventId,
+  showTrainerImage = true,
+}: {
+  eventId: string;
+  showTrainerImage?: boolean;
+}) {
   const { currentUser, store } = useAppState();
   const event = store.trainingEvents.find((item) => item.id === eventId);
 
@@ -235,29 +274,36 @@ function EventCard({ eventId }: { eventId: string }) {
   const scheduleRangeLabel = getScheduleRangeLabel(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const canManage = canManagePublicEvent(event, currentUser);
+  const leadName = getPublicLeadName(event, trainer?.displayName);
 
   return (
     <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-      <div className="grid gap-6 md:grid-cols-[228px_minmax(0,1fr)] md:items-stretch">
-        <div className="relative h-full min-h-[21rem] overflow-hidden rounded-[1.75rem] bg-brand-shell">
-          {trainer?.avatarUrl ? (
-            <img
-              src={trainer.avatarUrl}
-              alt={trainer.displayName}
-              className="h-full w-full object-cover object-top"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand-sky/40 to-white text-4xl font-semibold text-brand-navy">
-              {trainer?.displayName?.slice(0, 1)}
+      <div
+        className={`grid gap-6 md:items-stretch ${
+          showTrainerImage ? "md:grid-cols-[228px_minmax(0,1fr)]" : "md:grid-cols-1"
+        }`}
+      >
+        {showTrainerImage && (
+          <div className="relative h-full min-h-[21rem] overflow-hidden rounded-[1.75rem] bg-brand-shell">
+            {trainer?.avatarUrl ? (
+              <img
+                src={trainer.avatarUrl}
+                alt={trainer.displayName}
+                className="h-full w-full object-cover object-top"
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand-sky/40 to-white text-4xl font-semibold text-brand-navy">
+                {leadName.slice(0, 1)}
+              </div>
+            )}
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/45 to-transparent px-4 py-5 text-white">
+              <p className="text-sm uppercase tracking-[0.2em] text-white/75">
+                {isCommunityEvent ? "Gospodarz wydarzenia" : "Przekazujący Wiedzę"}
+              </p>
+              <p className="text-lg font-semibold">{leadName}</p>
             </div>
-          )}
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/45 to-transparent px-4 py-5 text-white">
-            <p className="text-sm uppercase tracking-[0.2em] text-white/75">
-              Przekazujący Wiedzę
-            </p>
-            <p className="text-lg font-semibold">{trainer?.displayName}</p>
           </div>
-        </div>
+        )}
 
         <div className="flex h-full flex-col">
           <div>
@@ -353,7 +399,7 @@ export function LandingPage() {
           <p className="mt-6 max-w-3xl text-lg text-brand-muted">
             W tej wersji dane publiczne, logowanie, zgłoszenia i zdjęcia trafiają
             już do Firebase. Możesz przejść do kalendarza, sprawdzić
-            Przekazujących Wiedzę, wejść w Wydarzenia Społeczności albo zalogować się do panelu.
+            Przekazujących Wiedzę albo zalogować się do panelu.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
             <Link
@@ -368,12 +414,6 @@ export function LandingPage() {
               className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
             >
               Poznaj Przekazujących Wiedzę
-            </Link>
-            <Link
-              to="/wydarzenia-spolecznosci"
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
-            >
-              Wydarzenia Społeczności
             </Link>
             <Link
               to="/login"
@@ -399,13 +439,6 @@ export function LandingPage() {
                 "Publiczne profile Przekazujących Wiedzę oraz ich najbliższe wydarzenia.",
               icon: Users,
               to: "/trenerzy",
-            },
-            {
-              title: "Wydarzenia Społeczności",
-              description:
-                "Osobna strona z nieoficjalnymi wydarzeniami wspieranymi przez Emandar.",
-              icon: CalendarDays,
-              to: "/wydarzenia-spolecznosci",
             },
             {
               title: "Panel",
@@ -458,7 +491,7 @@ export function CalendarPage() {
     <EventFeedSection
       eyebrow="Kalendarz"
       title="Najblizsze grupy Emandar"
-      description="Znajdz wydarzenie dla siebie i popros o kontakt. Osobna zakladka Wydarzenia Spolecznosci zbiera inicjatywy niezalezne."
+      description="Znajdz wydarzenie dla siebie i popros o kontakt z osoba prowadzaca lub organizatorem."
       emptyTitle="Brak opublikowanych szkoleń"
       emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
       events={events}
@@ -484,11 +517,11 @@ export function CommunityEventsPage() {
 
   return (
     <EventFeedSection
-      eyebrow="Spolecznosc"
-      title="Wydarzenia Spolecznosci"
-      description="To osobna przestrzen dla nieoficjalnych wydarzen wspieranych przez Emandar. Znajdziesz tu niezalezne inicjatywy, kameralne spotkania i szkolenia spolecznosci."
+      eyebrow="Społeczność"
+      title="Wydarzenia społeczności"
+      description="Przeglądaj otwarte wydarzenia społeczności i poproś o kontakt z osobą prowadzącą."
       emptyTitle="Brak wydarzeń społeczności"
-      emptyDescription="Gdy pojawią się nowe inicjatywy wspierane przez społeczność, zobaczysz je tutaj."
+      emptyDescription="Po opublikowaniu nowych wydarzeń pojawią się właśnie tutaj."
       events={events}
     />
   );
@@ -496,36 +529,56 @@ export function CommunityEventsPage() {
 
 export function EventDetailsPage() {
   const { eventId } = useParams();
-  const { currentUser, store, submitEnrollment } = useAppState();
+  const { currentUser, ensurePhoneParticipantProfileForFlow, store, submitEnrollment } =
+    useAppState();
   const navigate = useNavigate();
+  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const event = store.trainingEvents.find((item) => item.id === eventId);
   const trainer = store.trainers.find((item) => item.id === event?.trainerId);
   const organizer = store.organizers.find((item) => item.id === event?.organizerId);
   const [loading, setLoading] = useState(false);
+  const [sendingCode, setSendingCode] = useState(false);
+  const [confirmingCode, setConfirmingCode] = useState(false);
+  const [verificationCode, setVerificationCode] = useState("");
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
+  const [smsDialogStage, setSmsDialogStage] = useState<"verify" | "success">("verify");
+  const [smsVerified, setSmsVerified] = useState(
+    Boolean(firebaseAuth?.currentUser?.phoneNumber),
+  );
   const [form, setForm] = useState({
     imieNazwisko: "",
-    telefon: "",
+    telefon: firebaseAuth?.currentUser?.phoneNumber ?? "",
     polecenieOdKogo: "",
     wiadomosc: "",
     photoFile: null as File | null,
   });
 
-  if (!event || !trainer) {
+  if (!event) {
     return <Navigate to="/kalendarz" replace />;
   }
 
   if (isTrainingEventArchived(event)) {
-    return <Navigate to={isCommunityBrandStatus(event.brandStatus) ? "/wydarzenia-spolecznosci" : "/kalendarz"} replace />;
+    return <Navigate to="/kalendarz" replace />;
   }
 
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
-  const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventStatus = resolveTrainingEventStatus(event.status);
   const isCancelled = eventStatus === "cancelled";
   const eventTags = getEventTags(event);
   const canManage = canManagePublicEvent(event, currentUser);
   const photoRequired = isEnrollmentPhotoRequiredForEvent(event, trainer, organizer);
+  const leadName = getPublicLeadName(event, trainer?.displayName);
+  const leadDescription = getPublicLeadDescription(event, trainer?.heroNote);
+  const returnPath = "/panel/dashboard";
+
+  useEffect(() => {
+    return () => {
+      recaptchaRef.current?.clear();
+      recaptchaRef.current = null;
+    };
+  }, []);
 
   function handleFileChange(fileEvent: ChangeEvent<HTMLInputElement>) {
     const nextFile = fileEvent.target.files?.[0] ?? null;
@@ -535,20 +588,44 @@ export function EventDetailsPage() {
     }));
   }
 
-  async function handleSubmit(submitEvent: FormEvent<HTMLFormElement>) {
-    submitEvent.preventDefault();
-
-    if (photoRequired && !form.photoFile) {
-      toast.error("Dodaj zdjęcie twarzy.");
+  function handleSmsDialogOpenChange(nextOpen: boolean) {
+    if (nextOpen) {
+      setIsSmsDialogOpen(true);
       return;
     }
 
+    setIsSmsDialogOpen(false);
+
+    if (smsDialogStage === "success") {
+      navigate(returnPath);
+    }
+  }
+
+  function handleSuccessReturn() {
+    setIsSmsDialogOpen(false);
+    navigate(returnPath);
+  }
+
+  function validateEnrollmentForm() {
+    if (!form.imieNazwisko.trim()) {
+      throw new Error("Podaj imię i nazwisko.");
+    }
+
+    normalizePhoneNumberForSms(form.telefon);
+
+    if (photoRequired && !form.photoFile) {
+      throw new Error("Dodaj zdjęcie twarzy.");
+    }
+  }
+
+  async function submitEnrollmentRequest(phoneOverride?: string) {
     setLoading(true);
+
     try {
       await submitEnrollment({
         eventId: event.id,
         imieNazwisko: form.imieNazwisko,
-        telefon: form.telefon,
+        telefon: phoneOverride ?? form.telefon,
         polecenieOdKogo: form.polecenieOdKogo,
         wiadomosc: form.wiadomosc,
         photoFile: form.photoFile,
@@ -558,21 +635,119 @@ export function EventDetailsPage() {
           ? "Zgłoszenie i zdjęcie zostały zapisane."
           : "Zgłoszenie zostało zapisane.",
       );
+      setVerificationCode("");
+      setConfirmationResult(null);
+      setSmsDialogStage("success");
+      setIsSmsDialogOpen(true);
       setForm({
         imieNazwisko: "",
-        telefon: "",
+        telefon: firebaseAuth?.currentUser?.phoneNumber ?? "",
         polecenieOdKogo: "",
         wiadomosc: "",
         photoFile: null,
       });
-      navigate(isCommunityEvent ? "/wydarzenia-spolecznosci" : "/kalendarz");
+      return true;
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać zgłoszenia.",
       );
+      return false;
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleSendCode() {
+    if (!firebaseAuth) {
+      toast.error("Firebase Auth nie jest skonfigurowany.");
+      return;
+    }
+
+    setSendingCode(true);
+
+    try {
+      const normalizedPhone = normalizePhoneNumberForSms(form.telefon);
+      if (!recaptchaRef.current) {
+        recaptchaRef.current = createRecaptchaVerifier("enrollment-phone-recaptcha");
+      }
+
+      const result = await signInWithPhoneNumber(
+        firebaseAuth,
+        normalizedPhone,
+        recaptchaRef.current,
+      );
+
+      setForm((current) => ({
+        ...current,
+        telefon: normalizedPhone,
+      }));
+      setSmsDialogStage("verify");
+      setVerificationCode("");
+      setConfirmationResult(result);
+      setSmsVerified(false);
+      setIsSmsDialogOpen(true);
+      toast.success("Kod SMS został wysłany.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
+      );
+      recaptchaRef.current?.clear();
+      recaptchaRef.current = null;
+    } finally {
+      setSendingCode(false);
+    }
+  }
+
+  async function handleConfirmCode() {
+    if (!confirmationResult) {
+      toast.error("Najpierw wyślij kod SMS.");
+      return;
+    }
+
+    setConfirmingCode(true);
+
+    try {
+      const result = await confirmationResult.confirm(verificationCode.trim());
+      const confirmedPhone = result.user.phoneNumber ?? form.telefon;
+      await ensurePhoneParticipantProfileForFlow(event.trainerId ?? undefined);
+
+      setForm((current) => ({
+        ...current,
+        telefon: confirmedPhone,
+      }));
+      setSmsVerified(true);
+      setVerificationCode("");
+      toast.success("Numer telefonu został potwierdzony.");
+      await submitEnrollmentRequest(confirmedPhone);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
+      );
+    } finally {
+      setConfirmingCode(false);
+    }
+  }
+
+  async function handleSubmit(submitEvent: FormEvent<HTMLFormElement>) {
+    submitEvent.preventDefault();
+
+    try {
+      validateEnrollmentForm();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Uzupełnij wymagane pola formularza.",
+      );
+      return;
+    }
+
+    if (smsVerified) {
+      await ensurePhoneParticipantProfileForFlow(event.trainerId ?? undefined);
+      await submitEnrollmentRequest();
+      return;
+    }
+
+    setIsSmsDialogOpen(true);
+    await handleSendCode();
   }
 
   return (
@@ -610,33 +785,33 @@ export function EventDetailsPage() {
             Maks. {event.capacity} uczestnikow
           </p>
 
-          <div
-            className={`mt-8 grid gap-4 ${
-              isCommunityEvent ? "md:grid-cols-1" : "md:grid-cols-2"
-            }`}
-          >
+          <div className="mt-8 grid gap-4 md:grid-cols-2">
             <div className="rounded-3xl border border-brand-line bg-white p-5">
               <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-                Przekazujący Wiedzę
+                {isCommunityBrandStatus(event.brandStatus)
+                  ? "Gospodarz wydarzenia"
+                  : "Przekazujący Wiedzę"}
               </p>
               <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {trainer.displayName}
+                {leadName}
               </p>
-              <p className="mt-2 text-brand-muted">{trainer.heroNote}</p>
+              <p className="mt-2 text-brand-muted">{leadDescription}</p>
             </div>
-            {!isCommunityEvent && (
-              <div className="rounded-3xl border border-brand-line bg-white p-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-                  Organizator
-                </p>
-                <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                    {getPublicOrganizerName(event, undefined, trainer.displayName)}
-                  </p>
-                  <p className="mt-2 text-brand-muted">
-                    {getPublicOrganizerDescription(event, undefined, trainer.heroNote)}
-                  </p>
-                </div>
-              )}
+            <div className="rounded-3xl border border-brand-line bg-white p-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+                Organizator
+              </p>
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+                {getPublicOrganizerName(event, organizer?.displayName, leadName)}
+              </p>
+              <p className="mt-2 text-brand-muted">
+                {getPublicOrganizerDescription(
+                  event,
+                  organizer?.description,
+                  trainer?.heroNote,
+                )}
+              </p>
+            </div>
           </div>
           {eventTags.length > 0 && (
             <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-5">
@@ -664,13 +839,9 @@ export function EventDetailsPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
             Formularz dołączenia
           </p>
-          <h2 className="mt-4 text-3xl font-semibold text-brand-navy">
-            Chcę poprosić o kontakt w sprawie tego szkolenia
-          </h2>
           <p className="mt-3 text-brand-muted">
-            {isCommunityEvent
-              ? "Zgloszenie trafi bezposrednio do osoby prowadzacej to wydarzenie."
-              : "Zgłoszenie trafi jednocześnie do Przekazującego Wiedzę i organizatora."}{" "}
+            Zgłoszenie trafi do Przekazującego Wiedzę
+            {organizer ? " i organizatora." : "."}{" "}
             {photoRequired
               ? "Zdjęcie jest wymagane i trafia do Firebase Storage tylko dla uprawnionych osób."
               : "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."}
@@ -697,15 +868,20 @@ export function EventDetailsPage() {
             <input
               required
               value={form.telefon}
-              onChange={(event) =>
+              disabled={smsVerified}
+              onChange={(event) => {
+                setSmsDialogStage("verify");
+                setConfirmationResult(null);
+                setVerificationCode("");
                 setForm((current) => ({
                   ...current,
                   telefon: event.target.value,
-                }))
-              }
+                }));
+              }}
               placeholder="Numer telefonu"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
             />
+            <div id="enrollment-phone-recaptcha" className="sr-only" />
             <input
               value={form.polecenieOdKogo}
               onChange={(event) =>
@@ -746,9 +922,9 @@ export function EventDetailsPage() {
                 }))
               }
               placeholder={
-                isCommunityEvent
-                  ? "Napisz wiadomosc do osoby prowadzacej wydarzenie"
-                  : "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
+                organizer
+                  ? "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
+                  : "Napisz wiadomość do osoby prowadzącej"
               }
               className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
@@ -774,6 +950,298 @@ export function EventDetailsPage() {
           </div>
         </form>
       </div>
+      <Dialog open={isSmsDialogOpen} onOpenChange={handleSmsDialogOpenChange}>
+        <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
+          <div className="bg-white p-6 sm:p-7">
+            <DialogHeader className="text-left">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                {smsDialogStage === "success" ? "Zgłoszenie wysłane" : "Weryfikacja SMS"}
+              </p>
+              <DialogTitle className="text-2xl font-semibold text-brand-navy">
+                {smsDialogStage === "success"
+                  ? "Zgłoszenie zostało przekazane"
+                  : "Potwierdź zgłoszenie kodem SMS"}
+              </DialogTitle>
+              <DialogDescription className="text-sm leading-6 text-brand-muted">
+                {smsDialogStage === "success"
+                  ? "Organizator dostał Twoje zgłoszenie, dostaniesz sms lub telefon z potwierdzeniem zapisu na szkolenie."
+                  : sendingCode
+                  ? "Wysyłamy kod SMS na podany numer telefonu. Poczekaj chwilę."
+                  : confirmationResult
+                    ? (
+                        <>
+                          Wpisz kod wysłany na numer{" "}
+                          <span className="font-semibold text-brand-navy">{form.telefon}</span>.
+                          Po potwierdzeniu od razu wyślemy zgłoszenie.
+                        </>
+                      )
+                    : "Jeśli kod nie dotarł albo wysyłka się nie powiodła, możesz spróbować ponownie z tego okna."}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="mt-6 grid gap-4">
+              {smsDialogStage === "success" ? (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleSuccessReturn}
+                    className="inline-flex items-center justify-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                  >
+                    Przejdź do Mojej przestrzeni
+                  </button>
+                </div>
+              ) : sendingCode ? (
+                <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-6 text-center text-sm font-semibold text-brand-navy">
+                  Wysyłanie kodu SMS...
+                </div>
+              ) : confirmationResult ? (
+                <input
+                  value={verificationCode}
+                  onChange={(event) => setVerificationCode(event.target.value)}
+                  placeholder="Kod z SMS"
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+              ) : (
+                <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-6 text-sm text-brand-muted">
+                  Kod nie jest jeszcze gotowy do potwierdzenia.
+                </div>
+              )}
+              {smsDialogStage === "verify" ? (
+                <div className="flex flex-wrap items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsSmsDialogOpen(false)}
+                    className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+                  >
+                    Wróć do formularza
+                  </button>
+                  <button
+                    type="button"
+                    disabled={sendingCode}
+                    onClick={() => void handleSendCode()}
+                    className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                  >
+                    Wyślij kod ponownie
+                    <Phone size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      sendingCode ||
+                      !confirmationResult ||
+                      confirmingCode ||
+                      verificationCode.trim().length === 0 ||
+                      loading
+                    }
+                    onClick={() => void handleConfirmCode()}
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    {confirmingCode || loading ? "Potwierdzanie..." : "Potwierdź kod"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
+}
+
+export function CommunityEventReviewPage() {
+  const { token } = useParams();
+  const { getCommunityEventReview, reviewCommunityEvent } = useAppState();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [reviewLoaded, setReviewLoaded] = useState<{
+    event: TrainingEvent;
+    creatorName: string;
+    creatorPhone: string;
+  } | null>(null);
+  const [reviewMessage, setReviewMessage] = useState("");
+  const [enableAutoApprove, setEnableAutoApprove] = useState(false);
+  const [decision, setDecision] = useState<"accepted" | "rejected" | null>(null);
+
+  useEffect(() => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    void getCommunityEventReview(token)
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        setReviewLoaded({
+          event: result.event,
+          creatorName: result.creatorName,
+          creatorPhone: result.creatorPhone,
+        });
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Nie udało się wczytać moderacji.");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getCommunityEventReview, token]);
+
+  async function handleDecision(nextDecision: "accepted" | "rejected") {
+    if (!token) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await reviewCommunityEvent({
+        token,
+        decision: nextDecision,
+        message: reviewMessage,
+        enableAutoApprove,
+      });
+      setDecision(nextDecision);
+      toast.success(
+        nextDecision === "accepted"
+          ? "Wydarzenie zostało zatwierdzone."
+          : "Wydarzenie zostało odrzucone.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udało się zapisać decyzji.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <section className="mx-auto max-w-4xl px-4 py-14 sm:px-6 lg:px-8">
+        <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
+          <p className="text-sm text-brand-muted">Ładowanie moderacji wydarzenia...</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (!token || !reviewLoaded) {
+    return (
+      <section className="mx-auto max-w-4xl px-4 py-14 sm:px-6 lg:px-8">
+        <EmptyState
+          title="Link moderacyjny jest nieaktualny"
+          description="Ten token nie działa albo wydarzenie zostało już wcześniej rozpatrzone."
+        />
+      </section>
+    );
+  }
+
+  const scheduleRows = getScheduleRows(reviewLoaded.event);
+
+  return (
+    <section className="mx-auto max-w-5xl px-4 py-14 sm:px-6 lg:px-8">
+      <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+        <article className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
+          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
+            Moderacja wydarzenia społeczności
+          </p>
+          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
+            {reviewLoaded.event.location}
+          </h1>
+          <p className="mt-3 text-lg text-brand-muted">{reviewLoaded.event.summary}</p>
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            {scheduleRows.map((row) => (
+              <div key={row.key} className="rounded-3xl bg-brand-shell p-5">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                  {row.title}
+                </p>
+                <p className="mt-2 text-brand-navy">{row.label}</p>
+                <p className="text-brand-muted">{row.range}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 space-y-3 text-brand-muted">
+            <p>{reviewLoaded.event.description}</p>
+            <p>Maks. miejsc: {reviewLoaded.event.capacity}</p>
+            <p>Twórca: {reviewLoaded.creatorName}</p>
+            <p>Telefon: {reviewLoaded.creatorPhone}</p>
+          </div>
+        </article>
+
+        <article className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
+          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
+            Decyzja admina
+          </p>
+          {decision ? (
+            <div className="mt-6 rounded-3xl bg-brand-shell p-5">
+              <p className="text-lg font-semibold text-brand-navy">
+                {decision === "accepted" ? "Wydarzenie zatwierdzone" : "Wydarzenie odrzucone"}
+              </p>
+              <p className="mt-2 text-brand-muted">
+                Decyzja została już zapisana. Twórca otrzyma SMS z informacją zwrotną.
+              </p>
+            </div>
+          ) : (
+            <>
+              <label className="mt-6 grid gap-2">
+                <span className="text-sm font-semibold text-brand-navy">
+                  Komentarz dla twórcy
+                </span>
+                <textarea
+                  rows={6}
+                  value={reviewMessage}
+                  onChange={(event) => setReviewMessage(event.target.value)}
+                  className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+              </label>
+
+              <label className="mt-5 flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy">
+                <input
+                  type="checkbox"
+                  checked={enableAutoApprove}
+                  onChange={(event) => setEnableAutoApprove(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+                />
+                <span className="grid gap-1">
+                  <span className="text-sm font-semibold">
+                    Akceptuj automatycznie kolejne wydarzenia tej osoby
+                  </span>
+                  <span className="text-sm text-brand-muted">
+                    Włączy auto-akceptację przyszłych wydarzeń społeczności tego autora.
+                  </span>
+                </span>
+              </label>
+
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void handleDecision("accepted")}
+                  className="inline-flex items-center justify-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {saving ? "Zapisywanie..." : "Zatwierdzam"}
+                </button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => void handleDecision("rejected")}
+                  className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                >
+                  Odrzucam
+                </button>
+              </div>
+            </>
+          )}
+        </article>
+      </div>
     </section>
   );
 }
@@ -789,15 +1257,12 @@ export function TrainersPage() {
   );
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="mb-10 max-w-3xl">
-        <p className="text-sm font-semibold uppercase tracking-[0.32em] text-brand-sky-deep">
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+      <div className="mb-6 max-w-2xl">
+        <p className="text-base font-semibold uppercase tracking-[0.28em] text-brand-navy sm:text-lg">
           Przekazujący Wiedzę
         </p>
-        <h1 className="mt-3 text-4xl font-semibold text-brand-navy sm:text-5xl">
-          Profile Przekazujących Wiedzę
-        </h1>
-        <p className="mt-4 text-lg text-brand-muted">
+        <p className="mt-2 text-lg text-brand-muted">
           Każdy z naszych przekazujących wiedzę ma swój niepowtarzalny aromat, poznaj je wszystkie.
         </p>
       </div>
@@ -873,7 +1338,7 @@ export function TrainerDetailsPage() {
   }
 
   if (!trainer.isVisible || !isOfficialTrainerProfile(trainer.brandStatus)) {
-    return <Navigate to="/wydarzenia-spolecznosci" replace />;
+    return <Navigate to="/trenerzy" replace />;
   }
 
   const publicEvents = sortEventsByDate(
@@ -938,7 +1403,9 @@ export function TrainerDetailsPage() {
               description="Ta osoba nie ma jeszcze opublikowanych szkolen."
             />
           ) : (
-            publicEvents.map((event) => <EventCard key={event.id} eventId={event.id} />)
+            publicEvents.map((event) => (
+              <EventCard key={event.id} eventId={event.id} showTrainerImage={false} />
+            ))
           )}
         </div>
       </div>
@@ -993,7 +1460,8 @@ function createRecaptchaVerifier(containerId: string) {
 }
 
 function SmsLoginScreen() {
-  const { authReady, currentUser, getRoleHomePath, signIn } = useAppState();
+  const { authReady, currentUser, ensurePhoneParticipantProfileForFlow, getRoleHomePath, signIn } =
+    useAppState();
   const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const [phone, setPhone] = useState("");
@@ -1062,7 +1530,13 @@ function SmsLoginScreen() {
 
     try {
       const result = await confirmationResult.confirm(verificationCode.trim());
-      const appUser = await fetchAppUser(result.user.uid);
+      let appUser;
+      try {
+        appUser = await fetchAppUser(result.user.uid);
+      } catch {
+        await ensurePhoneParticipantProfileForFlow();
+        appUser = await fetchAppUser(result.user.uid);
+      }
       toast.success("Zalogowano do panelu.");
       navigate(getRoleHomePath(appUser.role));
     } catch (error) {
@@ -1074,14 +1548,13 @@ function SmsLoginScreen() {
           return;
         } catch {
           try {
-            await ensurePhoneParticipantProfile();
+            await ensurePhoneParticipantProfileForFlow();
             const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
-            toast.success("Zalogowano do przestrzeni uczestnika.");
+            toast.success("Utworzono konto uczestnika i zalogowano do panelu.");
             navigate(getRoleHomePath(appUser.role));
             return;
           } catch {
-            toast.info("Numer potwierdzony. Uzupełnij teraz rejestrację konta.");
-            navigate(`/rejestracja?phone=${encodeURIComponent(phone)}`);
+            toast.error("Nie udało się dokończyć tworzenia konta uczestnika.");
             return;
           }
         }
@@ -1097,7 +1570,7 @@ function SmsLoginScreen() {
 
   async function handleQuickLogin(
     emailToUse: string,
-    targetRole: "admin" | "trainer" | "organizer",
+    targetRole: "admin" | "trainer" | "organizer" | "participant",
   ) {
     setQuickLoginEmail(emailToUse);
 
@@ -1250,16 +1723,26 @@ function SmsLoginScreen() {
 }
 
 function SmsRegisterScreen() {
-  const { currentUser, getRoleHomePath, store, submitAccountRequest } = useAppState();
+  const {
+    currentUser,
+    ensurePhoneParticipantProfileForFlow,
+    getRoleHomePath,
+    store,
+    submitAccountRequest,
+  } = useAppState();
   const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const searchParams =
+    typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+  const participantSignup = searchParams.get("role") === "participant";
+  const enrollmentSource = searchParams.get("source") === "enrollment";
   const prefetchedPhone =
-    typeof window === "undefined"
-      ? ""
-      : new URLSearchParams(window.location.search).get("phone") ?? "";
+    typeof window === "undefined" ? "" : searchParams.get("phone") ?? "";
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
+  const [checkingExistingAccount, setCheckingExistingAccount] = useState(false);
+  const [stayOnRegistrationFlow, setStayOnRegistrationFlow] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [smsVerified, setSmsVerified] = useState(
@@ -1268,7 +1751,9 @@ function SmsRegisterScreen() {
   const [form, setForm] = useState({
     displayName: "",
     phone: prefetchedPhone,
-    requestedRoles: ["participant"] as Array<"trainer" | "organizer" | "participant">,
+    requestedRoles: participantSignup
+      ? (["participant"] as Array<"trainer" | "organizer" | "participant">)
+      : ([] as Array<"trainer" | "organizer" | "participant">),
     notes: "",
     organizerTrainingIntent: "",
     selectedTrainerIds: [] as string[],
@@ -1278,8 +1763,6 @@ function SmsRegisterScreen() {
     () => store.trainers.filter((trainer) => !isCommunityBrandStatus(trainer.brandStatus)),
     [store.trainers],
   );
-  const shouldSelectTrainers =
-    form.requestedRoles.includes("organizer") || form.requestedRoles.includes("trainer");
 
   useEffect(() => {
     if (firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous) {
@@ -1298,17 +1781,8 @@ function SmsRegisterScreen() {
     };
   }, []);
 
-  if (currentUser) {
+  if (currentUser && !checkingExistingAccount && !stayOnRegistrationFlow) {
     return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
-  }
-
-  function toggleRole(role: "trainer" | "organizer" | "participant", checked: boolean) {
-    setForm((current) => ({
-      ...current,
-      requestedRoles: checked
-        ? Array.from(new Set([...current.requestedRoles, role]))
-        : current.requestedRoles.filter((item) => item !== role),
-    }));
   }
 
   function toggleTrainer(trainerId: string, checked: boolean) {
@@ -1317,6 +1791,20 @@ function SmsRegisterScreen() {
       selectedTrainerIds: checked
         ? Array.from(new Set([...current.selectedTrainerIds, trainerId]))
         : current.selectedTrainerIds.filter((item) => item !== trainerId),
+    }));
+  }
+
+  function toggleRole(
+    role: "trainer" | "organizer" | "participant",
+    checked: boolean,
+  ) {
+    setForm((current) => ({
+      ...current,
+      requestedRoles: checked
+        ? Array.from(new Set([...current.requestedRoles, role]))
+        : current.requestedRoles.filter((item) => item !== role),
+      organizerTrainingIntent:
+        role === "organizer" && !checked ? "" : current.organizerTrainingIntent,
     }));
   }
 
@@ -1366,14 +1854,36 @@ function SmsRegisterScreen() {
     setConfirmingCode(true);
 
     try {
-      await confirmationResult.confirm(verificationCode.trim());
+      setCheckingExistingAccount(true);
+      const result = await confirmationResult.confirm(verificationCode.trim());
+      const confirmedPhone = result.user.phoneNumber ?? form.phone;
+      await ensurePhoneParticipantProfileForFlow();
+      const appUser = await fetchAppUser(result.user.uid);
+
+      setForm((current) => ({
+        ...current,
+        displayName: current.displayName || appUser.displayName || "",
+        phone: confirmedPhone,
+        selectedTrainerIds:
+          current.selectedTrainerIds.length > 0
+            ? current.selectedTrainerIds
+            : appUser.selectedTrainerIds ?? [],
+        requestedRoles: current.requestedRoles.includes("participant")
+          ? current.requestedRoles
+          : (["participant", ...current.requestedRoles] as Array<
+              "trainer" | "organizer" | "participant"
+            >),
+      }));
+
+      setStayOnRegistrationFlow(true);
       setSmsVerified(true);
-      toast.success("Numer telefonu został potwierdzony.");
+      toast.success("Numer telefonu został potwierdzony. Dokończ onboarding konta.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
       );
     } finally {
+      setCheckingExistingAccount(false);
       setConfirmingCode(false);
     }
   }
@@ -1403,15 +1913,8 @@ function SmsRegisterScreen() {
         organizerTrainingIntent: form.organizerTrainingIntent,
         selectedTrainerIds: form.selectedTrainerIds,
       });
-      const authUserId = firebaseAuth?.currentUser?.uid;
-
-      if (authUserId) {
-        const appUser = await fetchAppUser(authUserId);
-        navigate(getRoleHomePath(appUser.role));
-      } else {
-        navigate("/kalendarz");
-      }
-      toast.success("Konto zostało utworzone.");
+      navigate("/panel/dashboard");
+      toast.success("Onboarding został zapisany.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się utworzyć konta.",
@@ -1427,14 +1930,16 @@ function SmsRegisterScreen() {
         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
           Rejestracja
         </p>
-        <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
-          Załóż konto przez numer telefonu
-        </h1>
         <p className="mt-4 max-w-3xl text-lg text-brand-muted">
-          W tym flow zbieramy tylko to, co potrzebne od razu: imię i nazwisko,
-          numer telefonu, zdjęcie, notatkę i typ konta. Logowanie oraz autoryzacja
-          odbywają się wyłącznie przez SMS.
+          Najpierw potwierdzasz numer telefonu, a potem uzupełniasz profil uczestnika i,
+          jeśli chcesz, prosisz o rolę organizatora grup Emandar.
         </p>
+        {enrollmentSource && (
+          <p className="mt-3 max-w-3xl rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-sm text-brand-muted">
+            Jeśli wcześniej wysłałeś lub wysłałaś prośbę o kontakt do szkolenia na ten sam numer,
+            po założeniu konta zgłoszenie pojawi się automatycznie w Twoich szkoleniach.
+          </p>
+        )}
 
         <form onSubmit={handleSubmit} className="mt-8 grid gap-5">
           <div className="grid gap-4 md:grid-cols-2">
@@ -1519,10 +2024,10 @@ function SmsRegisterScreen() {
             <div id="register-phone-recaptcha" />
           </div>
 
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Typ konta</span>
-            <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4">
-              <label className="flex items-start gap-3 text-brand-navy">
+          <div className="grid gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Zakres konta</span>
+            <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4 text-brand-navy">
+              <label className="flex items-start gap-3">
                 <input
                   type="checkbox"
                   checked={form.requestedRoles.includes("participant")}
@@ -1532,11 +2037,11 @@ function SmsRegisterScreen() {
                 <span className="grid gap-1">
                   <span className="text-sm font-semibold">Uczestnik</span>
                   <span className="text-sm text-brand-muted">
-                    Konto gotowe pod logowanie i przyszły panel uczestnika.
+                    Widzisz swoje zgłoszenia i szkolenia, także zanim trener potwierdzi konto.
                   </span>
                 </span>
               </label>
-              <label className="flex items-start gap-3 text-brand-navy">
+              <label className="flex items-start gap-3">
                 <input
                   type="checkbox"
                   checked={form.requestedRoles.includes("organizer")}
@@ -1544,28 +2049,14 @@ function SmsRegisterScreen() {
                   className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
                 />
                 <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Organizator</span>
+                  <span className="text-sm font-semibold">Organizator grup Emandar</span>
                   <span className="text-sm text-brand-muted">
-                    Organizujesz oficjalne szkolenia po akceptacji relacji z trenerami.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("trainer")}
-                  onChange={(event) => toggleRole("trainer", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Wydarzenia społeczności</span>
-                  <span className="text-sm text-brand-muted">
-                    Tworzysz własne wydarzenia i prosisz trenerów o zgodę na publikację.
+                    Po akceptacji konta i relacji z trenerem możesz organizować oficjalne szkolenia.
                   </span>
                 </span>
               </label>
             </div>
-          </label>
+          </div>
 
           {form.requestedRoles.includes("organizer") && (
             <label className="grid gap-2">
@@ -1587,35 +2078,36 @@ function SmsRegisterScreen() {
             </label>
           )}
 
-          {shouldSelectTrainers && (
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">
-                Wybierz trenerów do rozpoczęcia współpracy
-              </span>
-              <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4">
-                {officialTrainers.length === 0 && (
-                  <p className="text-sm text-brand-muted">
-                    Brak dostępnych trenerów do wyboru. Dodaj najpierw widoczne profile
-                    trenerów w danych aplikacji albo skorzystaj chwilowo z konta uczestnika.
-                  </p>
-                )}
-                {officialTrainers.map((trainer) => (
-                  <label key={trainer.id} className="flex items-start gap-3 text-brand-navy">
-                    <input
-                      type="checkbox"
-                      checked={form.selectedTrainerIds.includes(trainer.id)}
-                      onChange={(event) => toggleTrainer(trainer.id, event.target.checked)}
-                      className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                    />
-                    <span className="grid gap-1">
-                      <span className="text-sm font-semibold">{trainer.displayName}</span>
-                      <span className="text-sm text-brand-muted">{trainer.heroNote}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </label>
-          )}
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-brand-navy">
+              Do czyjej grupy chodzisz?
+            </span>
+            <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4">
+              {officialTrainers.length === 0 && (
+                <p className="text-sm text-brand-muted">
+                  Brak dostępnych trenerów do wyboru. Dodaj najpierw widoczne profile
+                  trenerów w danych aplikacji.
+                </p>
+              )}
+              {officialTrainers.map((trainer) => (
+                <label key={trainer.id} className="flex items-start gap-3 text-brand-navy">
+                  <input
+                    type="checkbox"
+                    checked={form.selectedTrainerIds.includes(trainer.id)}
+                    onChange={(event) => toggleTrainer(trainer.id, event.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+                  />
+                  <span className="grid gap-1">
+                    <span className="text-sm font-semibold">{trainer.displayName}</span>
+                    <span className="text-sm text-brand-muted">{trainer.heroNote}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <p className="text-sm text-brand-muted">
+              Wystarczy jedna akceptacja od wybranego trenera, żeby konto zostało potwierdzone.
+            </p>
+          </label>
 
           <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
             <span className="inline-flex items-center gap-2 text-sm font-semibold">
@@ -1641,7 +2133,7 @@ function SmsRegisterScreen() {
           </label>
 
           <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Notatka</span>
+            <span className="text-sm font-semibold text-brand-navy">Kilka słów o sobie</span>
             <textarea
               required
               rows={6}
@@ -1652,7 +2144,7 @@ function SmsRegisterScreen() {
                   notes: event.target.value,
                 }))
               }
-              placeholder="Kilka słów o Tobie. Jakich wartości szukasz w swoim szkoleniu?"
+              placeholder="Napisz kilka słów o sobie i czego szukasz w grupie lub najbliższych szkoleniach."
               className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
           </label>
@@ -1662,7 +2154,9 @@ function SmsRegisterScreen() {
             disabled={loading || !smsVerified}
             className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
           >
-            {loading ? "Zakładanie konta..." : "Załóż konto"}
+            {loading
+              ? "Zapisywanie profilu..."
+              : "Zapisz profil i przejdź do panelu"}
             <ArrowRight size={16} />
           </button>
         </form>
@@ -1706,7 +2200,7 @@ function LoginPageLegacyUnused() {
 
   async function handleQuickLogin(
     emailToUse: string,
-    targetRole: "admin" | "trainer" | "organizer",
+    targetRole: "admin" | "trainer" | "organizer" | "participant",
   ) {
     setQuickLoginEmail(emailToUse);
 
@@ -1777,14 +2271,14 @@ function LoginPageLegacyUnused() {
               Dostęp do panelu
             </div>
             <p className="mt-2">
-              Jesteś organizatorem grup? Zarejestruj się, wybierz swojego
-              Przekazującego Wiedzę i poczekaj na akceptację.
+              Potwierdź numer telefonu, wybierz trenerów, do których chodzisz na grupę,
+              i załóż konto uczestnika, organizatora albo społeczności.
             </p>
             <Link
               to="/rejestracja"
               className="mt-4 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2 font-semibold text-brand-navy"
             >
-              Utwórz konto organizatora
+              Utwórz konto
               <ArrowRight size={14} />
             </Link>
           </div>

@@ -1,5 +1,5 @@
 {
   "projects": {
-    "default": "emandar-app"
+    "default": "emandar-prod"
   }
 }

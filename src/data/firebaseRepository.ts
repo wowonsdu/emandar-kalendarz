@@ -37,6 +37,7 @@ import {
   firebaseStorage,
 } from "@/lib/firebase";
 import type {
+  AccountApprovalStatus,
   AccountRequest,
   AccountRequestInput,
   AppSettings,
@@ -48,13 +49,15 @@ import type {
   ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFormInput,
+  ParticipantEnrollmentManagementInput,
+  ParticipantOnboardingInput,
   EnrollmentRequestManagementInput,
   EnrollmentRequest,
   NotificationRecord,
   NotificationSettingsUpdateInput,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
-  TrainerPublicationApproval,
+  TrainerAccountApproval,
   TrainerCalendarFeed,
   TrainerCalendarFeedInput,
   TrainerExternalBusyMonth,
@@ -74,9 +77,9 @@ import { normalizeNotificationSettings } from "@/domain/notifications";
 import {
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
-  canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
   getTrainingEventScheduleDays,
+  isParticipantEnrollmentActive,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
@@ -103,7 +106,7 @@ const collections = {
   trainerExternalBusyMonths: "trainerExternalBusyMonths",
   notifications: "notifications",
   accountRequests: "accountRequests",
-  trainerPublicationApprovals: "trainerPublicationApprovals",
+  trainerAccountApprovals: "trainerAccountApprovals",
   appMeta: "app_meta",
 } as const;
 
@@ -114,13 +117,14 @@ export function createEmptyStore(): DemoStore {
     organizers: [],
     relations: [],
     trainingEvents: [],
+    publicTrainingEvents: [],
     availabilitySlots: [],
     trainerCalendarFeeds: [],
     trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     accountRequests: [],
-    trainerPublicationApprovals: [],
+    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoRequired: false,
     },
@@ -154,6 +158,10 @@ async function callFirebaseFunction<TInput extends Record<string, unknown> | und
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatMonthKey(date: Date) {
@@ -308,6 +316,13 @@ function normalizeUserRoles(value: unknown, fallbackRole?: string | null) {
 function normalizeAppUserRecord(userId: string, raw: unknown) {
   const normalized = normalizeValue(raw) as Record<string, unknown>;
   const roles = normalizeUserRoles(normalized.roles, typeof normalized.role === "string" ? normalized.role : null);
+  const pendingRoles = Array.from(
+    new Set(
+      Array.isArray(normalized.pendingRoles)
+        ? normalized.pendingRoles.filter((role) => role === "trainer" || role === "organizer")
+        : [],
+    ),
+  ) as Array<Exclude<AppUser["role"], "admin" | "participant">>;
   const primaryRole =
     normalized.primaryRole === "admin" ||
     normalized.primaryRole === "trainer" ||
@@ -322,6 +337,26 @@ function normalizeAppUserRecord(userId: string, raw: unknown) {
     normalized.role === "participant"
       ? normalized.role
       : primaryRole;
+  const accountApprovalStatus: AccountApprovalStatus =
+    normalized.accountApprovalStatus === "pending" ||
+    normalized.accountApprovalStatus === "rejected" ||
+    normalized.accountApprovalStatus === "approved"
+      ? normalized.accountApprovalStatus
+      : "approved";
+  const selectedTrainerIds = Array.from(
+    new Set(
+      Array.isArray(normalized.selectedTrainerIds)
+        ? normalized.selectedTrainerIds.filter((item): item is string => typeof item === "string")
+        : [],
+    ),
+  );
+  const approvedTrainerIds = Array.from(
+    new Set(
+      Array.isArray(normalized.approvedTrainerIds)
+        ? normalized.approvedTrainerIds.filter((item): item is string => typeof item === "string")
+        : [],
+    ),
+  );
 
   return {
     id: userId,
@@ -329,6 +364,10 @@ function normalizeAppUserRecord(userId: string, raw: unknown) {
     role: roles.includes(activeRole) ? activeRole : primaryRole,
     roles,
     primaryRole,
+    pendingRoles,
+    accountApprovalStatus,
+    selectedTrainerIds,
+    approvedTrainerIds,
     trainerProfileId:
       typeof normalized.trainerProfileId === "string"
         ? normalized.trainerProfileId
@@ -516,12 +555,12 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
         where("isPublished", "==", true),
       ),
       (trainingEvents) => {
-        onPatch({ trainingEvents });
+        onPatch({ trainingEvents, publicTrainingEvents: trainingEvents });
       },
     ),
   ];
 
-  onPatch({ organizers: [], trainerPublicationApprovals: [] });
+  onPatch({ organizers: [], trainerAccountApprovals: [] });
 
   return () => {
     unsubs.forEach((unsubscribe) => unsubscribe());
@@ -556,9 +595,16 @@ export async function fetchAppUser(userId: string) {
 }
 
 export async function ensurePhoneParticipantProfile() {
-  return callFirebaseFunction<undefined, { ok: true; userId: string; accountCreated?: boolean }>(
+  return callFirebaseFunction<
+    { seedTrainerId?: string } | undefined,
+    { ok: true; userId: string; accountCreated?: boolean }
+  >(
     "ensurePhoneParticipantProfile",
   );
+}
+
+export async function ensurePhoneParticipantProfileForFlow(seedTrainerId?: string) {
+  return ensurePhoneParticipantProfile(seedTrainerId ? { seedTrainerId } : undefined);
 }
 
 function buildRoleQuery(
@@ -582,13 +628,15 @@ export function subscribePrivateStore(
   const unsubs: Unsubscribe[] = [];
   const trainerProfileId = currentUser.trainerProfileId;
   const organizerProfileId = currentUser.organizerProfileId;
-  let incomingPublicationApprovals: TrainerPublicationApproval[] = [];
-  let outgoingPublicationApprovals: TrainerPublicationApproval[] = [];
+  let incomingAccountApprovals: TrainerAccountApproval[] = [];
+  let outgoingAccountApprovals: TrainerAccountApproval[] = [];
+  let participantOwnEnrollmentRequests: EnrollmentRequest[] = [];
+  let participantManagedEnrollmentRequests: EnrollmentRequest[] = [];
 
-  function syncPublicationApprovals() {
+  function syncAccountApprovals() {
     onPatch({
-      trainerPublicationApprovals: pushSorted(
-        mergeById(incomingPublicationApprovals, outgoingPublicationApprovals),
+      trainerAccountApprovals: pushSorted(
+        mergeById(incomingAccountApprovals, outgoingAccountApprovals),
       ),
     });
   }
@@ -623,6 +671,7 @@ export function subscribePrivateStore(
         query(
           collection(db, collections.trainerCalendarFeeds),
           where("trainerId", "==", trainerProfileId),
+          where("trainerUserId", "==", currentUser.id),
         ),
         (trainerCalendarFeeds) => {
           onPatch({ trainerCalendarFeeds: pushSorted(trainerCalendarFeeds) });
@@ -631,7 +680,10 @@ export function subscribePrivateStore(
     );
     unsubs.push(
       subscribeArray<TrainerExternalBusyMonth>(
-        collection(db, collections.trainerExternalBusyMonths),
+        query(
+          collection(db, collections.trainerExternalBusyMonths),
+          where("trainerId", "==", trainerProfileId),
+        ),
         (trainerExternalBusyMonths) => {
           onPatch({ trainerExternalBusyMonths });
         },
@@ -643,11 +695,11 @@ export function subscribePrivateStore(
 
   if (currentUser.role === "admin") {
     unsubs.push(
-      subscribeArray<TrainerPublicationApproval>(
-        collection(db, collections.trainerPublicationApprovals),
-        (trainerPublicationApprovals) => {
+      subscribeArray<TrainerAccountApproval>(
+        collection(db, collections.trainerAccountApprovals),
+        (trainerAccountApprovals) => {
           onPatch({
-            trainerPublicationApprovals: pushSorted(trainerPublicationApprovals),
+            trainerAccountApprovals: pushSorted(trainerAccountApprovals),
           });
         },
       ),
@@ -695,11 +747,15 @@ export function subscribePrivateStore(
     };
   }
 
-  const eventsQuery = buildRoleQuery(
-    collections.trainingEvents,
-    currentUser.role === "trainer" ? "trainerUserId" : "organizerUserId",
-    currentUser.id,
-  );
+  const canUseRoleScopedEventQuery =
+    currentUser.role === "trainer" || currentUser.role === "organizer";
+  const eventsQuery = canUseRoleScopedEventQuery
+    ? buildRoleQuery(
+        collections.trainingEvents,
+        currentUser.role === "trainer" ? "trainerUserId" : "organizerUserId",
+        currentUser.id,
+      )
+    : null;
   if (eventsQuery) {
     unsubs.push(
       subscribeArray<TrainingEvent>(eventsQuery, (trainingEvents) => {
@@ -707,14 +763,17 @@ export function subscribePrivateStore(
       }),
     );
   } else {
-    onPatch({ trainingEvents: [] });
+    onPatch({ trainingEvents: currentUser.role === "participant" ? undefined : [] });
   }
 
-  const relationsQuery = buildRoleQuery(
-    collections.relations,
-    currentUser.role === "trainer" ? "trainerUserId" : "organizerUserId",
-    currentUser.id,
-  );
+  const relationsQuery =
+    currentUser.role === "trainer" || currentUser.role === "organizer"
+      ? buildRoleQuery(
+          collections.relations,
+          currentUser.role === "trainer" ? "trainerUserId" : "organizerUserId",
+          currentUser.id,
+        )
+      : null;
   if (relationsQuery) {
     unsubs.push(
       subscribeArray<TrainerOrganizerRelation>(relationsQuery, (relations) => {
@@ -722,7 +781,7 @@ export function subscribePrivateStore(
       }),
     );
   } else {
-    onPatch({ relations: [] });
+    onPatch({ relations: currentUser.role === "participant" ? undefined : [] });
   }
 
   if (currentUser.role === "trainer") {
@@ -758,26 +817,26 @@ export function subscribePrivateStore(
     }
 
     unsubs.push(
-      subscribeArray<TrainerPublicationApproval>(
+      subscribeArray<TrainerAccountApproval>(
         query(
-          collection(db, collections.trainerPublicationApprovals),
+          collection(db, collections.trainerAccountApprovals),
           where("targetTrainerUserId", "==", currentUser.id),
         ),
         (incomingApprovals) => {
-          incomingPublicationApprovals = incomingApprovals;
-          syncPublicationApprovals();
+          incomingAccountApprovals = incomingApprovals;
+          syncAccountApprovals();
         },
       ),
     );
     unsubs.push(
-      subscribeArray<TrainerPublicationApproval>(
+      subscribeArray<TrainerAccountApproval>(
         query(
-          collection(db, collections.trainerPublicationApprovals),
+          collection(db, collections.trainerAccountApprovals),
           where("requesterUserId", "==", currentUser.id),
         ),
         (outgoingApprovals) => {
-          outgoingPublicationApprovals = outgoingApprovals;
-          syncPublicationApprovals();
+          outgoingAccountApprovals = outgoingApprovals;
+          syncAccountApprovals();
         },
       ),
     );
@@ -817,11 +876,46 @@ export function subscribePrivateStore(
   }
 
   if (currentUser.role === "participant") {
+    function syncParticipantEnrollmentRequests() {
+      onPatch({
+        enrollmentRequests: pushSorted(
+          mergeById(participantOwnEnrollmentRequests, participantManagedEnrollmentRequests),
+        ),
+      });
+    }
+
+    unsubs.push(
+      subscribeArray<TrainingEvent>(collection(db, collections.trainingEvents), (trainingEvents) => {
+        onPatch({ trainingEvents });
+      }),
+    );
+    unsubs.push(
+      subscribeArray<EnrollmentRequest>(
+        query(
+          collection(db, collections.enrollmentRequests),
+          where("submitterUid", "==", currentUser.id),
+        ),
+        (enrollmentRequests) => {
+          participantOwnEnrollmentRequests = enrollmentRequests;
+          syncParticipantEnrollmentRequests();
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<EnrollmentRequest>(
+        query(
+          collection(db, collections.enrollmentRequests),
+          where("trainerUserId", "==", currentUser.id),
+        ),
+        (enrollmentRequests) => {
+          participantManagedEnrollmentRequests = enrollmentRequests;
+          syncParticipantEnrollmentRequests();
+        },
+      ),
+    );
     onPatch({
-      trainingEvents: [],
       relations: [],
       availabilitySlots: [],
-      enrollmentRequests: [],
       trainerCalendarFeeds: [],
       trainerExternalBusyMonths: [],
     });
@@ -829,14 +923,14 @@ export function subscribePrivateStore(
 
   if (currentUser.role !== "trainer" && currentUser.role !== "admin") {
     unsubs.push(
-      subscribeArray<TrainerPublicationApproval>(
+      subscribeArray<TrainerAccountApproval>(
         query(
-          collection(db, collections.trainerPublicationApprovals),
+          collection(db, collections.trainerAccountApprovals),
           where("requesterUserId", "==", currentUser.id),
         ),
-        (trainerPublicationApprovals) => {
-          outgoingPublicationApprovals = trainerPublicationApprovals;
-          syncPublicationApprovals();
+        (trainerAccountApprovals) => {
+          outgoingAccountApprovals = trainerAccountApprovals;
+          syncAccountApprovals();
         },
       ),
     );
@@ -964,40 +1058,6 @@ async function updateOrganizerSlotVisibility(
   );
 }
 
-async function archiveRelationEvents(
-  relation: Pick<TrainerOrganizerRelation, "id" | "trainerId" | "organizerId">,
-  actor: AppUser,
-) {
-  const { db } = assertReady();
-  const eventSnapshots = await getDocs(
-    query(
-      collection(db, collections.trainingEvents),
-      where("trainerId", "==", relation.trainerId),
-      where("organizerId", "==", relation.organizerId),
-    ),
-  );
-
-  if (eventSnapshots.empty) {
-    return 0;
-  }
-
-  const archivedAt = nowIso();
-  const batch = writeBatch(db);
-
-  eventSnapshots.docs.forEach((eventSnapshot) => {
-    batch.update(eventSnapshot.ref, {
-      archivedAt,
-      archivedByRole: actor.role,
-      archivedReason: "relation-detached",
-      archivedForOrganizerId: relation.organizerId,
-      isPublished: false,
-    });
-  });
-
-  await batch.commit();
-  return eventSnapshots.size;
-}
-
 async function archiveEventDocument(
   event: TrainingEvent,
   actor: AppUser,
@@ -1012,6 +1072,32 @@ async function archiveEventDocument(
     archivedForOrganizerId: event.organizerId ?? null,
     isPublished: false,
   });
+}
+
+async function waitForRelationArchiveEffects(
+  relation: Pick<TrainerOrganizerRelation, "trainerId" | "organizerId">,
+) {
+  const { db } = assertReady();
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const eventSnapshots = await getDocs(
+      query(
+        collection(db, collections.trainingEvents),
+        where("trainerId", "==", relation.trainerId),
+        where("organizerId", "==", relation.organizerId),
+      ),
+    );
+
+    const allArchived = eventSnapshots.docs.every((eventSnapshot) =>
+      Boolean(eventSnapshot.data().archivedAt),
+    );
+
+    if (allArchived) {
+      return;
+    }
+
+    await sleep(100);
+  }
 }
 
 async function notifyUser(
@@ -1046,11 +1132,14 @@ async function getEnrollmentRequestsForEvent(eventId: string) {
 }
 
 function countActiveEnrollmentRequests(requests: EnrollmentRequest[]) {
-  return requests.filter((request) => request.finalStatus !== "rejected").length;
+  return requests.filter((request) => isParticipantEnrollmentActive(request)).length;
 }
 
 function countAcceptedEnrollmentRequests(requests: EnrollmentRequest[]) {
-  return requests.filter((request) => request.finalStatus === "accepted").length;
+  return requests.filter(
+    (request) =>
+      request.finalStatus === "accepted" && isParticipantEnrollmentActive(request),
+  ).length;
 }
 
 function resolveManagedEventStatus(
@@ -1193,7 +1282,7 @@ async function sendPasswordReset(email: string) {
 }
 
 export async function submitEnrollment(input: EnrollmentFormInput) {
-  const { storage } = assertReady();
+  const { auth, storage } = assertReady();
   await ensureAnonymousSession();
 
   if (
@@ -1221,6 +1310,11 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   });
 
   try {
+    const profileAvatar =
+      input.photoFile && auth.currentUser && !auth.currentUser.isAnonymous
+        ? await uploadCurrentUserAvatar(input.photoFile)
+        : null;
+
     if (draft.photoRequired && !input.photoFile) {
       throw new Error("To szkolenie wymaga zdjęcia twarzy.");
     }
@@ -1231,11 +1325,18 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
     }
 
     await callFirebaseFunction<
-      { requestId: string; photoPath?: string },
+      {
+        requestId: string;
+        photoPath?: string;
+        avatarPath?: string;
+        avatarUrl?: string;
+      },
       { ok: true }
     >("finalizeEnrollmentDraft", {
       requestId: draft.requestId,
       photoPath: input.photoFile ? draft.photoPath : undefined,
+      avatarPath: profileAvatar?.avatarPath,
+      avatarUrl: profileAvatar?.avatarUrl,
     });
   } catch (error) {
     throw error instanceof Error
@@ -1439,6 +1540,21 @@ export async function manageEnrollmentRequest(
   );
 }
 
+export async function manageOwnEnrollment(
+  input: ParticipantEnrollmentManagementInput,
+  actor: AppUser,
+) {
+  void actor;
+  await callFirebaseFunction<
+    ParticipantEnrollmentManagementInput,
+    { ok: true }
+  >("manageOwnEnrollment", {
+    requestId: input.requestId,
+    action: input.action,
+    transferTargetEventId: input.transferTargetEventId?.trim() || undefined,
+  });
+}
+
 export async function requestRelation(currentUser: AppUser, trainerId: string) {
   if (currentUser.role !== "organizer" || !currentUser.organizerProfileId) {
     throw new Error("Tylko organizator może prosić o relację.");
@@ -1564,76 +1680,10 @@ export async function detachRelation(
     detachedByRole: actor.role,
     archivedLinkedEvents: shouldArchiveLinkedEvents,
   });
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  return;
 
-  await updateOrganizerSlotVisibility(relation, false);
-
-  const archivedEventsCount = shouldArchiveLinkedEvents
-    ? await archiveRelationEvents(relation, actor)
-    : 0;
-  const trainer = await getTrainerProfile(relation.trainerId);
-  const organizer = await getOrganizerProfile(relation.organizerId);
-
-  await notifyUsers(
-    [trainer.userId, organizer.userId],
-    "Odpieto relacje",
-    shouldArchiveLinkedEvents
-      ? `${trainer.displayName} zakonczyl wspolprace z ${organizer.displayName} i zarchiwizowal ${archivedEventsCount} szkolen.`
-      : `${trainer.displayName} i ${organizer.displayName} zakonczyliscie wspolprace.`,
-    "relation",
-  );
-}
-
-export async function createGroup(input: GroupInput, actor: AppUser) {
-  const { db } = assertReady();
-  throw new Error("Model grup zostal usuniety. Korzystaj z jednego modelu szkolen.");
-
-  if (actor.role !== "admin" && actor.role !== "organizer") {
-    throw new Error("Nie możesz tworzyć grup.");
+  if (shouldArchiveLinkedEvents) {
+    await waitForRelationArchiveEffects(relation);
   }
-
-  if (
-    actor.role === "organizer" &&
-    (!actor.profileId ||
-      !canOrganizerAccessTrainer(
-        actor.profileId,
-        input.trainerId,
-        await mapQuery<TrainerOrganizerRelation>(
-          query(
-            collection(db, collections.relations),
-            where("organizerId", "==", actor.profileId),
-            where("organizerUserId", "==", actor.id),
-          ),
-        ),
-      ))
-  ) {
-    throw new Error("Brak zatwierdzonej relacji z Przekazującym Wiedzę.");
-  }
-
-  const trainer = await getTrainerProfile(input.trainerId);
-  const organizerId =
-    actor.role === "organizer" && actor.profileId ? actor.profileId : input.organizerId;
-  const organizer = await getOrganizerProfile(organizerId);
-
-  if (actor.role === "organizer") {
-    await requireApprovedRelation(trainer, organizer);
-  }
-
-  await addDoc(collection(db, collections.groups), {
-    ...input,
-    organizerId,
-    organizerUserId: organizer.userId,
-    trainerUserId: trainer.userId,
-    createdAt: nowIso(),
-  });
-
-  await notifyUser(
-    trainer.userId,
-    "Dodano nową grupę",
-    `Przypisano Cię do grupy ${input.name}.`,
-    "group",
-  );
 }
 
 export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUser) {
@@ -2179,11 +2229,8 @@ export async function submitAccountRequest(input: AccountRequestInput) {
     throw new Error("Wybierz przynajmniej jeden typ konta.");
   }
 
-  if (
-    (requestedRoles.includes("organizer") || requestedRoles.includes("trainer")) &&
-    selectedTrainerIds.length === 0
-  ) {
-    throw new Error("Wybierz przynajmniej jednego trenera do współpracy.");
+  if (selectedTrainerIds.length === 0) {
+    throw new Error("Wybierz przynajmniej jednego trenera, do którego chodzisz na grupę.");
   }
 
   if (requestedRoles.includes("organizer") && !input.organizerTrainingIntent?.trim()) {
@@ -2214,6 +2261,68 @@ export async function submitAccountRequest(input: AccountRequestInput) {
     organizerTrainingIntent: input.organizerTrainingIntent?.trim() || undefined,
     selectedTrainerIds,
   });
+}
+
+export async function completeParticipantOnboarding(input: ParticipantOnboardingInput) {
+  const { auth } = assertReady();
+
+  if (!auth.currentUser || auth.currentUser.isAnonymous) {
+    throw new Error("Najpierw potwierdź numer telefonu kodem SMS.");
+  }
+
+  const avatar = input.avatarFile ? await uploadCurrentUserAvatar(input.avatarFile) : null;
+
+  await callFirebaseFunction<
+    {
+      displayName: string;
+      requestedRoles: Array<"participant" | "organizer">;
+      notes?: string;
+      avatarPath?: string;
+      avatarUrl?: string;
+      organizerTrainingIntent?: string;
+      selectedTrainerIds: string[];
+    },
+    { ok: true; accountCreated?: boolean }
+  >("finalizePhoneRegistration", {
+    displayName: input.displayName,
+    requestedRoles: input.requestedRoles,
+    notes: input.notes?.trim() || "",
+    avatarPath: avatar?.avatarPath,
+    avatarUrl: avatar?.avatarUrl,
+    organizerTrainingIntent: input.organizerTrainingIntent?.trim() || undefined,
+    selectedTrainerIds: input.selectedTrainerIds,
+  });
+}
+
+export async function getCommunityEventReview(token: string) {
+  await ensureAnonymousSession();
+  return callFirebaseFunction<
+    { token: string },
+    {
+      ok: true;
+      event: TrainingEvent;
+      creatorName: string;
+      creatorPhone: string;
+    }
+  >("getCommunityEventReview", { token });
+}
+
+export async function reviewCommunityEvent(input: {
+  token: string;
+  decision: "accepted" | "rejected";
+  message?: string;
+  enableAutoApprove?: boolean;
+}) {
+  await ensureAnonymousSession();
+  return callFirebaseFunction<
+    {
+      token: string;
+      decision: "accepted" | "rejected";
+      message?: string;
+      enableAutoApprove?: boolean;
+    },
+    { ok: true; eventId: string }
+  >("reviewCommunityEvent", input);
 }
 
 export async function updateTrainerProfile(
@@ -2710,14 +2819,14 @@ export async function resolveEnrollmentPhoto(path: string) {
   return URL.createObjectURL(blob);
 }
 
-export async function decideTrainerPublicationApproval(
+export async function decideTrainerAccountApproval(
   approvalId: string,
   status: "accepted" | "rejected",
 ) {
   await callFirebaseFunction<
     { approvalId: string; status: "accepted" | "rejected" },
     { ok: true }
-  >("decideTrainerPublicationApproval", {
+  >("decideTrainerAccountApproval", {
     approvalId,
     status,
   });

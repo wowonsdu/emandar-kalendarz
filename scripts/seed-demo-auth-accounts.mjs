@@ -12,7 +12,10 @@ const FIREBASE_TOOLS_PATH = resolve(
   "configstore",
   "firebase-tools.json",
 );
-const DOTENV_PATH = resolve(process.cwd(), ".env.local");
+const DOTENV_PATHS = [
+  resolve(process.cwd(), ".env.local"),
+  resolve(process.cwd(), ".env.production"),
+];
 const FIREBASE_CLI_CLIENT_ID =
   "563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com";
 const FIREBASE_CLI_CLIENT_SECRET = "j9iVZfS8kkCEFUPaAeJV0sAi";
@@ -149,6 +152,30 @@ const demoAccounts = [
     location: "Online",
     avatarUrl: "https://i.pravatar.cc/320?img=20",
   },
+  {
+    role: "participant",
+    profileId: null,
+    displayName: "Grzegorz Emanowicz",
+    email: "grzegorz.emanowicz@emandar.pl",
+    phone: "+48 605 100 301",
+    avatarUrl: "https://i.pravatar.cc/320?img=21",
+  },
+  {
+    role: "participant",
+    profileId: null,
+    displayName: "Grzegorz Chotnicki",
+    email: "grzegorz.chotnicki@emandar.pl",
+    phone: "+48 605 100 302",
+    avatarUrl: "https://i.pravatar.cc/320?img=22",
+  },
+  {
+    role: "participant",
+    profileId: null,
+    displayName: "Ola Chotnicka",
+    email: "ola.chotnicka@emandar.pl",
+    phone: "+48 605 100 303",
+    avatarUrl: "https://i.pravatar.cc/320?img=23",
+  },
 ];
 
 function getAdminApp(projectId, refreshTokenValue) {
@@ -199,6 +226,16 @@ async function loadEnvFile(filePath) {
   } catch {
     return {};
   }
+}
+
+async function loadEnvFromCandidates() {
+  const merged = {};
+
+  for (const filePath of DOTENV_PATHS) {
+    Object.assign(merged, await loadEnvFile(filePath));
+  }
+
+  return merged;
 }
 
 async function loadFirebaseToolsConfig() {
@@ -290,6 +327,47 @@ function toFirestoreValue(value) {
   throw new Error(`Unsupported Firestore value: ${String(value)}`);
 }
 
+function fromFirestoreValue(value) {
+  if (!value) {
+    return null;
+  }
+
+  if ("nullValue" in value) {
+    return null;
+  }
+
+  if ("stringValue" in value) {
+    return value.stringValue;
+  }
+
+  if ("booleanValue" in value) {
+    return value.booleanValue;
+  }
+
+  if ("integerValue" in value) {
+    return Number(value.integerValue);
+  }
+
+  if ("doubleValue" in value) {
+    return value.doubleValue;
+  }
+
+  if ("arrayValue" in value) {
+    return (value.arrayValue?.values ?? []).map((item) => fromFirestoreValue(item));
+  }
+
+  if ("mapValue" in value) {
+    return Object.fromEntries(
+      Object.entries(value.mapValue?.fields ?? {}).map(([key, nested]) => [
+        key,
+        fromFirestoreValue(nested),
+      ]),
+    );
+  }
+
+  return null;
+}
+
 async function writeFirestoreDocument(projectId, accessToken, collectionName, docId, data) {
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}/${docId}`;
 
@@ -305,6 +383,31 @@ async function writeFirestoreDocument(projectId, accessToken, collectionName, do
       ),
     }),
   });
+}
+
+async function getFirestoreDocument(projectId, accessToken, collectionName, docId) {
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}/${docId}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(
+      payload?.error?.message ?? `Failed to fetch ${collectionName}/${docId}: ${response.statusText}`,
+    );
+  }
+
+  return Object.fromEntries(
+    Object.entries(payload?.fields ?? {}).map(([key, value]) => [key, fromFirestoreValue(value)]),
+  );
 }
 
 async function ensureAuthUser(auth, account) {
@@ -333,6 +436,7 @@ async function ensureAuthUser(auth, account) {
 async function seedAccount(projectId, accessToken, auth, account) {
   const authUid = await ensureAuthUser(auth, account);
   const seededAt = new Date().toISOString();
+  const existingUser = await getFirestoreDocument(projectId, accessToken, "users", authUid);
 
   await auth.setCustomUserClaims(authUid, {
     admin: false,
@@ -346,7 +450,8 @@ async function seedAccount(projectId, accessToken, auth, account) {
     displayName: account.displayName,
     email: account.email,
     phone: account.phone,
-    avatarUrl: account.avatarUrl,
+    avatarUrl: existingUser?.avatarUrl ?? account.avatarUrl,
+    avatarPath: existingUser?.avatarPath ?? null,
     status: "active",
     trainerProfileId: account.role === "trainer" ? account.profileId : null,
     organizerProfileId: account.role === "organizer" ? account.profileId : null,
@@ -356,23 +461,32 @@ async function seedAccount(projectId, accessToken, auth, account) {
   });
 
   if (account.role === "trainer") {
+    const existingTrainer = await getFirestoreDocument(
+      projectId,
+      accessToken,
+      "trainers",
+      account.profileId,
+    );
+
     await writeFirestoreDocument(projectId, accessToken, "trainers", account.profileId, {
       id: account.profileId,
       userId: authUid,
       slug: account.slug,
       displayName: account.displayName,
       sortOrder: account.sortOrder,
-      bio: account.bio,
+      bio: existingTrainer?.bio ?? account.bio,
       specialties: account.specialties,
       locations: account.locations,
       isVisible: true,
-      heroNote: account.heroNote,
-      avatarUrl: account.avatarUrl,
+      heroNote: existingTrainer?.heroNote ?? account.heroNote,
+      avatarUrl: existingTrainer?.avatarUrl ?? account.avatarUrl,
+      avatarPath: existingTrainer?.avatarPath ?? null,
+      avatarUploadedAt: existingTrainer?.avatarUploadedAt ?? null,
       brandStatus: "official",
       seededAt,
       source: "scripts/seed-demo-auth-accounts.mjs",
     });
-  } else {
+  } else if (account.role === "organizer") {
     await writeFirestoreDocument(projectId, accessToken, "organizers", account.profileId, {
       id: account.profileId,
       userId: authUid,
@@ -390,11 +504,11 @@ async function seedAccount(projectId, accessToken, auth, account) {
 }
 
 async function main() {
-  const env = await loadEnvFile(DOTENV_PATH);
+  const env = await loadEnvFromCandidates();
   const projectId = env.VITE_FIREBASE_PROJECT_ID;
 
   if (!projectId) {
-    throw new Error("Missing VITE_FIREBASE_PROJECT_ID in .env.local.");
+    throw new Error("Missing VITE_FIREBASE_PROJECT_ID in .env.local or .env.production.");
   }
 
   const firebaseToolsConfig = await loadFirebaseToolsConfig();

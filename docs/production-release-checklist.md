@@ -5,7 +5,7 @@
 - Run Firestore export or project backup before changing rules or backfilling data.
 - Run `node scripts/backfill-firestore.mjs --dry-run` and review the report.
 - Run `node scripts/backfill-firestore.mjs --apply` only after the dry run looks correct.
-- Refresh demo accounts and smoke data when needed with `npm run seed:firebase`.
+- Refresh demo accounts and smoke data when needed with `npm run demo:seed` and `npm run demo:seed:data`.
 
 ## 2. Automated verification
 

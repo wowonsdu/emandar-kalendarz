@@ -3,11 +3,13 @@ export type AppRole = "admin" | "trainer" | "organizer" | "participant";
 export type UserStatus = "active" | "invited";
 export type RelationStatus = "pending" | "approved" | "rejected" | "detached";
 export type DecisionStatus = "pending" | "accepted" | "rejected";
+export type AccountApprovalStatus = "pending" | "approved" | "rejected";
 export type EnrollmentFinalStatus =
   | "pending"
   | "accepted"
   | "rejected"
   | "partial";
+export type ParticipantEnrollmentStatus = "active" | "cancelled";
 export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
 export type AccountRequestStatus = "pending" | "approved" | "rejected";
 export type PublicationApprovalStatus = "pending" | "accepted" | "rejected";
@@ -40,7 +42,15 @@ export interface AppUser {
   role: AppRole;
   roles: AppRole[];
   primaryRole: AppRole;
+  pendingRoles?: Array<Exclude<AppRole, "admin" | "participant">>;
+  accountApprovalStatus?: AccountApprovalStatus;
+  selectedTrainerIds?: string[];
+  approvedTrainerIds?: string[];
+  participantOnboardingCompletedAt?: string;
+  communityEventAutoApprove?: boolean;
   displayName: string;
+  notes?: string;
+  referralSource?: string;
   email?: string | null;
   phone: string;
   avatarUrl?: string;
@@ -107,10 +117,13 @@ export interface TrainingEventScheduleDay {
 
 export interface TrainingEvent {
   id: string;
-  trainerId: string;
+  trainerId?: string | null;
   organizerId?: string | null;
-  trainerUserId?: string;
+  trainerUserId?: string | null;
   organizerUserId?: string | null;
+  creatorUserId?: string | null;
+  creatorDisplayName?: string;
+  creatorPhone?: string | null;
   title: string;
   summary: string;
   description: string;
@@ -131,7 +144,12 @@ export interface TrainingEvent {
   trainerCollaborationStatus?: EventCollaborationStatus;
   organizerCollaborationStatus?: EventCollaborationStatus;
   selfManagedByTrainer?: boolean;
-  createdByRole?: "trainer" | "organizer";
+  createdByRole?: "trainer" | "organizer" | "participant";
+  publicationApprovalStatus?: PublicationApprovalStatus;
+  publicationApprovalRequestedAt?: string;
+  publicationReviewedAt?: string;
+  publicationReviewedByUserId?: string;
+  publicationReviewMessage?: string;
   archivedAt?: string;
   archivedByRole?: AppRole;
   archivedReason?: "relation-detached" | "manual";
@@ -196,11 +214,18 @@ export interface SharedAvailabilityWindow {
 export interface EnrollmentRequest {
   id: string;
   eventId: string;
-  trainerId: string;
+  trainerId?: string | null;
   organizerId?: string | null;
   submitterUid?: string;
-  trainerUserId?: string;
+  normalizedPhone?: string;
+  trainerUserId?: string | null;
   organizerUserId?: string | null;
+  trainerContactName?: string | null;
+  trainerContactPhone?: string | null;
+  trainerContactEmail?: string | null;
+  organizerContactPhone?: string | null;
+  organizerContactEmail?: string | null;
+  organizerContactName?: string | null;
   imieNazwisko: string;
   telefon: string;
   polecenieOdKogo: string;
@@ -212,6 +237,9 @@ export interface EnrollmentRequest {
   trainerDecision: DecisionStatus;
   organizerDecision: DecisionStatus;
   finalStatus: EnrollmentFinalStatus;
+  participantStatus?: ParticipantEnrollmentStatus;
+  participantManagedAt?: string;
+  participantActionSource?: "participant" | "staff";
   attendanceConfirmationStatus?: EnrollmentAttendanceConfirmationStatus;
   attendanceConfirmationRequestedAt?: string;
   attendanceConfirmationRespondedAt?: string;
@@ -242,23 +270,28 @@ export interface AccountRequest {
   phone: string;
   requestedRoles?: Array<Exclude<AppRole, "admin">>;
   notes: string;
+  referralSource?: string;
   status: AccountRequestStatus;
   createdAt: string;
   authProvider?: "phone" | "password";
   organizerTrainingIntent?: string;
   selectedTrainerIds?: string[];
   avatarPath?: string;
+  avatarUrl?: string;
 }
 
-export interface TrainerPublicationApproval {
+export interface TrainerAccountApproval {
   id: string;
   requesterUserId: string;
-  requesterTrainerProfileId: string;
+  requesterDisplayName?: string;
+  requesterPhone?: string | null;
   targetTrainerId: string;
   targetTrainerUserId: string;
-  status: PublicationApprovalStatus;
+  requestedRoles: Array<Exclude<AppRole, "admin">>;
+  status: DecisionStatus;
   createdAt: string;
   decidedAt?: string;
+  decidedByUserId?: string;
 }
 
 export interface AppSettings {
@@ -271,13 +304,14 @@ export interface DemoStore {
   organizers: OrganizerProfile[];
   relations: TrainerOrganizerRelation[];
   trainingEvents: TrainingEvent[];
+  publicTrainingEvents: TrainingEvent[];
   availabilitySlots: AvailabilitySlot[];
   trainerCalendarFeeds: TrainerCalendarFeed[];
   trainerExternalBusyMonths: TrainerExternalBusyMonth[];
   enrollmentRequests: EnrollmentRequest[];
   notifications: NotificationRecord[];
   accountRequests: AccountRequest[];
-  trainerPublicationApprovals: TrainerPublicationApproval[];
+  trainerAccountApprovals: TrainerAccountApproval[];
   appSettings: AppSettings;
 }
 
@@ -302,6 +336,15 @@ export interface AccountRequestInput {
   avatarFile?: File | null;
   organizerTrainingIntent?: string;
   selectedTrainerIds: string[];
+}
+
+export interface ParticipantOnboardingInput {
+  displayName: string;
+  requestedRoles: Array<Exclude<AppRole, "admin" | "trainer">>;
+  notes?: string;
+  organizerTrainingIntent?: string;
+  selectedTrainerIds: string[];
+  avatarFile?: File | null;
 }
 
 export interface AvailabilityInput {
@@ -385,6 +428,12 @@ export interface TrainingEventManagementUpdateInput {
 export interface EnrollmentRequestManagementInput {
   requestId: string;
   decision: DecisionStatus;
+  transferTargetEventId?: string | null;
+}
+
+export interface ParticipantEnrollmentManagementInput {
+  requestId: string;
+  action: "cancel" | "transfer";
   transferTargetEventId?: string | null;
 }
 

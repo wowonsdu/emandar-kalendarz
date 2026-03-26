@@ -1,5 +1,5 @@
-Mar 12, 2026 10:53:50 AM com.google.cloud.datastore.emulator.firestore.websocket.WebSocketServer start
-INFO: Started WebSocket server on ws://127.0.0.1:9151
+Mar 25, 2026 8:15:57 PM com.google.cloud.datastore.emulator.firestore.websocket.WebSocketServer start
+INFO: Started WebSocket server on ws://127.0.0.1:9150
 API endpoint: http://127.0.0.1:8085
 If you are using a library that supports the FIRESTORE_EMULATOR_HOST environment variable, run:
 
@@ -12,47 +12,47 @@ If you are running a Firestore in Datastore Mode project, run:
 Note: Support for Datastore Mode is in preview. If you encounter any bugs please file at https://github.com/firebase/firebase-tools/issues.
 Dev App Server is now running.
 
-Mar 12, 2026 10:54:02 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:08 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:02 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:08 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:05 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:10 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:07 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:11 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:08 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:12 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:09 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:12 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:09 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:14 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:12 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:16 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:14 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:17 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:14 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:17 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:15 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:18 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:15 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:18 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:15 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:19 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:16 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:19 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:16 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:19 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:17 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:20 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:18 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:21 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:18 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
+Mar 25, 2026 8:16:21 PM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
 INFO: Detected HTTP/2 connection.
-Mar 12, 2026 10:54:18 AM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
+Mar 25, 2026 8:16:21 PM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
 WARNING: Operation failed: 
-evaluation error at L312:24 for 'update' @ L312, false for 'update' @ L408, false for 'update' @ L312, false for 'update' @ L408
+evaluation error at L319:24 for 'update' @ L319, false for 'update' @ L427, false for 'update' @ L319, false for 'update' @ L427
 com.google.cloud.datastore.core.exception.DatastoreException: 
-evaluation error at L312:24 for 'update' @ L312, false for 'update' @ L408, false for 'update' @ L312, false for 'update' @ L408
+evaluation error at L319:24 for 'update' @ L319, false for 'update' @ L427, false for 'update' @ L319, false for 'update' @ L427
 	at com.google.cloud.datastore.core.exception.DatastoreException$Builder.build(DatastoreException.java:139)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.verboseError(DefaultEmulatorRulesAuthorizer.java:318)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.withVerboseErrors(DefaultEmulatorRulesAuthorizer.java:295)
@@ -79,11 +79,11 @@ evaluation error at L312:24 for 'update' @ L312, false for 'update' @ L408, fals
 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
 	at java.base/java.lang.Thread.run(Thread.java:1583)
 
-Mar 12, 2026 10:54:18 AM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
+Mar 25, 2026 8:16:22 PM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
 WARNING: Operation failed: 
-false for 'create' @ L321, false for 'create' @ L408, evaluation error at L322:24 for 'update' @ L322, false for 'update' @ L408, false for 'create' @ L321, false for 'create' @ L408
+false for 'create' @ L328, false for 'create' @ L427, evaluation error at L329:24 for 'update' @ L329, false for 'update' @ L427, false for 'create' @ L328, false for 'create' @ L427
 com.google.cloud.datastore.core.exception.DatastoreException: 
-false for 'create' @ L321, false for 'create' @ L408, evaluation error at L322:24 for 'update' @ L322, false for 'update' @ L408, false for 'create' @ L321, false for 'create' @ L408
+false for 'create' @ L328, false for 'create' @ L427, evaluation error at L329:24 for 'update' @ L329, false for 'update' @ L427, false for 'create' @ L328, false for 'create' @ L427
 	at com.google.cloud.datastore.core.exception.DatastoreException$Builder.build(DatastoreException.java:139)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.verboseError(DefaultEmulatorRulesAuthorizer.java:318)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.withVerboseErrors(DefaultEmulatorRulesAuthorizer.java:295)
@@ -110,55 +110,11 @@ false for 'create' @ L321, false for 'create' @ L408, evaluation error at L322:2
 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
 	at java.base/java.lang.Thread.run(Thread.java:1583)
 
-Mar 12, 2026 10:54:18 AM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
+Mar 25, 2026 8:16:22 PM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
 WARNING: Operation failed: 
-false for 'create' @ L360, false for 'create' @ L408, false for 'update' @ L360, false for 'update' @ L408
+false for 'create' @ L367, false for 'create' @ L427, false for 'update' @ L367, false for 'update' @ L427
 com.google.cloud.datastore.core.exception.DatastoreException: 
-false for 'create' @ L360, false for 'create' @ L408, false for 'updaMar 12, 2026 10:54:27 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:34 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:34 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:34 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:34 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:42 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:42 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:42 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:54:42 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:55:27 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:56:27 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:57:27 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:58:12 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-Mar 12, 2026 10:59:12 AM io.gapi.emulators.netty.HttpVersionRoutingHandler channelRead
-INFO: Detected non-HTTP/2 connection.
-pc.Contexts$ContextualizedServerCallListener.onMessage(Contexts.java:76)
-	at io.grpc.ForwardingServerCallListener.onMessage(ForwardingServerCallListener.java:33)
-	at io.grpc.Contexts$ContextualizedServerCallListener.onMessage(Contexts.java:76)
-	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.messagesAvailableInternal(ServerCallImpl.java:334)
-	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.messagesAvailable(ServerCallImpl.java:319)
-	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1MessagesAvailable.runInContext(ServerImpl.java:834)
-	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
-	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
-	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
-	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:18 AM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
-WARNING: Operation failed: 
-evaluation error at L322:24 for 'update' @ L322, false for 'update' @ L408, false for 'update' @ L322, false for 'update' @ L408
-com.google.cloud.datastore.core.exception.DatastoreException: 
-evaluation error at L322:24 for 'update' @ L322, false for 'update' @ L408, false for 'update' @ L322, false for 'update' @ L408
+false for 'create' @ L367, false for 'create' @ L427, false for 'update' @ L367, false for 'update' @ L427
 	at com.google.cloud.datastore.core.exception.DatastoreException$Builder.build(DatastoreException.java:139)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.verboseError(DefaultEmulatorRulesAuthorizer.java:318)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.withVerboseErrors(DefaultEmulatorRulesAuthorizer.java:295)
@@ -185,11 +141,11 @@ evaluation error at L322:24 for 'update' @ L322, false for 'update' @ L408, fals
 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
 	at java.base/java.lang.Thread.run(Thread.java:1583)
 
-Mar 12, 2026 10:54:19 AM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
+Mar 25, 2026 8:16:22 PM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
 WARNING: Operation failed: 
-false for 'create' @ L365, false for 'create' @ L408, evaluation error at L366:24 for 'update' @ L366, false for 'update' @ L408, false for 'create' @ L365, false for 'create' @ L408
+evaluation error at L329:24 for 'update' @ L329, false for 'update' @ L427, false for 'update' @ L329, false for 'update' @ L427
 com.google.cloud.datastore.core.exception.DatastoreException: 
-false for 'create' @ L365, false for 'create' @ L408, evaluation error at L366:24 for 'update' @ L366, false for 'update' @ L408, false for 'create' @ L365, false for 'create' @ L408
+evaluation error at L329:24 for 'update' @ L329, false for 'update' @ L427, false for 'update' @ L329, false for 'update' @ L427
 	at com.google.cloud.datastore.core.exception.DatastoreException$Builder.build(DatastoreException.java:139)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.verboseError(DefaultEmulatorRulesAuthorizer.java:318)
 	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.withVerboseErrors(DefaultEmulatorRulesAuthorizer.java:295)
@@ -216,149 +172,36 @@ false for 'create' @ L365, false for 'create' @ L408, evaluation error at L366:2
 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
 	at java.base/java.lang.Thread.run(Thread.java:1583)
 
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
+Mar 25, 2026 8:16:22 PM com.google.cloud.datastore.emulator.impl.util.WrappedStreamObserver onError
+WARNING: Operation failed: 
+false for 'create' @ L372, false for 'create' @ L427, evaluation error at L373:24 for 'update' @ L373, false for 'update' @ L427, false for 'create' @ L372, false for 'create' @ L427
+com.google.cloud.datastore.core.exception.DatastoreException: 
+false for 'create' @ L372, false for 'create' @ L427, evaluation error at L373:24 for 'update' @ L373, false for 'update' @ L427, false for 'create' @ L372, false for 'create' @ L427
+	at com.google.cloud.datastore.core.exception.DatastoreException$Builder.build(DatastoreException.java:139)
+	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.verboseError(DefaultEmulatorRulesAuthorizer.java:318)
+	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.withVerboseErrors(DefaultEmulatorRulesAuthorizer.java:295)
+	at com.google.cloud.datastore.emulator.impl.rules.DefaultEmulatorRulesAuthorizer.checkCommit(DefaultEmulatorRulesAuthorizer.java:114)
+	at com.google.cloud.datastore.emulator.impl.firestore.FirestoreEmulatorHelper.commitHelper(FirestoreEmulatorHelper.java:365)
+	at com.google.cloud.datastore.emulator.impl.firestore.FirestoreEmulatorHelper.internalCommit(FirestoreEmulatorHelper.java:319)
+	at com.google.cloud.datastore.emulator.impl.firestore.CloudFirestoreV1.internalCommit(CloudFirestoreV1.java:1170)
+	at com.google.cloud.datastore.emulator.impl.firestore.CloudFirestoreV1.write(CloudFirestoreV1.java:1158)
+	at com.google.cloud.datastore.emulator.impl.firestore.CloudFirestoreV1WriteStream.handleRequest(CloudFirestoreV1WriteStream.java:222)
+	at com.google.cloud.datastore.emulator.impl.firestore.CloudFirestoreV1WriteStream.write(CloudFirestoreV1WriteStream.java:144)
+	at com.google.cloud.datastore.emulator.impl.firestore.CloudFirestoreV1WriteStream.onNext(CloudFirestoreV1WriteStream.java:99)
+	at com.google.cloud.datastore.emulator.impl.firestore.CloudFirestoreV1WriteStream.onNext(CloudFirestoreV1WriteStream.java:27)
+	at io.grpc.stub.ServerCalls$StreamingServerCallHandler$StreamingServerCallListener.onMessage(ServerCalls.java:262)
+	at io.grpc.ForwardingServerCallListener.onMessage(ForwardingServerCallListener.java:33)
+	at io.grpc.Contexts$ContextualizedServerCallListener.onMessage(Contexts.java:76)
+	at io.grpc.ForwardingServerCallListener.onMessage(ForwardingServerCallListener.java:33)
+	at io.grpc.Contexts$ContextualizedServerCallListener.onMessage(Contexts.java:76)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.messagesAvailableInternal(ServerCallImpl.java:334)
+	at io.grpc.internal.ServerCallImpl$ServerStreamListenerImpl.messagesAvailable(ServerCallImpl.java:319)
+	at io.grpc.internal.ServerImpl$JumpToApplicationThreadServerStreamListener$1MessagesAvailable.runInContext(ServerImpl.java:834)
+	at io.grpc.internal.ContextRunnable.run(ContextRunnable.java:37)
+	at io.grpc.internal.SerializingExecutor.run(SerializingExecutor.java:133)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1144)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:642)
 	at java.base/java.lang.Thread.run(Thread.java:1583)
 
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:19 AM io.netty.channel.DefaultChannelPipeline onUnhandledInboundException
-WARNING: An exceptionCaught() event was fired, and it reached at the tail of the pipeline. It usually means the last handler in the pipeline did not handle the exception.
-java.net.SocketException: Connection reset
-	at java.base/sun.nio.ch.SocketChannelImpl.throwConnectionReset(SocketChannelImpl.java:401)
-	at java.base/sun.nio.ch.SocketChannelImpl.read(SocketChannelImpl.java:434)
-	at io.netty.buffer.PooledByteBuf.setBytes(PooledByteBuf.java:255)
-	at io.netty.buffer.AbstractByteBuf.writeBytes(AbstractByteBuf.java:1132)
-	at io.netty.channel.socket.nio.NioSocketChannel.doReadBytes(NioSocketChannel.java:356)
-	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:151)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:796)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:732)
-	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:658)
-	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:562)
-	at io.netty.util.concurrent.SingleThreadEventExecutor$4.run(SingleThreadEventExecutor.java:998)
-	at io.netty.util.internal.ThreadExecutorMap$2.run(ThreadExecutorMap.java:74)
-	at io.netty.util.concurrent.FastThreadLocalRunnable.run(FastThreadLocalRunnable.java:30)
-	at java.base/java.lang.Thread.run(Thread.java:1583)
-
-Mar 12, 2026 10:54:19 AM com.google.cloud.datastore.emulator.impl.events.FunctionsEmulatorEventPublisher publishV2Event
-WARNING: Failed to publish v2 event to 127.0.0.1:5002: Connection reset
+*** shutting down gRPC server since JVM is shutting down
+*** server shut down

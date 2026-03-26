@@ -26,7 +26,7 @@ import type { AppRole, AppUser } from "@/domain/types";
 
 type RepositoryModule = typeof import("@/data/firebaseRepository");
 type FirebaseLibModule = typeof import("@/lib/firebase");
-const PROJECT_ID = "emandar-app";
+const PROJECT_ID = "emandar-prod";
 const adminApp =
   getApps()[0] ??
   initializeAdminApp({
@@ -279,12 +279,12 @@ function mockFirebaseModule() {
   vi.doMock("@/lib/firebase", async () => {
     const app = initializeClientApp({
       apiKey: "demo-api-key",
-      authDomain: "emandar-app.firebaseapp.com",
+      authDomain: "emandar-prod.firebaseapp.com",
       projectId: PROJECT_ID,
-      storageBucket: "emandar-app.firebasestorage.app",
-      messagingSenderId: "354371064589",
-      appId: "1:354371064589:web:4a1eb5976af15ddcd89644",
-      measurementId: "G-MSF27RHND2",
+      storageBucket: "emandar-prod.firebasestorage.app",
+      messagingSenderId: "484558566822",
+      appId: "1:484558566822:web:06161faa289d2eae748b67",
+      measurementId: "G-WVQVQ0MM8V",
     });
     const auth = getAuth(app);
     const db = getFirestore(app);
@@ -306,12 +306,12 @@ function mockFirebaseModule() {
     return {
       firebaseConfig: {
         apiKey: "demo-api-key",
-        authDomain: "emandar-app.firebaseapp.com",
+        authDomain: "emandar-prod.firebaseapp.com",
         projectId: PROJECT_ID,
-        storageBucket: "emandar-app.firebasestorage.app",
-        messagingSenderId: "354371064589",
-        appId: "1:354371064589:web:4a1eb5976af15ddcd89644",
-        measurementId: "G-MSF27RHND2",
+        storageBucket: "emandar-prod.firebasestorage.app",
+        messagingSenderId: "484558566822",
+        appId: "1:484558566822:web:06161faa289d2eae748b67",
+        measurementId: "G-WVQVQ0MM8V",
       },
       isFirebaseConfigured: true,
       firebaseApp: app,

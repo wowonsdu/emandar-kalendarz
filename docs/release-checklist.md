@@ -11,7 +11,7 @@
 ## Data and rules gate
 
 - Confirm every relation document uses the deterministic id format `<trainerId>__<organizerId>`.
-- Confirm `trainingEvents`, `groups`, `availabilitySlots` and `enrollmentRequests` have normalized `trainerUserId` and `organizerUserId`.
+- Confirm `trainingEvents`, `availabilitySlots` and `enrollmentRequests` have normalized `trainerUserId` and `organizerUserId`.
 - Confirm archived events have `isPublished=false` and organizer access is read-only from the list level.
 - Deploy Firestore and Storage rules only after emulator tests pass.
 

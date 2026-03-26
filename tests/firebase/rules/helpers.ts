@@ -18,7 +18,7 @@ import {
   type FirebaseStorage,
 } from "firebase/storage";
 
-export const PROJECT_ID = "emandar-app";
+export const PROJECT_ID = "emandar-prod";
 export const STORAGE_BUCKET = `gs://${PROJECT_ID}.firebasestorage.app`;
 
 let cachedEnvironment: RulesTestEnvironment | null = null;

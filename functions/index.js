@@ -423,8 +423,16 @@ function hashAttendanceToken(token) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function hashReviewToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 function buildAttendanceDecisionUrl(token, decision) {
   return `${PUBLIC_APP_BASE_URL.replace(/\/$/, "")}/potwierdzenie-udzialu/${token}/${decision}`;
+}
+
+function buildCommunityEventReviewUrl(token) {
+  return `${PUBLIC_APP_BASE_URL.replace(/\/$/, "")}/moderacja-wydarzenia/${token}`;
 }
 
 function formatEventDateForSms(event) {
@@ -678,6 +686,205 @@ async function attachEnrollmentsByPhoneToUser(userId, phoneNumber) {
   return linkedCount;
 }
 
+function resolvePhoneUserDisplayName(userRecord, authUser) {
+  const existingDisplayName = asString(userRecord?.displayName);
+  if (existingDisplayName) {
+    return existingDisplayName;
+  }
+
+  const authDisplayName = asString(authUser?.displayName);
+  if (authDisplayName) {
+    return authDisplayName;
+  }
+
+  const phone = asString(authUser?.phoneNumber);
+  if (phone) {
+    return `Uczestnik ${phone.slice(-4)}`;
+  }
+
+  return "Uczestnik Emandar";
+}
+
+async function ensurePhoneParticipantAppUser(uid, { seedTrainerId } = {}) {
+  const authUser = await auth.getUser(uid);
+  const verifiedPhone = requiredString(
+    authUser.phoneNumber,
+    "Numer telefonu musi zostać najpierw potwierdzony kodem SMS.",
+  );
+  const userRef = db.collection(collections.users).doc(uid);
+  const createdAt = nowIso();
+  let accountCreated = false;
+
+  await auth.setCustomUserClaims(uid, {
+    ...(authUser.customClaims ?? {}),
+    admin: false,
+  });
+
+  await db.runTransaction(async (transaction) => {
+    const existingSnapshot = await transaction.get(userRef);
+    const existingUser = existingSnapshot.exists
+      ? { id: existingSnapshot.id, ...existingSnapshot.data() }
+      : null;
+    const existingRoles = normalizeRoleList(existingUser?.roles);
+    const nextRoles =
+      existingRoles.length > 0
+        ? Array.from(new Set(["participant", ...existingRoles]))
+        : ["participant"];
+    const existingSelectedTrainerIds = normalizeStringList(existingUser?.selectedTrainerIds);
+    const nextSelectedTrainerIds =
+      existingSelectedTrainerIds.length === 0 && asString(seedTrainerId)
+        ? [asString(seedTrainerId)]
+        : existingSelectedTrainerIds;
+    const preferredPrimaryRole =
+      existingUser?.primaryRole && nextRoles.includes(existingUser.primaryRole)
+        ? existingUser.primaryRole
+        : nextRoles[0];
+    const preferredActiveRole =
+      existingUser?.role && nextRoles.includes(existingUser.role)
+        ? existingUser.role
+        : preferredPrimaryRole;
+
+    if (!existingSnapshot.exists) {
+      accountCreated = true;
+    }
+
+    transaction.set(
+      userRef,
+      {
+        displayName: resolvePhoneUserDisplayName(existingUser, authUser),
+        notes: asString(existingUser?.notes),
+        referralSource: asString(existingUser?.referralSource),
+        email: authUser.email ?? existingUser?.email ?? null,
+        phone: verifiedPhone,
+        authProvider: "phone",
+        phoneVerifiedAt: createdAt,
+        status: existingUser?.status ?? "active",
+        role: preferredActiveRole,
+        roles: nextRoles,
+        primaryRole: preferredPrimaryRole,
+        pendingRoles: normalizePendingRoles(existingUser?.pendingRoles),
+        accountApprovalStatus:
+          existingUser?.accountApprovalStatus === "pending" ||
+          existingUser?.accountApprovalStatus === "rejected" ||
+          existingUser?.accountApprovalStatus === "approved"
+            ? existingUser.accountApprovalStatus
+            : "approved",
+        selectedTrainerIds: nextSelectedTrainerIds,
+        approvedTrainerIds: normalizeStringList(existingUser?.approvedTrainerIds),
+        participantOnboardingCompletedAt:
+          typeof existingUser?.participantOnboardingCompletedAt === "string"
+            ? existingUser.participantOnboardingCompletedAt
+            : null,
+        communityEventAutoApprove:
+          typeof existingUser?.communityEventAutoApprove === "boolean"
+            ? existingUser.communityEventAutoApprove
+            : false,
+        trainerProfileId: existingUser?.trainerProfileId ?? null,
+        organizerProfileId: existingUser?.organizerProfileId ?? null,
+        avatarUrl: asString(existingUser?.avatarUrl),
+        avatarPath: existingUser?.avatarPath ?? null,
+        createdAt: existingUser?.createdAt ?? createdAt,
+      },
+      { merge: true },
+    );
+  });
+
+  await attachEnrollmentsByPhoneToUser(uid, verifiedPhone);
+  return { ok: true, userId: uid, accountCreated };
+}
+
+async function resolveEnrollmentContactsForEvent(event) {
+  const trainer = event.trainerId ? await findTrainerProfile(event.trainerId) : null;
+  const organizer = event.organizerId ? await findOrganizerProfile(event.organizerId) : null;
+  const leadUserId = asString(trainer?.userId) || asString(event.creatorUserId) || null;
+  const leadUser = leadUserId ? await requireAppUser(leadUserId) : null;
+  const organizerUser = organizer?.userId ? await requireAppUser(organizer.userId) : null;
+
+  if (!leadUser) {
+    throw new HttpsError(
+      "failed-precondition",
+      "To wydarzenie nie ma poprawnie przypisanego właściciela do obsługi zgłoszeń.",
+    );
+  }
+
+  return {
+    trainer,
+    organizer,
+    leadUser,
+    organizerUser,
+    leadName:
+      asString(trainer?.displayName) ||
+      asString(event.creatorDisplayName) ||
+      asString(leadUser.displayName) ||
+      "Gospodarz wydarzenia",
+  };
+}
+
+async function findAdminUsers() {
+  const [rolesSnapshot, roleSnapshot] = await Promise.all([
+    db.collection(collections.users).where("roles", "array-contains", "admin").get(),
+    db.collection(collections.users).where("role", "==", "admin").get(),
+  ]);
+
+  return Array.from(
+    new Map(
+      [...rolesSnapshot.docs, ...roleSnapshot.docs].map((snapshot) => [
+        snapshot.id,
+        { id: snapshot.id, ...snapshot.data() },
+      ]),
+    ).values(),
+  );
+}
+
+async function findCommunityEventByReviewTokenHash(tokenHash) {
+  const snapshot = await db
+    .collection(collections.trainingEvents)
+    .where("publicationReviewTokenHash", "==", tokenHash)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const docSnapshot = snapshot.docs[0];
+  return {
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  };
+}
+
+async function queueCommunityEventReviewSms(event) {
+  const adminUsers = await findAdminUsers();
+  const reviewToken = randomUUID();
+  const reviewTokenHash = hashReviewToken(reviewToken);
+  const reviewUrl = buildCommunityEventReviewUrl(reviewToken);
+
+  await db.collection(collections.trainingEvents).doc(event.id).set(
+    {
+      publicationReviewTokenHash: reviewTokenHash,
+    },
+    { merge: true },
+  );
+
+  await Promise.all(
+    adminUsers.map((adminUser) =>
+      createSmsDispatchOnce(`community-review__${event.id}__${adminUser.id}`, {
+        eventId: event.id,
+        requestId: null,
+        leadDays: null,
+        templateKind: "community-review",
+        recipientRole: "admin",
+        recipientProfileId: null,
+        recipientUserId: adminUser.id,
+        recipientName: adminUser.displayName || "Admin",
+        recipientPhone: asString(adminUser.phone),
+        message: `Nowe wydarzenie społeczności czeka na zatwierdzenie: ${event.location}. ${reviewUrl}`,
+      }),
+    ),
+  );
+}
+
 async function getRelationByPair(trainerId, organizerId) {
   const snapshot = await db.collection(collections.relations).doc(buildRelationId(trainerId, organizerId)).get();
   if (!snapshot.exists) {
@@ -773,6 +980,10 @@ function canManageTrainingEvent(event, actor) {
       resolveOrganizerCollaborationStatus(event) === "accepted" ||
       event.createdByRole === "organizer"
     );
+  }
+
+  if (actor.role === "participant" && actor.id === event.creatorUserId) {
+    return true;
   }
 
   return false;
@@ -1198,11 +1409,11 @@ function callableOptions() {
 }
 
 export const finalizePhoneRegistration = onCall(callableOptions(), async (request) => {
-  const { uid, user } = await requireCurrentUser(request, { allowAnonymous: true });
+  const { uid } = await requireCurrentUser(request, { allowAnonymous: true });
   const authUser = await auth.getUser(uid);
   const payload = request.data ?? {};
   const displayName = requiredString(payload.displayName, "Podaj imię i nazwisko.");
-  const notes = requiredString(payload.notes, "Dodaj kilka słów o sobie.");
+  const notes = asString(payload.notes);
   const requestedRoles = normalizeRequestedRoles(payload.requestedRoles);
   const organizerTrainingIntent = asString(payload.organizerTrainingIntent);
   const avatarPath = asString(payload.avatarPath);
@@ -1219,10 +1430,6 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     "Numer telefonu musi zostać najpierw potwierdzony kodem SMS.",
   );
   const globalSettings = await getPublicSettings();
-
-  if (user) {
-    return { ok: true, userId: uid, accountCreated: false };
-  }
 
   if (requestedRoles.length === 0) {
     throw new HttpsError("invalid-argument", "Wybierz przynajmniej jeden typ konta.");
@@ -1243,9 +1450,20 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     );
   }
 
-  const trainerProfileId = requestedRoles.includes("trainer") ? createId("trainer") : null;
-  const organizerProfileId = requestedRoles.includes("organizer") ? createId("organizer") : null;
-  const pendingRoles = requestedRoles.filter((role) => role === "trainer" || role === "organizer");
+  const ensureResult = await ensurePhoneParticipantAppUser(uid, {
+    seedTrainerId: selectedTrainerIds[0],
+  });
+  const currentUser = await requireAppUser(uid);
+  const currentRoles = normalizeRoleList(currentUser.roles);
+  const existingPendingRoles = normalizePendingRoles(currentUser.pendingRoles);
+  const requestedPendingRoles = requestedRoles
+    .filter((role) => role === "trainer" || role === "organizer")
+    .filter((role) => !currentRoles.includes(role));
+  const pendingRoles = Array.from(new Set([...existingPendingRoles, ...requestedPendingRoles]));
+  const trainerProfileId =
+    currentUser.trainerProfileId || (requestedRoles.includes("trainer") ? createId("trainer") : null);
+  const organizerProfileId =
+    currentUser.organizerProfileId || (requestedRoles.includes("organizer") ? createId("organizer") : null);
   const accountRequestRef = db
     .collection(collections.accountRequests)
     .doc(buildPhoneAccountRequestId(uid));
@@ -1255,40 +1473,54 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
   );
   const createdAt = nowIso();
 
-  await auth.setCustomUserClaims(uid, {
-    ...(authUser.customClaims ?? {}),
-    admin: false,
-  });
-
   const registrationResult = await db.runTransaction(async (transaction) => {
     const existingUserSnapshot = await transaction.get(userRef);
-
-    if (existingUserSnapshot.exists) {
-      return { accountCreated: false };
-    }
+    const existingUser = existingUserSnapshot.exists
+      ? { id: existingUserSnapshot.id, ...existingUserSnapshot.data() }
+      : currentUser;
+    const existingRolesInTransaction = normalizeRoleList(existingUser.roles);
+    const nextRoles =
+      existingRolesInTransaction.length > 0
+        ? Array.from(new Set(["participant", ...existingRolesInTransaction]))
+        : ["participant"];
+    const nextPrimaryRole =
+      existingUser.primaryRole && nextRoles.includes(existingUser.primaryRole)
+        ? existingUser.primaryRole
+        : nextRoles[0];
+    const nextRole =
+      existingUser.role && nextRoles.includes(existingUser.role)
+        ? existingUser.role
+        : nextPrimaryRole;
 
     transaction.set(userRef, {
       displayName,
+      notes,
+      referralSource: asString(existingUser.referralSource),
       email: authUser.email ?? null,
       phone: verifiedPhone,
       avatarUrl: avatarUrl || "",
       avatarPath: avatarPath || null,
       authProvider: "phone",
       phoneVerifiedAt: createdAt,
-      status: "active",
-      role: "participant",
-      roles: ["participant"],
-      primaryRole: "participant",
+      status: existingUser.status ?? "active",
+      role: nextRole,
+      roles: nextRoles,
+      primaryRole: nextPrimaryRole,
       pendingRoles,
-      accountApprovalStatus: "pending",
+      accountApprovalStatus: pendingRoles.length > 0 ? "pending" : "approved",
       selectedTrainerIds,
-      approvedTrainerIds: [],
+      approvedTrainerIds: normalizeStringList(existingUser.approvedTrainerIds),
       trainerProfileId,
       organizerProfileId,
-      createdAt,
+      participantOnboardingCompletedAt: createdAt,
+      createdAt: existingUser.createdAt ?? createdAt,
+      communityEventAutoApprove:
+        typeof existingUser.communityEventAutoApprove === "boolean"
+          ? existingUser.communityEventAutoApprove
+          : false,
     });
 
-    if (trainerProfileId) {
+    if (requestedRoles.includes("trainer") && !existingUser.trainerProfileId && trainerProfileId) {
       transaction.set(db.collection(collections.trainers).doc(trainerProfileId), {
         userId: uid,
         slug: slugifyDisplayName(displayName),
@@ -1306,7 +1538,7 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
       });
     }
 
-    if (organizerProfileId) {
+    if (requestedRoles.includes("organizer") && !existingUser.organizerProfileId && organizerProfileId) {
       transaction.set(db.collection(collections.organizers).doc(organizerProfileId), {
         userId: uid,
         displayName,
@@ -1320,7 +1552,11 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     }
 
     trainerTargets.forEach((trainer) => {
-      if (organizerProfileId) {
+      if (
+        organizerProfileId &&
+        requestedPendingRoles.includes("organizer") &&
+        !existingUser.organizerProfileId
+      ) {
         transaction.set(
           db.collection(collections.relations).doc(buildRelationId(trainer.id, organizerProfileId)),
           {
@@ -1335,21 +1571,24 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
         );
       }
 
-      transaction.set(
-        db
-          .collection(collections.trainerAccountApprovals)
-          .doc(buildAccountApprovalId(uid, trainer.id)),
-        {
-          requesterUserId: uid,
-          requesterDisplayName: displayName,
-          requesterPhone: verifiedPhone,
-          targetTrainerId: trainer.id,
-          targetTrainerUserId: trainer.userId,
-          requestedRoles,
-          status: "pending",
-          createdAt,
-        },
-      );
+      if (requestedPendingRoles.length > 0) {
+        transaction.set(
+          db
+            .collection(collections.trainerAccountApprovals)
+            .doc(buildAccountApprovalId(uid, trainer.id)),
+          {
+            requesterUserId: uid,
+            requesterDisplayName: displayName,
+            requesterPhone: verifiedPhone,
+            targetTrainerId: trainer.id,
+            targetTrainerUserId: trainer.userId,
+            requestedRoles,
+            status: "pending",
+            createdAt,
+          },
+          { merge: true },
+        );
+      }
     });
 
     transaction.set(accountRequestRef, {
@@ -1358,11 +1597,13 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
       phone: verifiedPhone,
       requestedRoles,
       notes,
+      referralSource: asString(existingUser.referralSource),
       status: "approved",
       authProvider: "phone",
       organizerTrainingIntent,
       selectedTrainerIds,
       avatarPath: avatarPath || null,
+      avatarUrl: avatarUrl || "",
       submitterUid: uid,
       createdAt,
       reviewedAt: createdAt,
@@ -1370,24 +1611,115 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
       createdUserId: uid,
       trainerProfileId,
       organizerProfileId,
-    });
+    }, { merge: true });
 
-    return { accountCreated: true };
+    return { accountCreated: !existingUserSnapshot.exists };
   });
 
-  if (registrationResult.accountCreated) {
-    await attachEnrollmentsByPhoneToUser(uid, verifiedPhone);
+  if (pendingRoles.length > 0) {
+    await syncUserAccountApprovalState(uid);
   }
 
-  return { ok: true, userId: uid, accountCreated: registrationResult.accountCreated };
+  return { ok: true, userId: uid, accountCreated: ensureResult.accountCreated || registrationResult.accountCreated };
 });
 
 export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (request) => {
-  void request;
-  throw new HttpsError(
-    "failed-precondition",
-    "Automatyczne zakładanie konta uczestnika jest wyłączone. Użyj formularza rejestracji.",
+  const { uid } = await requireCurrentUser(request, { allowAnonymous: true });
+  const seedTrainerId = asString(request.data?.seedTrainerId);
+  return ensurePhoneParticipantAppUser(uid, {
+    seedTrainerId,
+  });
+});
+
+export const getCommunityEventReview = onCall(callableOptions(), async (request) => {
+  const token = requiredString(request.data?.token, "Brak tokenu moderacji.");
+  const event = await findCommunityEventByReviewTokenHash(hashReviewToken(token));
+
+  if (!event) {
+    throw new HttpsError("not-found", "Nie znaleziono wydarzenia do moderacji.");
+  }
+
+  return {
+    ok: true,
+    event,
+    creatorName: asString(event.creatorDisplayName, "Autor wydarzenia"),
+    creatorPhone: asString(event.creatorPhone),
+  };
+});
+
+export const reviewCommunityEvent = onCall(callableOptions(), async (request) => {
+  const token = requiredString(request.data?.token, "Brak tokenu moderacji.");
+  const decision =
+    request.data?.decision === "accepted" || request.data?.decision === "rejected"
+      ? request.data.decision
+      : null;
+  const message = asString(request.data?.message);
+  const enableAutoApprove = request.data?.enableAutoApprove === true;
+
+  if (!decision) {
+    throw new HttpsError("invalid-argument", "Podaj poprawną decyzję moderacji.");
+  }
+
+  const event = await findCommunityEventByReviewTokenHash(hashReviewToken(token));
+
+  if (!event) {
+    throw new HttpsError("not-found", "Nie znaleziono wydarzenia do moderacji.");
+  }
+
+  if (!isCommunityBrandStatus(event.brandStatus)) {
+    throw new HttpsError("failed-precondition", "Ten link dotyczy tylko wydarzeń społeczności.");
+  }
+
+  if (event.publicationApprovalStatus === "accepted" || event.publicationApprovalStatus === "rejected") {
+    throw new HttpsError("failed-precondition", "To wydarzenie zostało już wcześniej obsłużone.");
+  }
+
+  const adminUsers = await findAdminUsers();
+  const reviewerId = adminUsers[0]?.id ?? "community-review-link";
+
+  await db.collection(collections.trainingEvents).doc(event.id).set(
+    {
+      isPublished: decision === "accepted",
+      publicationApprovalStatus: decision,
+      publicationReviewedAt: nowIso(),
+      publicationReviewedByUserId: reviewerId,
+      publicationReviewMessage: message || null,
+      publicationReviewTokenHash: FieldValue.delete(),
+    },
+    { merge: true },
   );
+
+  if (enableAutoApprove && event.creatorUserId) {
+    await db.collection(collections.users).doc(event.creatorUserId).set(
+      {
+        communityEventAutoApprove: true,
+      },
+      { merge: true },
+    );
+  }
+
+  if (event.creatorUserId || event.creatorPhone) {
+    await createSmsDispatchOnce(`community-review-result__${event.id}`, {
+      eventId: event.id,
+      requestId: null,
+      leadDays: null,
+      templateKind: "community-review-result",
+      recipientRole: "participant",
+      recipientProfileId: null,
+      recipientUserId: event.creatorUserId ?? null,
+      recipientName: asString(event.creatorDisplayName, "Autor wydarzenia"),
+      recipientPhone: asString(event.creatorPhone),
+      message:
+        decision === "accepted"
+          ? `Twoje wydarzenie "${event.location}" zostało zatwierdzone. ${message || "Sprawdź szczegóły w panelu."}`
+          : `Twoje wydarzenie "${event.location}" zostało odrzucone. ${message || "Sprawdź szczegóły w panelu."}`,
+    });
+  }
+
+  return {
+    ok: true,
+    eventId: event.id,
+  };
 });
 
 export const approveAccountRequest = onCall(callableOptions(), async (request) => {
@@ -1594,12 +1926,20 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     throw new HttpsError("permission-denied", "Musisz być zalogowany.");
   }
 
+  const isParticipantCommunityCreate = user.role === "participant";
+
   if (
-    (user.role !== "trainer" && user.role !== "organizer") ||
-    (user.role === "trainer" && !user.trainerProfileId) ||
-    (user.role === "organizer" && !user.organizerProfileId)
+    !isParticipantCommunityCreate &&
+    (
+      (user.role !== "trainer" && user.role !== "organizer") ||
+      (user.role === "trainer" && !user.trainerProfileId) ||
+      (user.role === "organizer" && !user.organizerProfileId)
+    )
   ) {
-    throw new HttpsError("permission-denied", "Tylko Przekazujący Wiedzę albo organizator może tworzyć szkolenia.");
+    throw new HttpsError(
+      "permission-denied",
+      "Tylko zalogowany uczestnik, Przekazujący Wiedzę albo organizator może tworzyć wydarzenia.",
+    );
   }
 
   const input = request.data ?? {};
@@ -1608,27 +1948,38 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
   const actingTrainer =
     user.role === "trainer" ? await requireTrainerProfile(user.trainerProfileId) : null;
   const trainer =
-    user.role === "trainer"
+    user.role === "participant"
+      ? null
+      : user.role === "trainer"
       ? actingTrainer
       : input.trainerId
         ? await requireTrainerProfile(requiredString(input.trainerId, "Najpierw wybierz Przekazującego Wiedzę dla szkolenia."))
         : null;
 
-  if (!trainer) {
+  if (!isParticipantCommunityCreate && !trainer) {
     throw new HttpsError("invalid-argument", "Najpierw wybierz Przekazującego Wiedzę dla szkolenia.");
   }
 
   const brandStatus =
-    user.role === "trainer"
+    user.role === "participant"
+      ? "supported"
+      : user.role === "trainer"
       ? resolveBrandStatus(input.brandStatus ?? trainer.brandStatus)
       : "official";
   const isCommunityTrainer = isCommunityBrandStatus(brandStatus);
+
+  if (isParticipantCommunityCreate && !isCommunityTrainer) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Uczestnik może tworzyć tylko wydarzenia społeczności.",
+    );
+  }
 
   if (user.role === "organizer" && isCommunityTrainer) {
     throw new HttpsError("failed-precondition", "Organizator może tworzyć tylko oficjalne szkolenia.");
   }
 
-  if (user.role === "organizer" && isCommunityBrandStatus(trainer.brandStatus)) {
+  if (user.role === "organizer" && trainer && isCommunityBrandStatus(trainer.brandStatus)) {
     throw new HttpsError("failed-precondition", "Wydarzenia społeczności pozostają po stronie ich właściciela.");
   }
 
@@ -1636,8 +1987,17 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     await ensureCommunityTrainerCanPublish(user);
   }
 
+  const shouldAutoPublishCommunityEvent =
+    isCommunityTrainer &&
+    (
+      (user.role === "participant" && user.communityEventAutoApprove === true) ||
+      (user.role === "trainer" && Boolean(input.isPublished))
+    );
+
   const selfManagedByTrainer =
-    user.role === "trainer" && !isCommunityTrainer
+    user.role === "participant"
+      ? true
+      : user.role === "trainer" && !isCommunityTrainer
       ? Boolean(input.selfManagedByTrainer || !input.organizerId)
       : false;
   const organizer =
@@ -1668,11 +2028,14 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     Math.min(capacity, asNumber(input.minimumParticipants, capacity)),
   );
 
-  const docRef = await db.collection(collections.trainingEvents).add({
-    trainerId: trainer.id,
+  const eventPayload = {
+    trainerId: trainer?.id ?? null,
     organizerId: organizer?.id ?? null,
-    trainerUserId: trainer.userId,
+    trainerUserId: trainer?.userId ?? null,
     organizerUserId: organizer?.userId ?? null,
+    creatorUserId: isCommunityTrainer ? user.id : null,
+    creatorDisplayName: isCommunityTrainer ? user.displayName : null,
+    creatorPhone: isCommunityTrainer ? asString(user.phone) : null,
     title: trimmedLocation,
     summary: requiredString(input.summary, "Podaj krótki opis szkolenia."),
     description: requiredString(input.description, "Podaj pełny opis szkolenia."),
@@ -1684,7 +2047,9 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     tags: normalizedTags,
     capacity,
     enrolledCount: 0,
-    isPublished: Boolean(input.isPublished),
+    isPublished: isCommunityTrainer
+      ? shouldAutoPublishCommunityEvent
+      : Boolean(input.isPublished),
     imageHint: trimmedLocation.split(/\s+/)[0]?.toLowerCase() || "event",
     brandStatus,
     status: resolveTrainingEventStatus(input.status),
@@ -1699,12 +2064,34 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
           : "pending",
     selfManagedByTrainer: isCommunityTrainer ? true : selfManagedByTrainer,
     createdByRole: user.role,
+    publicationApprovalStatus: isCommunityTrainer
+      ? shouldAutoPublishCommunityEvent
+        ? "accepted"
+        : "pending"
+      : null,
+    publicationApprovalRequestedAt:
+      isCommunityTrainer && !shouldAutoPublishCommunityEvent ? nowIso() : null,
+    publicationReviewedAt:
+      isCommunityTrainer && shouldAutoPublishCommunityEvent ? nowIso() : null,
+    publicationReviewedByUserId:
+      isCommunityTrainer && shouldAutoPublishCommunityEvent ? user.id : null,
+    publicationReviewMessage: null,
+    publicationReviewTokenHash: null,
     enrollmentPhotoRequirement:
       input.enrollmentPhotoRequirement === "required" ||
       input.enrollmentPhotoRequirement === "optional"
         ? input.enrollmentPhotoRequirement
         : "default",
-  });
+  };
+
+  const docRef = await db.collection(collections.trainingEvents).add(eventPayload);
+
+  if (isCommunityTrainer && !shouldAutoPublishCommunityEvent) {
+    await queueCommunityEventReviewSms({
+      id: docRef.id,
+      ...eventPayload,
+    });
+  }
 
   return {
     ok: true,
@@ -1720,10 +2107,8 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
   const event = await requireEvent(eventId);
   ensureEventCanAcceptEnrollment(event);
 
-  const trainer = await requireTrainerProfile(event.trainerId);
-  const organizer = event.organizerId ? await requireOrganizerProfile(event.organizerId) : null;
-  const trainerUser = await requireAppUser(trainer.userId);
-  const organizerUser = organizer?.userId ? await requireAppUser(organizer.userId) : null;
+  const { trainer, organizer, leadUser, organizerUser, leadName } =
+    await resolveEnrollmentContactsForEvent(event);
   const requiresOrganizerApproval =
     event.requiresOrganizerApproval ?? !isCommunityBrandStatus(event.brandStatus);
   const photoRequired = await isEnrollmentPhotoRequired(event, trainer, organizer);
@@ -1731,13 +2116,14 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
 
   await requestRef.set({
     eventId: event.id,
-    trainerId: event.trainerId,
+    trainerId: event.trainerId ?? null,
     organizerId: event.organizerId ?? null,
     submitterUid: uid,
-    trainerUserId: trainer.userId,
+    trainerUserId: leadUser.id,
     organizerUserId: organizer?.userId ?? null,
-    trainerContactPhone: asString(trainerUser.phone) || null,
-    trainerContactEmail: asString(trainerUser.email) || null,
+    trainerContactName: leadName,
+    trainerContactPhone: asString(leadUser.phone) || null,
+    trainerContactEmail: asString(leadUser.email) || null,
     organizerContactPhone: asString(organizerUser?.phone) || null,
     organizerContactEmail: asString(organizerUser?.email) || null,
     organizerContactName: asString(organizer?.contactName || organizer?.displayName) || null,
@@ -1768,6 +2154,8 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
   const { uid } = await requireCurrentUser(request, { allowAnonymous: true });
   const requestId = requiredString(request.data?.requestId, "Brak identyfikatora zgłoszenia.");
   const photoPath = asString(request.data?.photoPath);
+  const avatarPath = asString(request.data?.avatarPath);
+  const avatarUrl = asString(request.data?.avatarUrl);
   const requestRef = db.collection(collections.enrollmentRequests).doc(requestId);
   const enrollmentRequest = await requestRef.get();
 
@@ -1807,6 +2195,63 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
     );
   }
 
+  const authUser = await auth.getUser(uid);
+  const profileDisplayName = requiredString(
+    enrollmentRequest.get("imieNazwisko"),
+    "Brak imienia i nazwiska w zgłoszeniu.",
+  );
+  const profilePhone =
+    asString(authUser.phoneNumber) ||
+    requiredString(enrollmentRequest.get("telefon"), "Brak numeru telefonu w zgłoszeniu.");
+  const profileReferralSource = asString(enrollmentRequest.get("polecenieOdKogo"));
+  const profileNotes = asString(enrollmentRequest.get("wiadomosc"));
+  const userRef = db.collection(collections.users).doc(uid);
+  const accountRequestRef = db
+    .collection(collections.accountRequests)
+    .doc(buildPhoneAccountRequestId(uid));
+  const userSnapshot = await userRef.get();
+  const currentUser = userSnapshot.exists ? { id: userSnapshot.id, ...userSnapshot.data() } : null;
+
+  await userRef.set(
+    {
+      displayName: profileDisplayName,
+      phone: profilePhone,
+      notes: profileNotes,
+      referralSource: profileReferralSource,
+      avatarPath: avatarPath || currentUser?.avatarPath || null,
+      avatarUrl: avatarUrl || asString(currentUser?.avatarUrl),
+      authProvider: "phone",
+      phoneVerifiedAt: asString(currentUser?.phoneVerifiedAt) || nowIso(),
+    },
+    { merge: true },
+  );
+
+  await accountRequestRef.set(
+    {
+      displayName: profileDisplayName,
+      email: authUser.email ?? null,
+      phone: profilePhone,
+      notes: profileNotes,
+      referralSource: profileReferralSource,
+      avatarPath: avatarPath || null,
+      avatarUrl: avatarUrl || "",
+      authProvider: "phone",
+      requestedRoles: ["participant"],
+      status: "approved",
+      selectedTrainerIds: normalizeStringList(currentUser?.selectedTrainerIds),
+      submitterUid: uid,
+      createdUserId: uid,
+      createdAt: asString(currentUser?.createdAt) || nowIso(),
+      reviewedByUserId: "enrollment-self-service",
+      reviewedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  if (authUser.displayName !== profileDisplayName) {
+    await auth.updateUser(uid, { displayName: profileDisplayName });
+  }
+
   return {
     ok: true,
   };
@@ -1838,17 +2283,21 @@ export const decideEnrollment = onCall(callableOptions(), async (request) => {
     id: enrollmentRequest.id,
     ...enrollmentRequest.data(),
   };
-  const trainer = await requireTrainerProfile(current.trainerId);
-  const organizer = current.organizerId ? await requireOrganizerProfile(current.organizerId) : null;
+  const sourceEvent = await requireEvent(current.eventId);
+  const organizer = current.organizerId ? await findOrganizerProfile(current.organizerId) : null;
   const updates = {};
 
-  if (user.role === "trainer" && user.trainerProfileId === trainer.id) {
-    updates.trainerDecision = decision;
-  } else if (organizer && user.role === "organizer" && user.organizerProfileId === organizer.id) {
-    updates.organizerDecision = decision;
-  } else if (user.role === "admin") {
+  if (user.role === "admin") {
     updates.trainerDecision = decision;
     updates.organizerDecision = current.requiresOrganizerApproval ? decision : "pending";
+  } else if (
+    organizer &&
+    user.role === "organizer" &&
+    user.organizerProfileId === organizer.id
+  ) {
+    updates.organizerDecision = decision;
+  } else if (canManageTrainingEvent(sourceEvent, user)) {
+    updates.trainerDecision = decision;
   } else {
     throw new HttpsError("permission-denied", "Brak dostępu do tej decyzji.");
   }
@@ -1912,12 +2361,13 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
     throw new HttpsError("permission-denied", "Możesz przenosić osoby tylko do swoich wydarzeń.");
   }
 
-  const targetTrainer = await requireTrainerProfile(targetEvent.trainerId);
-  const targetOrganizer = targetEvent.organizerId ? await requireOrganizerProfile(targetEvent.organizerId) : null;
-  const targetTrainerUser = await requireAppUser(targetTrainer.userId);
-  const targetOrganizerUser = targetOrganizer?.userId
-    ? await requireAppUser(targetOrganizer.userId)
-    : null;
+  const {
+    trainer: targetTrainer,
+    organizer: targetOrganizer,
+    leadUser: targetLeadUser,
+    organizerUser: targetOrganizerUser,
+    leadName: targetLeadName,
+  } = await resolveEnrollmentContactsForEvent(targetEvent);
   const targetRequiresOrganizerApproval =
     targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
 
@@ -1954,12 +2404,13 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
   await requestRef.set(
     {
       eventId: targetEvent.id,
-      trainerId: targetEvent.trainerId,
+      trainerId: targetEvent.trainerId ?? null,
       organizerId: targetEvent.organizerId ?? null,
-      trainerUserId: targetTrainer.userId,
+      trainerUserId: targetLeadUser.id,
       organizerUserId: targetOrganizer?.userId ?? null,
-      trainerContactPhone: asString(targetTrainerUser.phone) || null,
-      trainerContactEmail: asString(targetTrainerUser.email) || null,
+      trainerContactName: targetLeadName,
+      trainerContactPhone: asString(targetLeadUser.phone) || null,
+      trainerContactEmail: asString(targetLeadUser.email) || null,
       organizerContactPhone: asString(targetOrganizerUser?.phone) || null,
       organizerContactEmail: asString(targetOrganizerUser?.email) || null,
       organizerContactName: asString(targetOrganizer?.contactName || targetOrganizer?.displayName) || null,
@@ -1981,7 +2432,7 @@ export const manageEnrollmentRequest = onCall(callableOptions(), async (request)
 
   if (targetEventId && targetEvent.id !== currentRequest.eventId) {
     await createNotifications(
-      [targetTrainer.userId, targetOrganizer?.userId],
+      [targetLeadUser.id, targetOrganizer?.userId],
       "Przeniesiono zgłoszenie do szkolenia",
       `${currentRequest.imieNazwisko} zostało przeniesione do ${targetEvent.title}.`,
       "request",
@@ -2080,14 +2531,13 @@ export const manageOwnEnrollment = onCall(callableOptions(), async (request) => 
     throw new HttpsError("failed-precondition", "To szkolenie nie ma już wolnych miejsc.");
   }
 
-  const targetTrainer = await requireTrainerProfile(targetEvent.trainerId);
-  const targetTrainerUser = await requireAppUser(targetTrainer.userId);
-  const targetOrganizer = targetEvent.organizerId
-    ? await requireOrganizerProfile(targetEvent.organizerId)
-    : null;
-  const targetOrganizerUser = targetOrganizer?.userId
-    ? await requireAppUser(targetOrganizer.userId)
-    : null;
+  const {
+    trainer: targetTrainer,
+    organizer: targetOrganizer,
+    leadUser: targetLeadUser,
+    organizerUser: targetOrganizerUser,
+    leadName: targetLeadName,
+  } = await resolveEnrollmentContactsForEvent(targetEvent);
   const targetRequiresOrganizerApproval =
     targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
 
@@ -2102,12 +2552,13 @@ export const manageOwnEnrollment = onCall(callableOptions(), async (request) => 
   await enrollmentRef.set(
     {
       eventId: targetEvent.id,
-      trainerId: targetEvent.trainerId,
+      trainerId: targetEvent.trainerId ?? null,
       organizerId: targetEvent.organizerId ?? null,
-      trainerUserId: targetTrainer.userId,
+      trainerUserId: targetLeadUser.id,
       organizerUserId: targetOrganizer?.userId ?? null,
-      trainerContactPhone: asString(targetTrainerUser.phone) || null,
-      trainerContactEmail: asString(targetTrainerUser.email) || null,
+      trainerContactName: targetLeadName,
+      trainerContactPhone: asString(targetLeadUser.phone) || null,
+      trainerContactEmail: asString(targetLeadUser.email) || null,
       organizerContactPhone: asString(targetOrganizerUser?.phone) || null,
       organizerContactEmail: asString(targetOrganizerUser?.email) || null,
       organizerContactName: asString(targetOrganizer?.contactName || targetOrganizer?.displayName) || null,
@@ -2136,7 +2587,7 @@ export const manageOwnEnrollment = onCall(callableOptions(), async (request) => 
     [
       currentRequest.trainerUserId,
       currentRequest.organizerUserId,
-      targetTrainer.userId,
+      targetLeadUser.id,
       targetOrganizer?.userId,
     ],
     "Uczestnik przeniósł zgłoszenie",
@@ -2262,11 +2713,15 @@ export const updateTrainingEventManagement = onCall(callableOptions(), async (re
     throw new HttpsError("permission-denied", "Możesz przenosić zgłoszenia tylko do swoich wydarzeń.");
   }
 
-  const [sourceRequests, targetTrainer] = await Promise.all([
+  const [sourceRequests] = await Promise.all([
     getEnrollmentRequestsForEvent(event.id),
-    requireTrainerProfile(targetEvent.trainerId),
   ]);
-  const targetOrganizer = targetEvent.organizerId ? await requireOrganizerProfile(targetEvent.organizerId) : null;
+  const {
+    trainer: targetTrainer,
+    organizer: targetOrganizer,
+    leadUser: targetLeadUser,
+    leadName: targetLeadName,
+  } = await resolveEnrollmentContactsForEvent(targetEvent);
   const targetRequiresOrganizerApproval =
     targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
   const transferableRequests = sourceRequests.filter((entry) => entry.finalStatus !== "rejected");
@@ -2286,10 +2741,11 @@ export const updateTrainingEventManagement = onCall(callableOptions(), async (re
       db.collection(collections.enrollmentRequests).doc(entry.id),
       {
         eventId: targetEvent.id,
-        trainerId: targetEvent.trainerId,
+        trainerId: targetEvent.trainerId ?? null,
         organizerId: targetEvent.organizerId ?? null,
-        trainerUserId: targetTrainer.userId,
+        trainerUserId: targetLeadUser.id,
         organizerUserId: targetOrganizer?.userId ?? null,
+        trainerContactName: targetLeadName,
         trainerDecision: nextTrainerDecision,
         organizerDecision: nextOrganizerDecision,
         finalStatus: deriveEnrollmentFinalStatus(
@@ -2327,7 +2783,7 @@ export const updateTrainingEventManagement = onCall(callableOptions(), async (re
 
   if (transferableRequests.length > 0) {
     await createNotifications(
-      [targetTrainer.userId, targetOrganizer?.userId],
+      [targetLeadUser.id, targetOrganizer?.userId],
       "Przeniesiono zgłoszenia do szkolenia",
       `${transferableRequests.length} zgłoszeń przeniesiono do ${targetEvent.title}.`,
       "request",
@@ -2386,19 +2842,17 @@ export const syncOwnTrainerCalendarFeeds = onCall(callableOptions(), async (requ
 
 async function resolveNotificationContextForEvent(event) {
   const [trainer, organizer] = await Promise.all([
-    findTrainerProfile(event.trainerId),
+    event.trainerId ? findTrainerProfile(event.trainerId) : Promise.resolve(null),
     event.organizerId ? findOrganizerProfile(event.organizerId) : Promise.resolve(null),
   ]);
-
-  if (!trainer) {
-    return null;
-  }
 
   const ownerRole = resolveNotificationSettingsOwnerRole(event);
   const settings =
     ownerRole === "organizer" && organizer
       ? normalizeNotificationSettings(organizer.notificationSettings)
-      : normalizeNotificationSettings(trainer.notificationSettings);
+      : trainer
+        ? normalizeNotificationSettings(trainer.notificationSettings)
+        : getDefaultNotificationSettings();
 
   return {
     trainer,
@@ -2548,7 +3002,11 @@ async function processNotificationReminders() {
     }
 
     const [trainerUser, organizerUser, requests] = await Promise.all([
-      findAppUser(context.trainer.userId),
+      context.trainer?.userId
+        ? findAppUser(context.trainer.userId)
+        : event.creatorUserId
+          ? findAppUser(event.creatorUserId)
+          : Promise.resolve(null),
       context.organizer?.userId ? findAppUser(context.organizer.userId) : Promise.resolve(null),
       getEnrollmentRequestsForEvent(event.id),
     ]);

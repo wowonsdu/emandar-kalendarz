@@ -167,6 +167,7 @@ export function canManageTrainingEvent(
     TrainingEvent,
     | "brandStatus"
     | "archivedAt"
+    | "creatorUserId"
     | "createdByRole"
     | "organizerId"
     | "selfManagedByTrainer"
@@ -174,7 +175,7 @@ export function canManageTrainingEvent(
     | "organizerCollaborationStatus"
     | "trainerId"
   >,
-  actor: Pick<AppUser, "role" | "trainerProfileId" | "organizerProfileId">,
+  actor: Pick<AppUser, "id" | "role" | "trainerProfileId" | "organizerProfileId">,
 ) {
   if (actor.role === "admin") {
     return true;
@@ -200,6 +201,10 @@ export function canManageTrainingEvent(
       resolveOrganizerCollaborationStatus(event) === "accepted" ||
       event.createdByRole === "organizer"
     );
+  }
+
+  if (actor.role === "participant" && actor.id === event.creatorUserId) {
+    return true;
   }
 
   return false;

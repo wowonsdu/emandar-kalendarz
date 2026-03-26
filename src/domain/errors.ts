@@ -19,6 +19,15 @@ export function mapAppError(error: unknown) {
   }
 
   switch (error.code) {
+    case "auth/operation-not-allowed":
+      return new Error(
+        "Na tym projekcie Firebase nie jest wlaczone logowanie email/haslo. Po migracji trzeba domknac konfiguracje providerow Auth.",
+      );
+    case "auth/invalid-credential":
+    case "auth/invalid-login-credentials":
+      return new Error("Nieprawidlowy login albo haslo.");
+    case "auth/user-disabled":
+      return new Error("To konto zostalo wylaczone.");
     case "permission-denied":
       return new Error("Nie masz uprawnien do wykonania tej operacji.");
     case "unauthenticated":

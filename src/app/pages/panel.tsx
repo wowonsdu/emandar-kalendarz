@@ -139,9 +139,10 @@ function getEventOwnerLabel(
     : null;
 
   return {
-    trainerName: trainer?.displayName ?? "Przekazujący Wiedzę",
+    trainerName:
+      trainer?.displayName ?? event.creatorDisplayName ?? "Gospodarz wydarzenia",
     organizerName: isSelfManagedTrainingEvent(event)
-      ? trainer?.displayName ?? "Przekazujący Wiedzę"
+      ? trainer?.displayName ?? event.creatorDisplayName ?? "Gospodarz wydarzenia"
       : organizer?.displayName ?? "Organizator",
   };
 }
@@ -435,9 +436,11 @@ function isParticipantEnrollmentArchived(
 }
 
 function getParticipantEnrollmentRecords(
+  currentUserId: string,
   store: ReturnType<typeof useAppState>["store"],
 ): ParticipantEnrollmentRecord[] {
   return [...store.enrollmentRequests]
+    .filter((request) => request.submitterUid === currentUserId)
     .map((request) => {
       const event = store.trainingEvents.find((item) => item.id === request.eventId);
       if (!event) {
@@ -561,12 +564,12 @@ function ParticipantEnrollmentCard({
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <ParticipantContactBlock
-            title="Przekazujący Wiedzę"
-            name={record.trainer?.displayName}
+            title={record.event.creatorUserId ? "Gospodarz wydarzenia" : "Przekazujący Wiedzę"}
+            name={record.request.trainerContactName || record.trainer?.displayName}
             contact={
               record.request.trainerContactPhone || record.request.trainerContactEmail
             }
-            fallback="Profil trenera"
+            fallback="Dane osoby prowadzącej"
           />
           <ParticipantContactBlock
             title="Organizator"
@@ -653,6 +656,206 @@ function ParticipantEnrollmentCard({
           </div>
         </div>
       )}
+    </article>
+  );
+}
+
+function ParticipantOnboardingCard() {
+  const { completeParticipantOnboarding, currentUser, store } = useAppState();
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    displayName: currentUser?.displayName ?? "",
+    selectedTrainerIds: currentUser?.selectedTrainerIds ?? [],
+    requestedRoles: [
+      "participant",
+      ...((currentUser?.pendingRoles ?? []).includes("organizer") ? (["organizer"] as const) : []),
+    ] as Array<"participant" | "organizer">,
+    organizerTrainingIntent: "",
+    notes: "",
+    avatarFile: null as File | null,
+  });
+  const trainers = useMemo(
+    () =>
+      sortTrainerProfiles(
+        store.trainers.filter((trainer) => !isCommunityTrainerProfile(trainer.brandStatus)),
+      ),
+    [store.trainers],
+  );
+
+  function toggleTrainer(trainerId: string, checked: boolean) {
+    setForm((current) => ({
+      ...current,
+      selectedTrainerIds: checked
+        ? Array.from(new Set([...current.selectedTrainerIds, trainerId]))
+        : current.selectedTrainerIds.filter((item) => item !== trainerId),
+    }));
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+
+    try {
+      await completeParticipantOnboarding({
+        displayName: form.displayName,
+        requestedRoles: form.requestedRoles,
+        selectedTrainerIds: form.selectedTrainerIds,
+        organizerTrainingIntent: form.organizerTrainingIntent,
+        notes: form.notes,
+        avatarFile: form.avatarFile,
+      });
+      toast.success("Profil uczestnika został uzupełniony.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zapisać onboardingu.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+      <SectionBlockHeading
+        title="Uzupełnij profil"
+        description="Po potwierdzeniu numeru masz już konto uczestnika. Tutaj dopinasz trenerów, do których chodzisz na grupy, i ewentualnie prosisz o rolę organizatora."
+      />
+      <form onSubmit={handleSubmit} className="mt-5 grid gap-5">
+        <label className="grid gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
+          <input
+            required
+            value={form.displayName}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, displayName: event.target.value }))
+            }
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+
+        <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4 text-brand-navy">
+          <label className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked
+              disabled
+              className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+            />
+            <span className="grid gap-1">
+              <span className="text-sm font-semibold">Uczestnik</span>
+              <span className="text-sm text-brand-muted">
+                To konto już działa jako uczestnik i ma dostęp do Mojej przestrzeni.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={form.requestedRoles.includes("organizer")}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  requestedRoles: event.target.checked
+                    ? Array.from(new Set([...current.requestedRoles, "organizer"]))
+                    : current.requestedRoles.filter((role) => role !== "organizer"),
+                  organizerTrainingIntent:
+                    event.target.checked ? current.organizerTrainingIntent : "",
+                }))
+              }
+              className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+            />
+            <span className="grid gap-1">
+              <span className="text-sm font-semibold">Organizator Grup Emandar</span>
+              <span className="text-sm text-brand-muted">
+                Ta rola przejdzie normalny flow akceptacji po stronie trenerów.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        {form.requestedRoles.includes("organizer") && (
+          <label className="grid gap-2">
+            <span className="text-sm font-semibold text-brand-navy">
+              Jakie szkolenia chcesz organizować?
+            </span>
+            <textarea
+              required
+              rows={4}
+              value={form.organizerTrainingIntent}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  organizerTrainingIntent: event.target.value,
+                }))
+              }
+              className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            />
+          </label>
+        )}
+
+        <label className="grid gap-2">
+          <span className="text-sm font-semibold text-brand-navy">
+            Do kogo chodzisz na grupy?
+          </span>
+          <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4">
+            {trainers.map((trainer) => (
+              <label key={trainer.id} className="flex items-start gap-3 text-brand-navy">
+                <input
+                  type="checkbox"
+                  checked={form.selectedTrainerIds.includes(trainer.id)}
+                  onChange={(event) => toggleTrainer(trainer.id, event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
+                />
+                <span className="grid gap-1">
+                  <span className="text-sm font-semibold">{trainer.displayName}</span>
+                  <span className="text-sm text-brand-muted">{trainer.heroNote}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </label>
+
+        <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+          <span className="inline-flex items-center gap-2 text-sm font-semibold">
+            <ImagePlus size={16} />
+            Zdjęcie profilowe
+          </span>
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                avatarFile: event.target.files?.[0] ?? null,
+              }))
+            }
+            className="text-sm"
+          />
+          <span className="text-sm text-brand-muted">
+            {form.avatarFile ? `Wybrany plik: ${form.avatarFile.name}` : "JPG, PNG albo WEBP do 5 MB"}
+          </span>
+        </label>
+
+        <label className="grid gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Kilka słów o sobie</span>
+          <textarea
+            rows={5}
+            value={form.notes}
+            onChange={(event) =>
+              setForm((current) => ({ ...current, notes: event.target.value }))
+            }
+            className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+
+        <button
+          type="submit"
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+        >
+          {saving ? "Zapisywanie..." : "Zapisz profil"}
+        </button>
+      </form>
     </article>
   );
 }
@@ -836,10 +1039,12 @@ function SectionBlockHeading({
 
 function EventScopeSwitch({
   activeScope,
+  allLabel,
   mineLabel,
   onChange,
 }: {
   activeScope: "all" | "mine";
+  allLabel: string;
   mineLabel: string;
   onChange: (scope: "all" | "mine") => void;
 }) {
@@ -854,7 +1059,7 @@ function EventScopeSwitch({
             : "text-brand-muted hover:text-brand-navy"
         }`}
       >
-        Wszystkie wydarzenia
+        {allLabel}
       </button>
       <button
         type="button"
@@ -1227,7 +1432,7 @@ export function DashboardPage() {
   }
 
   if (currentUser.role === "participant") {
-    const participantRecords = getParticipantEnrollmentRecords(store);
+    const participantRecords = getParticipantEnrollmentRecords(currentUser.id, store);
     const activeRecords = participantRecords.filter((record) => !record.isArchived);
     const archivedRecords = participantRecords.filter((record) => record.isArchived);
     const nextRecord = activeRecords[0];
@@ -1241,6 +1446,7 @@ export function DashboardPage() {
       currentUser.accountApprovalStatus === "pending" ||
       currentUser.accountApprovalStatus === "rejected" ||
       ownAccountApprovals.length > 0;
+    const shouldShowOnboarding = !currentUser.participantOnboardingCompletedAt;
 
     return (
       <PanelSection
@@ -1248,6 +1454,8 @@ export function DashboardPage() {
         title="Twoje szkolenia i najbliższe wydarzenia"
         description="Tutaj widzisz wszystkie swoje zapisy, kontakt do zespołu prowadzącego oraz szybki skrót do archiwum uczestnictwa."
       >
+        {shouldShowOnboarding && <ParticipantOnboardingCard />}
+
         {shouldShowApprovalStatus && (
           <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
@@ -1338,13 +1546,19 @@ export function DashboardPage() {
                 <p className="mt-3 text-brand-muted">{nextRecord.event.location}</p>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <ParticipantContactBlock
-                    title="Przekazujący Wiedzę"
-                    name={nextRecord.trainer?.displayName}
+                    title={
+                      nextRecord.event.creatorUserId
+                        ? "Gospodarz wydarzenia"
+                        : "Przekazujący Wiedzę"
+                    }
+                    name={
+                      nextRecord.request.trainerContactName || nextRecord.trainer?.displayName
+                    }
                     contact={
                       nextRecord.request.trainerContactPhone ||
                       nextRecord.request.trainerContactEmail
                     }
-                    fallback="Profil trenera"
+                    fallback="Dane osoby prowadzącej"
                   />
                   <ParticipantContactBlock
                     title="Organizator"
@@ -2980,8 +3194,8 @@ export function EventsPage() {
   const isAdmin = currentUser.role === "admin";
   const [eventScope, setEventScope] = useState<"all" | "mine">("all");
   const participantRecords = useMemo(
-    () => (isParticipant ? getParticipantEnrollmentRecords(store) : []),
-    [isParticipant, store],
+    () => (isParticipant ? getParticipantEnrollmentRecords(currentUser.id, store) : []),
+    [currentUser.id, isParticipant, store],
   );
   const activeParticipantRecords = useMemo(
     () => participantRecords.filter((record) => !record.isArchived),
@@ -3001,41 +3215,60 @@ export function EventsPage() {
         ? store.trainingEvents.filter((item) => item.trainerId === trainerProfile?.id)
         : currentUser.role === "organizer"
           ? store.trainingEvents.filter((item) => item.organizerId === organizerProfile?.id)
+          : currentUser.role === "participant"
+            ? store.trainingEvents.filter((item) => item.creatorUserId === currentUser.id)
           : currentUser.role === "admin"
             ? store.trainingEvents
             : [],
     [
+      currentUser.id,
       currentUser.role,
       organizerProfile?.id,
       store.trainingEvents,
       trainerProfile?.id,
     ],
   );
-  const showingAllEvents = !isAdmin && !isCreatorView && eventScope === "all";
+  const participantEnrollmentsScopeLabel = "Szkolenia, w których biorę udział";
+  const participantCommunityScopeLabel = "Moje wydarzenia społeczności";
+  const isParticipantEnrollmentsView = isParticipant && eventScope === "all";
+  const isParticipantCommunityView = isParticipant && eventScope === "mine";
+  const showingAllEvents =
+    !isParticipant && !isAdmin && !isCreatorView && eventScope === "all";
   const listedEvents = useMemo(
     () => (showingAllEvents ? publicEvents : sortEventsByDate(ownEvents)),
     [ownEvents, publicEvents, showingAllEvents],
   );
   const mineLabel = isParticipant
-    ? "Moje szkolenia"
+    ? participantCommunityScopeLabel
     : isCommunityTrainer
       ? "Moje wydarzenia"
       : "Moje szkolenia";
+  const allLabel = isParticipant
+    ? participantEnrollmentsScopeLabel
+    : "Wszystkie wydarzenia";
   const sectionTitle = isCreatorView
     ? "Kreator wydarzeń"
+    : isParticipantEnrollmentsView
+      ? "Szkolenia, w których bierzesz udział"
+      : isParticipantCommunityView
+        ? "Moje wydarzenia społeczności"
     : showingAllEvents
       ? "Wszystkie wydarzenia"
       : isParticipant
-        ? "Moje szkolenia"
+        ? mineLabel
         : currentUser.role === "trainer" || currentUser.role === "organizer"
           ? mineLabel
           : "Lista wydarzeń";
   const sectionDescription = isCreatorView
     ? "Tutaj dodajesz nowe wydarzenia bez mieszania tego z listą już utworzonych pozycji."
+    : isParticipantEnrollmentsView
+      ? "Tutaj widzisz tylko szkolenia, do których już wysłałeś zgłoszenie albo zostałeś zapisany. Status oczekiwania pozostaje widoczny aż do decyzji."
+      : isParticipantCommunityView
+        ? "Tutaj zarządzasz własnymi wydarzeniami społeczności, które utworzyłeś jako organizator i obsługujesz we własnym panelu."
     : showingAllEvents
       ? "Przeglądaj pełny publiczny kalendarz opublikowanych wydarzeń i dopiero potem przełączaj się na własny widok operacyjny."
       : isParticipant
-        ? "Zarządzaj swoimi zapisami, sprawdzaj kontakty do prowadzących i miej pod ręką archiwum wcześniejszych szkoleń."
+        ? "W jednym miejscu masz swoje zapisy i własne wydarzenia społeczności, które wysłałeś do moderacji albo już opublikowałeś."
         : "To jest warstwa operacyjna wydarzeń, które pochodzą bezpośrednio z Firestore.";
 
   const availableOrganizers = useMemo(
@@ -3139,7 +3372,8 @@ export function EventsPage() {
   if (
     isCreatorView &&
     currentUser.role !== "trainer" &&
-    currentUser.role !== "organizer"
+    currentUser.role !== "organizer" &&
+    currentUser.role !== "participant"
   ) {
     return <Navigate to="/panel/szkolenia" replace />;
   }
@@ -3151,13 +3385,19 @@ export function EventsPage() {
       description={sectionDescription}
       action={
         !isCreatorView &&
-        (currentUser.role === "trainer" || currentUser.role === "organizer") ? (
+        (
+          currentUser.role === "trainer" ||
+          currentUser.role === "organizer" ||
+          currentUser.role === "participant"
+        ) ? (
           <Link
             to="/panel/kreator-wydarzen"
             className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
           >
             <CalendarDays size={16} />
-            Utwórz wydarzenie
+            {currentUser.role === "participant"
+              ? "Dodaj wydarzenie społeczności"
+              : "Utwórz wydarzenie"}
           </Link>
         ) : undefined
       }
@@ -3166,6 +3406,7 @@ export function EventsPage() {
         <div className="flex justify-start">
           <EventScopeSwitch
             activeScope={eventScope}
+            allLabel={allLabel}
             mineLabel={mineLabel}
             onChange={setEventScope}
           />
@@ -3173,7 +3414,11 @@ export function EventsPage() {
       ) : null}
 
       {isCreatorView &&
-        (currentUser.role === "trainer" || currentUser.role === "organizer") &&
+        (
+          currentUser.role === "trainer" ||
+          currentUser.role === "organizer" ||
+          currentUser.role === "participant"
+        ) &&
         (currentUser.role === "organizer" && availableTrainers.length === 0 ? (
           <EmptyPanelState
             title="Najpierw aktywna relacja"
@@ -3205,6 +3450,8 @@ export function EventsPage() {
                     trainerEventForm.scheduleDays,
                   ),
                   type: isCommunityTrainer
+                    ? "Wydarzenie społeczności"
+                    : currentUser.role === "participant"
                     ? "Wydarzenie społeczności"
                     : trainerEventForm.type,
                   status: trainerEventForm.status,
@@ -3253,11 +3500,13 @@ export function EventsPage() {
           >
             <div className="mb-5">
               <h3 className="text-2xl font-semibold text-brand-navy">
-                {isCommunityTrainer ? "Dodaj wydarzenie społeczności" : "Dodaj nowe szkolenie"}
+                {isCommunityTrainer || currentUser.role === "participant"
+                  ? "Dodaj wydarzenie społeczności"
+                  : "Dodaj nowe szkolenie"}
               </h3>
               <p className="mt-2 text-brand-muted">
-                {isCommunityTrainer
-                  ? "Uzupełnij miejsce, krótki opis, liczbę miejsc i informację dla osób, które chcą dołączyć."
+                {isCommunityTrainer || currentUser.role === "participant"
+                  ? "Uzupełnij miejsce, krótki opis i termin. Wydarzenie trafi do moderacji admina, chyba że masz już włączoną auto-akceptację."
                   : "Ustaw dwa dni szkolenia, nagłówek miejsca i krótką informację od organizatora."}
               </p>
             </div>
@@ -3371,7 +3620,7 @@ export function EventsPage() {
                 </label>
               )}
 
-              {!isCommunityTrainer && (
+              {!isCommunityTrainer && currentUser.role !== "participant" && (
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
                   <input
@@ -3427,6 +3676,7 @@ export function EventsPage() {
               <label className="grid gap-2 xl:col-span-2">
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunityTrainer
+                    || currentUser.role === "participant"
                     ? "Krótka informacja o wydarzeniu"
                     : "Krótka informacja od organizatora"}
                 </span>
@@ -3468,6 +3718,7 @@ export function EventsPage() {
               <label className="grid gap-2 xl:col-span-2">
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunityTrainer
+                    || currentUser.role === "participant"
                     ? "Informacja do prośby o dołączenie"
                     : "Dłuższy opis na widoku szczegółowym"}
                 </span>
@@ -3483,7 +3734,7 @@ export function EventsPage() {
                   }
                   className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
-                {isCommunityTrainer && (
+                {(isCommunityTrainer || currentUser.role === "participant") && (
                   <span className="text-sm text-brand-muted">
                     Ten tekst pokaże się osobie przed wysłaniem prośby o dołączenie.
                   </span>
@@ -3635,19 +3886,26 @@ export function EventsPage() {
                 />
               </label>
 
-              <label className="flex items-center gap-3 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy xl:col-span-2">
-                <input
-                  type="checkbox"
-                  checked={trainerEventForm.isPublished}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      isPublished: event.target.checked,
-                    }))
-                  }
-                />
-                <span className="text-sm font-semibold">Od razu opublikuj szkolenie</span>
-              </label>
+              {currentUser.role === "participant" ? (
+                <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted xl:col-span-2">
+                  Po zapisie wydarzenie trafi do moderacji admina. Jeśli później dostaniesz auto-akceptację,
+                  kolejne wydarzenia będą mogły publikować się bez ręcznego review.
+                </div>
+              ) : (
+                <label className="flex items-center gap-3 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy xl:col-span-2">
+                  <input
+                    type="checkbox"
+                    checked={trainerEventForm.isPublished}
+                    onChange={(event) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        isPublished: event.target.checked,
+                      }))
+                    }
+                  />
+                  <span className="text-sm font-semibold">Od razu opublikuj szkolenie</span>
+                </label>
+              )}
             </div>
 
             <button
@@ -3655,46 +3913,131 @@ export function EventsPage() {
               disabled={creatingEvent}
               className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
             >
-              {creatingEvent ? "Zapisywanie..." : "Dodaj szkolenie"}
+              {creatingEvent
+                ? "Zapisywanie..."
+                : currentUser.role === "participant"
+                  ? "Wyślij wydarzenie do moderacji"
+                  : "Dodaj szkolenie"}
             </button>
           </form>
         ))}
 
-      {!isCreatorView && isParticipant && eventScope === "mine" ? (
+      {!isCreatorView && isParticipant ? (
         <div className="space-y-6">
-          <div className="space-y-4">
-            <SectionBlockHeading
-              title="Aktywne"
-              description="Nadchodzące szkolenia oraz zapisy, które są jeszcze w toku akceptacji."
-            />
-            {activeParticipantRecords.length === 0 ? (
-              <EmptyPanelState
-                title="Brak aktywnych szkoleń"
-                description="Kiedy zapiszesz się na nowe szkolenie, pojawi się ono tutaj."
+          {isParticipantCommunityView ? (
+            <div className="space-y-4">
+              <SectionBlockHeading
+                title="Twoje wydarzenia społeczności"
+                description="Tutaj są tylko wydarzenia utworzone przez Ciebie. Możesz sprawdzać moderację, status publikacji i przechodzić do ich obsługi."
               />
-            ) : (
-              activeParticipantRecords.map((record) => (
-                <ParticipantEnrollmentCard key={record.request.id} record={record} />
-              ))
-            )}
-          </div>
+              {ownEvents.length === 0 ? (
+                <EmptyPanelState
+                  title="Nie masz jeszcze własnych wydarzeń"
+                  description="Dodaj pierwsze wydarzenie społeczności, a pojawi się tutaj z bieżącym statusem moderacji."
+                />
+              ) : (
+                ownEvents.map((event) => (
+                  <article
+                    key={event.id}
+                    className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div className="max-w-3xl">
+                        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                          {event.title}
+                        </p>
+                        <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
+                          {getPanelScheduleRangeLabel(event)}
+                        </h3>
+                        <p className="mt-2 text-brand-muted">{event.summary}</p>
+                      </div>
+                      <div className="flex flex-col items-start gap-2 sm:items-end">
+                        <Link
+                          to={`/panel/szkolenia/${event.id}`}
+                          className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                        >
+                          Otwórz wydarzenie
+                        </Link>
+                        <div className="flex flex-wrap gap-2 sm:justify-end">
+                          <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                            {event.isPublished ? "opublikowane" : "ukryte"}
+                          </span>
+                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                            {event.publicationApprovalStatus === "accepted"
+                              ? "moderacja zaakceptowana"
+                              : event.publicationApprovalStatus === "rejected"
+                                ? "moderacja odrzucona"
+                                : "w moderacji"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
 
-          <div className="space-y-4">
-            <SectionBlockHeading
-              title="Archiwum"
-              description="Zakończone, odrzucone lub anulowane uczestnictwa."
-            />
-            {archivedParticipantRecords.length === 0 ? (
-              <EmptyPanelState
-                title="Archiwum jest jeszcze puste"
-                description="Wcześniejsze szkolenia i anulowane zapisy będą widoczne tutaj."
-              />
-            ) : (
-              archivedParticipantRecords.map((record) => (
-                <ParticipantEnrollmentCard key={record.request.id} record={record} />
-              ))
-            )}
-          </div>
+                    <div className="mt-5 space-y-3 text-sm text-brand-muted">
+                      <div className="flex flex-wrap gap-x-5 gap-y-2">
+                        <span>{getPanelScheduleRangeLabel(event)}</span>
+                        <span>{event.enrolledCount}/{event.capacity} miejsc</span>
+                        <span>Prog: {resolveMinimumParticipants(event)} osob</span>
+                        <span>Status: {getEventLifecycleLabel(event)}</span>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {getTrainingEventScheduleDays(event).map((day, index) => (
+                          <div
+                            key={`${event.id}-participant-community-day-${index + 1}`}
+                            className="rounded-2xl bg-brand-shell px-4 py-3"
+                          >
+                            <div className="text-sm font-semibold text-brand-navy">
+                              Dzien {index + 1}
+                            </div>
+                            <p>{formatDate(day.startsAt)}</p>
+                            <p>
+                              {formatShortTime(day.startsAt)} - {formatShortTime(day.endsAt)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="space-y-4">
+                <SectionBlockHeading
+                  title="Aktywne"
+                  description="Nadchodzące szkolenia oraz zgłoszenia, które są jeszcze w trakcie potwierdzania."
+                />
+                {activeParticipantRecords.length === 0 ? (
+                  <EmptyPanelState
+                    title="Brak aktywnych szkoleń"
+                    description="Kiedy wyślesz zgłoszenie na szkolenie albo zostaniesz zapisany, pojawi się ono tutaj."
+                  />
+                ) : (
+                  activeParticipantRecords.map((record) => (
+                    <ParticipantEnrollmentCard key={record.request.id} record={record} />
+                  ))
+                )}
+              </div>
+
+              <div className="space-y-4">
+                <SectionBlockHeading
+                  title="Archiwum"
+                  description="Zakończone, odrzucone lub anulowane uczestnictwa."
+                />
+                {archivedParticipantRecords.length === 0 ? (
+                  <EmptyPanelState
+                    title="Archiwum jest jeszcze puste"
+                    description="Wcześniejsze szkolenia i anulowane zgłoszenia będą widoczne tutaj."
+                  />
+                ) : (
+                  archivedParticipantRecords.map((record) => (
+                    <ParticipantEnrollmentCard key={record.request.id} record={record} />
+                  ))
+                )}
+              </div>
+            </>
+          )}
         </div>
       ) : !isCreatorView ? (
         <div className="space-y-4">
@@ -3945,6 +4288,10 @@ export function EventManagementPage() {
         return item.organizerId === event.organizerId;
       }
 
+      if (currentUser.role === "participant") {
+        return item.creatorUserId === currentUser.id;
+      }
+
       return true;
     }),
   );
@@ -3968,6 +4315,15 @@ export function EventManagementPage() {
             <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
               {event.isPublished ? "opublikowane" : "ukryte"}
             </span>
+            {event.publicationApprovalStatus && (
+              <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                {event.publicationApprovalStatus === "accepted"
+                  ? "moderacja zaakceptowana"
+                  : event.publicationApprovalStatus === "rejected"
+                    ? "moderacja odrzucona"
+                    : "czeka na moderację"}
+              </span>
+            )}
             <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
               {getEventLifecycleLabel(event)}
             </span>

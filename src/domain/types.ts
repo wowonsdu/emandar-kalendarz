@@ -46,7 +46,11 @@ export interface AppUser {
   accountApprovalStatus?: AccountApprovalStatus;
   selectedTrainerIds?: string[];
   approvedTrainerIds?: string[];
+  participantOnboardingCompletedAt?: string;
+  communityEventAutoApprove?: boolean;
   displayName: string;
+  notes?: string;
+  referralSource?: string;
   email?: string | null;
   phone: string;
   avatarUrl?: string;
@@ -113,10 +117,13 @@ export interface TrainingEventScheduleDay {
 
 export interface TrainingEvent {
   id: string;
-  trainerId: string;
+  trainerId?: string | null;
   organizerId?: string | null;
-  trainerUserId?: string;
+  trainerUserId?: string | null;
   organizerUserId?: string | null;
+  creatorUserId?: string | null;
+  creatorDisplayName?: string;
+  creatorPhone?: string | null;
   title: string;
   summary: string;
   description: string;
@@ -137,7 +144,12 @@ export interface TrainingEvent {
   trainerCollaborationStatus?: EventCollaborationStatus;
   organizerCollaborationStatus?: EventCollaborationStatus;
   selfManagedByTrainer?: boolean;
-  createdByRole?: "trainer" | "organizer";
+  createdByRole?: "trainer" | "organizer" | "participant";
+  publicationApprovalStatus?: PublicationApprovalStatus;
+  publicationApprovalRequestedAt?: string;
+  publicationReviewedAt?: string;
+  publicationReviewedByUserId?: string;
+  publicationReviewMessage?: string;
   archivedAt?: string;
   archivedByRole?: AppRole;
   archivedReason?: "relation-detached" | "manual";
@@ -202,12 +214,13 @@ export interface SharedAvailabilityWindow {
 export interface EnrollmentRequest {
   id: string;
   eventId: string;
-  trainerId: string;
+  trainerId?: string | null;
   organizerId?: string | null;
   submitterUid?: string;
   normalizedPhone?: string;
-  trainerUserId?: string;
+  trainerUserId?: string | null;
   organizerUserId?: string | null;
+  trainerContactName?: string | null;
   trainerContactPhone?: string | null;
   trainerContactEmail?: string | null;
   organizerContactPhone?: string | null;
@@ -257,12 +270,14 @@ export interface AccountRequest {
   phone: string;
   requestedRoles?: Array<Exclude<AppRole, "admin">>;
   notes: string;
+  referralSource?: string;
   status: AccountRequestStatus;
   createdAt: string;
   authProvider?: "phone" | "password";
   organizerTrainingIntent?: string;
   selectedTrainerIds?: string[];
   avatarPath?: string;
+  avatarUrl?: string;
 }
 
 export interface TrainerAccountApproval {
@@ -321,6 +336,15 @@ export interface AccountRequestInput {
   avatarFile?: File | null;
   organizerTrainingIntent?: string;
   selectedTrainerIds: string[];
+}
+
+export interface ParticipantOnboardingInput {
+  displayName: string;
+  requestedRoles: Array<Exclude<AppRole, "admin" | "trainer">>;
+  notes?: string;
+  organizerTrainingIntent?: string;
+  selectedTrainerIds: string[];
+  avatarFile?: File | null;
 }
 
 export interface AvailabilityInput {

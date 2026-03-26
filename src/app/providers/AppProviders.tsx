@@ -14,6 +14,7 @@ import {
   addAvailabilitySlot as addAvailabilitySlotAction,
   addTrainerCalendarFeed as addTrainerCalendarFeedAction,
   archiveTrainingEvent as archiveTrainingEventAction,
+  completeParticipantOnboarding as completeParticipantOnboardingAction,
   confirmEnrollmentAttendance as confirmEnrollmentAttendanceAction,
   createEmptyStore,
   createUnifiedTrainingEvent as createTrainingEventAction,
@@ -22,11 +23,14 @@ import {
   decideTrainerAccountApproval as decideTrainerAccountApprovalAction,
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   detachRelation as detachRelationAction,
+  ensurePhoneParticipantProfileForFlow as ensurePhoneParticipantProfileForFlowAction,
+  getCommunityEventReview as getCommunityEventReviewAction,
   manageOwnEnrollment as manageOwnEnrollmentAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
   decideRelation as decideRelationAction,
   requestRelation as requestRelationAction,
   resolveEnrollmentPhoto,
+  reviewCommunityEvent as reviewCommunityEventAction,
   signIn as signInAction,
   signOut as signOutAction,
   submitAccountRequest as submitAccountRequestAction,
@@ -58,9 +62,11 @@ import type {
   EmandarBrandStatus,
   EnrollmentFormInput,
   ParticipantEnrollmentManagementInput,
+  ParticipantOnboardingInput,
   NotificationSettingsUpdateInput,
   OrganizerProfileUpdateInput,
   TrainerCalendarFeedInput,
+  TrainingEvent,
   TrainingEventScheduleDay,
   TrainingEventInput,
   TrainingEventStatus,
@@ -77,7 +83,11 @@ interface AppStateContextValue {
   signOut: () => Promise<void>;
   setActiveRole: (role: AppRole) => Promise<void>;
   submitEnrollment: (input: EnrollmentFormInput) => Promise<void>;
+  ensurePhoneParticipantProfileForFlow: (
+    seedTrainerId?: string,
+  ) => Promise<{ ok: true; userId: string; accountCreated?: boolean }>;
   submitAccountRequest: (input: AccountRequestInput) => Promise<void>;
+  completeParticipantOnboarding: (input: ParticipantOnboardingInput) => Promise<void>;
   decideAccountRequest: (
     requestId: string,
     status: "approved" | "rejected",
@@ -156,6 +166,18 @@ interface AppStateContextValue {
     token: string,
     decision: "confirm" | "decline",
   ) => Promise<void>;
+  getCommunityEventReview: (token: string) => Promise<{
+    ok: true;
+    event: TrainingEvent;
+    creatorName: string;
+    creatorPhone: string;
+  }>;
+  reviewCommunityEvent: (input: {
+    token: string;
+    decision: "accepted" | "rejected";
+    message?: string;
+    enableAutoApprove?: boolean;
+  }) => Promise<{ ok: true; eventId: string }>;
 }
 
 type StorePatch = Partial<DemoStore>;
@@ -320,8 +342,16 @@ export function AppProviders({ children }: { children: ReactNode }) {
       async submitEnrollment(input) {
         await withFriendlyErrors(() => submitEnrollmentAction(input));
       },
+      async ensurePhoneParticipantProfileForFlow(seedTrainerId) {
+        return withFriendlyErrors(() =>
+          ensurePhoneParticipantProfileForFlowAction(seedTrainerId),
+        );
+      },
       async submitAccountRequest(input) {
         await withFriendlyErrors(() => submitAccountRequestAction(input));
+      },
+      async completeParticipantOnboarding(input) {
+        await withFriendlyErrors(() => completeParticipantOnboardingAction(input));
       },
       async decideAccountRequest(requestId, status) {
         if (!currentUser) {
@@ -599,6 +629,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
         await withFriendlyErrors(() =>
           confirmEnrollmentAttendanceAction(token, decision),
         );
+      },
+      async getCommunityEventReview(token) {
+        return withFriendlyErrors(() => getCommunityEventReviewAction(token));
+      },
+      async reviewCommunityEvent(input) {
+        return withFriendlyErrors(() => reviewCommunityEventAction(input));
       },
     }),
     [authReady, availableRoles, currentUser, currentUserReady, notificationsCount, store],

@@ -50,6 +50,7 @@ import type {
   EventCollaborationStatus,
   EnrollmentFormInput,
   ParticipantEnrollmentManagementInput,
+  ParticipantOnboardingInput,
   EnrollmentRequestManagementInput,
   EnrollmentRequest,
   NotificationRecord,
@@ -594,9 +595,16 @@ export async function fetchAppUser(userId: string) {
 }
 
 export async function ensurePhoneParticipantProfile() {
-  return callFirebaseFunction<undefined, { ok: true; userId: string; accountCreated?: boolean }>(
+  return callFirebaseFunction<
+    { seedTrainerId?: string } | undefined,
+    { ok: true; userId: string; accountCreated?: boolean }
+  >(
     "ensurePhoneParticipantProfile",
   );
+}
+
+export async function ensurePhoneParticipantProfileForFlow(seedTrainerId?: string) {
+  return ensurePhoneParticipantProfile(seedTrainerId ? { seedTrainerId } : undefined);
 }
 
 function buildRoleQuery(
@@ -622,6 +630,8 @@ export function subscribePrivateStore(
   const organizerProfileId = currentUser.organizerProfileId;
   let incomingAccountApprovals: TrainerAccountApproval[] = [];
   let outgoingAccountApprovals: TrainerAccountApproval[] = [];
+  let participantOwnEnrollmentRequests: EnrollmentRequest[] = [];
+  let participantManagedEnrollmentRequests: EnrollmentRequest[] = [];
 
   function syncAccountApprovals() {
     onPatch({
@@ -866,6 +876,14 @@ export function subscribePrivateStore(
   }
 
   if (currentUser.role === "participant") {
+    function syncParticipantEnrollmentRequests() {
+      onPatch({
+        enrollmentRequests: pushSorted(
+          mergeById(participantOwnEnrollmentRequests, participantManagedEnrollmentRequests),
+        ),
+      });
+    }
+
     unsubs.push(
       subscribeArray<TrainingEvent>(collection(db, collections.trainingEvents), (trainingEvents) => {
         onPatch({ trainingEvents });
@@ -878,7 +896,20 @@ export function subscribePrivateStore(
           where("submitterUid", "==", currentUser.id),
         ),
         (enrollmentRequests) => {
-          onPatch({ enrollmentRequests: pushSorted(enrollmentRequests) });
+          participantOwnEnrollmentRequests = enrollmentRequests;
+          syncParticipantEnrollmentRequests();
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<EnrollmentRequest>(
+        query(
+          collection(db, collections.enrollmentRequests),
+          where("trainerUserId", "==", currentUser.id),
+        ),
+        (enrollmentRequests) => {
+          participantManagedEnrollmentRequests = enrollmentRequests;
+          syncParticipantEnrollmentRequests();
         },
       ),
     );
@@ -1251,7 +1282,7 @@ async function sendPasswordReset(email: string) {
 }
 
 export async function submitEnrollment(input: EnrollmentFormInput) {
-  const { storage } = assertReady();
+  const { auth, storage } = assertReady();
   await ensureAnonymousSession();
 
   if (
@@ -1279,6 +1310,11 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   });
 
   try {
+    const profileAvatar =
+      input.photoFile && auth.currentUser && !auth.currentUser.isAnonymous
+        ? await uploadCurrentUserAvatar(input.photoFile)
+        : null;
+
     if (draft.photoRequired && !input.photoFile) {
       throw new Error("To szkolenie wymaga zdjęcia twarzy.");
     }
@@ -1289,11 +1325,18 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
     }
 
     await callFirebaseFunction<
-      { requestId: string; photoPath?: string },
+      {
+        requestId: string;
+        photoPath?: string;
+        avatarPath?: string;
+        avatarUrl?: string;
+      },
       { ok: true }
     >("finalizeEnrollmentDraft", {
       requestId: draft.requestId,
       photoPath: input.photoFile ? draft.photoPath : undefined,
+      avatarPath: profileAvatar?.avatarPath,
+      avatarUrl: profileAvatar?.avatarUrl,
     });
   } catch (error) {
     throw error instanceof Error
@@ -2218,6 +2261,68 @@ export async function submitAccountRequest(input: AccountRequestInput) {
     organizerTrainingIntent: input.organizerTrainingIntent?.trim() || undefined,
     selectedTrainerIds,
   });
+}
+
+export async function completeParticipantOnboarding(input: ParticipantOnboardingInput) {
+  const { auth } = assertReady();
+
+  if (!auth.currentUser || auth.currentUser.isAnonymous) {
+    throw new Error("Najpierw potwierdź numer telefonu kodem SMS.");
+  }
+
+  const avatar = input.avatarFile ? await uploadCurrentUserAvatar(input.avatarFile) : null;
+
+  await callFirebaseFunction<
+    {
+      displayName: string;
+      requestedRoles: Array<"participant" | "organizer">;
+      notes?: string;
+      avatarPath?: string;
+      avatarUrl?: string;
+      organizerTrainingIntent?: string;
+      selectedTrainerIds: string[];
+    },
+    { ok: true; accountCreated?: boolean }
+  >("finalizePhoneRegistration", {
+    displayName: input.displayName,
+    requestedRoles: input.requestedRoles,
+    notes: input.notes?.trim() || "",
+    avatarPath: avatar?.avatarPath,
+    avatarUrl: avatar?.avatarUrl,
+    organizerTrainingIntent: input.organizerTrainingIntent?.trim() || undefined,
+    selectedTrainerIds: input.selectedTrainerIds,
+  });
+}
+
+export async function getCommunityEventReview(token: string) {
+  await ensureAnonymousSession();
+  return callFirebaseFunction<
+    { token: string },
+    {
+      ok: true;
+      event: TrainingEvent;
+      creatorName: string;
+      creatorPhone: string;
+    }
+  >("getCommunityEventReview", { token });
+}
+
+export async function reviewCommunityEvent(input: {
+  token: string;
+  decision: "accepted" | "rejected";
+  message?: string;
+  enableAutoApprove?: boolean;
+}) {
+  await ensureAnonymousSession();
+  return callFirebaseFunction<
+    {
+      token: string;
+      decision: "accepted" | "rejected";
+      message?: string;
+      enableAutoApprove?: boolean;
+    },
+    { ok: true; eventId: string }
+  >("reviewCommunityEvent", input);
 }
 
 export async function updateTrainerProfile(

@@ -2190,8 +2190,8 @@ function SmsLoginScreen() {
 
 function SmsRegisterScreen() {
   const {
+    authReady,
     currentUser,
-    ensurePhoneParticipantProfileForFlow,
     getRoleHomePath,
     store,
     submitAccountRequest,
@@ -2206,8 +2206,7 @@ function SmsRegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
-  const [checkingExistingAccount, setCheckingExistingAccount] = useState(false);
-  const [stayOnRegistrationFlow, setStayOnRegistrationFlow] = useState(false);
+  const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [smsVerified, setSmsVerified] = useState(
@@ -2238,8 +2237,58 @@ function SmsRegisterScreen() {
     };
   }, []);
 
-  if (currentUser && !checkingExistingAccount && !stayOnRegistrationFlow) {
+  if (currentUser) {
     return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
+  }
+
+  function resetSmsVerification() {
+    setSmsVerified(false);
+    setVerificationCode("");
+    setConfirmationResult(null);
+  }
+
+  function validateRegistrationForm() {
+    if (!form.displayName.trim()) {
+      throw new Error("Podaj imię i nazwisko.");
+    }
+
+    normalizePhoneNumberForSms(form.phone);
+
+    if (!form.trainerAuthorizationCode.trim()) {
+      throw new Error("Podaj kod trenera.");
+    }
+
+    if (store.appSettings.signupPhotoRequired && !form.avatarFile) {
+      throw new Error("Dodaj zdjęcie profilowe.");
+    }
+
+    if (!form.notes.trim()) {
+      throw new Error("Napisz kilka słów o sobie.");
+    }
+  }
+
+  async function finalizeRegistration(phoneOverride?: string) {
+    setLoading(true);
+
+    try {
+      await submitAccountRequest({
+        displayName: form.displayName,
+        phone: phoneOverride ?? form.phone,
+        trainerAuthorizationCode: form.trainerAuthorizationCode,
+        notes: form.notes,
+        avatarFile: form.avatarFile,
+      });
+      toast.success("Konto uczestnika zostało utworzone.");
+      navigate("/panel/dashboard");
+      return true;
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się utworzyć konta.",
+      );
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleSendCode() {
@@ -2266,7 +2315,9 @@ function SmsRegisterScreen() {
         ...current,
         phone: normalizedPhone,
       }));
+      setVerificationCode("");
       setConfirmationResult(result);
+      setIsSmsDialogOpen(true);
       toast.success("Kod SMS został wysłany.");
     } catch (error) {
       toast.error(
@@ -2288,27 +2339,23 @@ function SmsRegisterScreen() {
     setConfirmingCode(true);
 
     try {
-      setCheckingExistingAccount(true);
       const result = await confirmationResult.confirm(verificationCode.trim());
       const confirmedPhone = result.user.phoneNumber ?? form.phone;
-      await ensurePhoneParticipantProfileForFlow();
-      const appUser = await fetchAppUser(result.user.uid);
-
       setForm((current) => ({
         ...current,
-        displayName: current.displayName || appUser.displayName || "",
         phone: confirmedPhone,
       }));
-
-      setStayOnRegistrationFlow(true);
       setSmsVerified(true);
-      toast.success("Numer telefonu został potwierdzony. Dokończ tworzenie konta.");
+      setVerificationCode("");
+      setConfirmationResult(null);
+      setIsSmsDialogOpen(false);
+      toast.success("Numer telefonu został potwierdzony.");
+      await finalizeRegistration(confirmedPhone);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
       );
     } finally {
-      setCheckingExistingAccount(false);
       setConfirmingCode(false);
     }
   }
@@ -2316,35 +2363,26 @@ function SmsRegisterScreen() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!smsVerified) {
-      toast.error("Najpierw potwierdź numer telefonu kodem SMS.");
+    try {
+      validateRegistrationForm();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Uzupełnij wymagane pola formularza.",
+      );
       return;
     }
 
-    setLoading(true);
-
-    try {
-      if (!form.trainerAuthorizationCode.trim()) {
-        toast.error("Podaj kod trenera.");
-        return;
-      }
-
-      await submitAccountRequest({
-        displayName: form.displayName,
-        phone: form.phone,
-        trainerAuthorizationCode: form.trainerAuthorizationCode,
-        notes: form.notes,
-        avatarFile: form.avatarFile,
-      });
-      navigate("/panel/dashboard");
-      toast.success("Konto uczestnika zostało utworzone.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Nie udało się utworzyć konta.",
-      );
-    } finally {
-      setLoading(false);
+    if (smsVerified) {
+      await finalizeRegistration();
+      return;
     }
+
+    if (confirmationResult) {
+      setIsSmsDialogOpen(true);
+      return;
+    }
+
+    await handleSendCode();
   }
 
   return (
@@ -2354,8 +2392,8 @@ function SmsRegisterScreen() {
           Rejestracja
         </p>
         <p className="mt-4 max-w-3xl text-lg text-brand-muted">
-          Najpierw potwierdzasz numer telefonu, a potem wpisujesz kod trenera, który
-          pozwala od razu założyć konto uczestnika Emandar.
+          Wypełnij formularz i utwórz konto uczestnika Emandar. Potwierdzenie kodem SMS
+          pojawi się dopiero na końcu, po kliknięciu głównego przycisku.
         </p>
         {enrollmentSource && (
           <p className="mt-3 max-w-3xl rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-sm text-brand-muted">
@@ -2365,90 +2403,39 @@ function SmsRegisterScreen() {
         )}
 
         <form onSubmit={handleSubmit} className="mt-8 grid gap-5">
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
-              <input
-                required
-                autoComplete="name"
-                value={form.displayName}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    displayName: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
+          <input
+            required
+            autoComplete="name"
+            value={form.displayName}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                displayName: event.target.value,
+              }))
+            }
+            placeholder="Imię i nazwisko"
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
 
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Numer telefonu</span>
-              <input
-                required
-                autoComplete="tel"
-                value={form.phone}
-                disabled={smsVerified}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    phone: event.target.value,
-                  }))
-                }
-                placeholder="+48 500 600 700"
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
-              />
-            </label>
-          </div>
+          <input
+            required
+            autoComplete="tel"
+            value={form.phone}
+            onChange={(event) => {
+              if (smsVerified || confirmationResult) {
+                resetSmsVerification();
+              }
 
-          <div className="rounded-[2rem] border border-brand-line bg-brand-shell p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                  Weryfikacja SMS
-                </p>
-                <p className="mt-2 text-sm text-brand-muted">
-                  {smsVerified
-                    ? "Numer został już potwierdzony."
-                    : "Najpierw wyślij kod i potwierdź numer telefonu."}
-                </p>
-              </div>
-              {!smsVerified && (
-                <button
-                  type="button"
-                  disabled={sendingCode}
-                  onClick={() => void handleSendCode()}
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  {sendingCode ? "Wysyłanie..." : "Wyślij kod SMS"}
-                  <Phone size={16} />
-                </button>
-              )}
-            </div>
-
-            {!smsVerified && (
-              <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
-                <input
-                  value={verificationCode}
-                  onChange={(event) => setVerificationCode(event.target.value)}
-                  placeholder="Kod z SMS"
-                  className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <button
-                  type="button"
-                  disabled={!confirmationResult || confirmingCode}
-                  onClick={() => void handleConfirmCode()}
-                  className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                >
-                  {confirmingCode ? "Potwierdzanie..." : "Potwierdź kod"}
-                </button>
-              </div>
-            )}
-            <div id="register-phone-recaptcha" />
-          </div>
+              setForm((current) => ({
+                ...current,
+                phone: event.target.value,
+              }));
+            }}
+            placeholder="Numer telefonu"
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
 
           <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Kod trenera</span>
             <input
               required
               value={form.trainerAuthorizationCode}
@@ -2458,7 +2445,7 @@ function SmsRegisterScreen() {
                   trainerAuthorizationCode: event.target.value,
                 }))
               }
-              placeholder="Wpisz kod otrzymany od trenera"
+              placeholder="Kod trenera"
               className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
             <p className="text-sm text-brand-muted">
@@ -2509,16 +2496,74 @@ function SmsRegisterScreen() {
 
           <button
             type="submit"
-            disabled={loading || !smsVerified}
+            disabled={loading || sendingCode || confirmingCode || !authReady}
             className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
           >
             {loading
-              ? "Zapisywanie profilu..."
-              : "Zapisz profil i przejdź do panelu"}
+              ? "Tworzenie konta..."
+              : sendingCode
+                ? "Wysyłanie kodu..."
+                : "Utwórz konto"}
             <ArrowRight size={16} />
           </button>
+
+          {smsVerified && !loading && (
+            <p className="text-sm text-brand-muted">
+              Numer telefonu jest już potwierdzony. Kliknięcie przycisku utworzy konto bez
+              ponownej weryfikacji SMS.
+            </p>
+          )}
+
+          <div id="register-phone-recaptcha" className="sr-only" />
         </form>
       </div>
+
+      <Dialog open={isSmsDialogOpen} onOpenChange={setIsSmsDialogOpen}>
+        <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
+          <div className="grid gap-5 p-6 sm:p-8">
+            <DialogHeader className="text-left">
+              <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
+                Potwierdzenie SMS
+              </p>
+              <DialogTitle className="text-2xl font-semibold text-brand-navy">
+                Potwierdź numer telefonu
+              </DialogTitle>
+              <DialogDescription className="text-sm leading-6 text-brand-muted">
+                Wysłaliśmy kod SMS na numer <strong className="text-brand-navy">{form.phone}</strong>.
+                Wpisz go, żeby dokończyć tworzenie konta.
+              </DialogDescription>
+            </DialogHeader>
+
+            <input
+              required
+              inputMode="numeric"
+              value={verificationCode}
+              onChange={(event) => setVerificationCode(event.target.value)}
+              placeholder="Kod z SMS"
+              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            />
+
+            <div className="flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsSmsDialogOpen(false)}
+                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+              >
+                Zamknij
+              </button>
+              <button
+                type="button"
+                disabled={!confirmationResult || !verificationCode.trim() || confirmingCode || loading}
+                onClick={() => void handleConfirmCode()}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {confirmingCode || loading ? "Potwierdzanie..." : "Potwierdź kod i utwórz konto"}
+                <Phone size={16} />
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

@@ -98,6 +98,18 @@ function firstName(value?: string) {
   return value.trim().split(/\s+/)[0] ?? "";
 }
 
+function hasCompletedParticipantRegistration(user: AppUser | null) {
+  if (!user) {
+    return false;
+  }
+
+  if (user.role !== "participant") {
+    return true;
+  }
+
+  return typeof user.participantOnboardingCompletedAt === "string";
+}
+
 const demoLoginPassword = "kocham";
 
 const demoLoginSections = [
@@ -2196,7 +2208,6 @@ function SmsRegisterScreen() {
     store,
     submitAccountRequest,
   } = useAppState();
-  const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const searchParams =
     typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
@@ -2237,7 +2248,7 @@ function SmsRegisterScreen() {
     };
   }, []);
 
-  if (currentUser) {
+  if (hasCompletedParticipantRegistration(currentUser)) {
     return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
   }
 
@@ -2279,7 +2290,6 @@ function SmsRegisterScreen() {
         avatarFile: form.avatarFile,
       });
       toast.success("Konto uczestnika zostało utworzone.");
-      navigate("/panel/dashboard");
       return true;
     } catch (error) {
       toast.error(

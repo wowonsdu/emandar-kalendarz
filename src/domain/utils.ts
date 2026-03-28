@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   AppUser,
   AppRole,
   DecisionStatus,
@@ -9,6 +10,7 @@ import type {
   EnrollmentRequest,
   OrganizerProfile,
   ParticipantEnrollmentStatus,
+  PhotoMode,
   SharedAvailabilityWindow,
   TrainingEventScheduleDay,
   TrainerOrganizerRelation,
@@ -427,24 +429,36 @@ export function getRoleLabel(role: AppRole) {
   }
 }
 
-export function isEnrollmentPhotoRequiredForEvent(
-  event: Pick<TrainingEvent, "enrollmentPhotoRequirement" | "organizerId">,
-  trainer: Pick<TrainerProfile, "defaultEnrollmentPhotoRequired"> | undefined,
-  organizer: Pick<OrganizerProfile, "defaultEnrollmentPhotoRequired"> | undefined,
+export function resolvePhotoMode(
+  value: unknown,
+  fallback: PhotoMode = "optional",
+): PhotoMode {
+  return value === "required" || value === "optional" || value === "disabled"
+    ? value
+    : fallback;
+}
+
+export function isPhotoModeRequired(mode: PhotoMode) {
+  return mode === "required";
+}
+
+export function isPhotoModeEnabled(mode: PhotoMode) {
+  return mode !== "disabled";
+}
+
+export function resolveEnrollmentPhotoModeForEvent(
+  event: Pick<TrainingEvent, "enrollmentPhotoRequirement">,
+  appSettings: Pick<AppSettings, "enrollmentPhotoMode">,
 ) {
   if (event.enrollmentPhotoRequirement === "required") {
-    return true;
+    return "required";
   }
 
   if (event.enrollmentPhotoRequirement === "optional") {
-    return false;
+    return "optional";
   }
 
-  if (event.organizerId) {
-    return organizer?.defaultEnrollmentPhotoRequired === true;
-  }
-
-  return trainer?.defaultEnrollmentPhotoRequired === true;
+  return resolvePhotoMode(appSettings.enrollmentPhotoMode, "optional");
 }
 
 export function hasRole(

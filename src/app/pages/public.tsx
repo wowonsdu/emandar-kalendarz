@@ -2391,6 +2391,9 @@ function SmsRegisterScreen() {
         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
           Rejestracja
         </p>
+        <p className="mt-4 max-w-3xl text-lg text-brand-muted">
+          Konto założysz tylko potwierdzając swój numer telefonu SMS-kodem.
+        </p>
         {enrollmentSource && (
           <p className="mt-3 max-w-3xl rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-sm text-brand-muted">
             Jeśli wcześniej wysłałeś lub wysłałaś prośbę o kontakt do szkolenia na ten sam numer,

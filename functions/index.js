@@ -69,6 +69,37 @@ function requiredString(value, message) {
   return normalized;
 }
 
+function resolvePhotoMode(value, fallback = "optional") {
+  return value === "required" || value === "optional" || value === "disabled"
+    ? value
+    : fallback;
+}
+
+function isPhotoModeRequired(mode) {
+  return mode === "required";
+}
+
+function isPhotoModeEnabled(mode) {
+  return mode !== "disabled";
+}
+
+function resolveSignupPhotoMode(settings) {
+  const fallback = settings?.signupPhotoRequired === true ? "required" : "optional";
+  return resolvePhotoMode(settings?.signupPhotoMode, fallback);
+}
+
+function resolveEnrollmentPhotoModeForEvent(event, settings) {
+  if (event.enrollmentPhotoRequirement === "required") {
+    return "required";
+  }
+
+  if (event.enrollmentPhotoRequirement === "optional") {
+    return "optional";
+  }
+
+  return resolvePhotoMode(settings?.enrollmentPhotoMode, "optional");
+}
+
 function asNumber(value, fallback = 0) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
@@ -1018,22 +1049,6 @@ function ensureEventCanAcceptEnrollment(event) {
   }
 }
 
-async function isEnrollmentPhotoRequired(event, trainer, organizer) {
-  if (event.enrollmentPhotoRequirement === "required") {
-    return true;
-  }
-
-  if (event.enrollmentPhotoRequirement === "optional") {
-    return false;
-  }
-
-  if (event.organizerId) {
-    return organizer?.defaultEnrollmentPhotoRequired === true;
-  }
-
-  return trainer?.defaultEnrollmentPhotoRequired === true;
-}
-
 async function ensureCommunityTrainerCanPublish(user) {
   const isApprovedAccount =
     user.accountApprovalStatus === "approved" || user.accountApprovalStatus == null;
@@ -1513,11 +1528,20 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     "Numer telefonu musi zostać najpierw potwierdzony kodem SMS.",
   );
   const globalSettings = await getPublicSettings();
+  const signupPhotoMode = resolveSignupPhotoMode(globalSettings);
+  const hasAvatarPayload = Boolean(avatarPath || avatarUrl);
 
-  if (globalSettings.signupPhotoRequired === true && !avatarPath) {
+  if (isPhotoModeRequired(signupPhotoMode) && !avatarPath) {
     throw new HttpsError(
       "invalid-argument",
       "Aktualnie zdjęcie jest wymagane przy zakładaniu konta.",
+    );
+  }
+
+  if (!isPhotoModeEnabled(signupPhotoMode) && hasAvatarPayload) {
+    throw new HttpsError(
+      "invalid-argument",
+      "Aktualnie zdjęcie jest wyłączone przy zakładaniu konta.",
     );
   }
 
@@ -1697,7 +1721,6 @@ export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (re
             asString(existingUser.displayName).split(/\s+/)[0] ||
             asString(existingUser.displayName),
           location: "",
-          defaultEnrollmentPhotoRequired: false,
           notificationSettings: getDefaultNotificationSettings(),
         });
       }
@@ -2192,12 +2215,13 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
   const participantPhone = requiredString(input.telefon, "Podaj numer telefonu.");
   const event = await requireEvent(eventId);
   ensureEventCanAcceptEnrollment(event);
+  const globalSettings = await getPublicSettings();
 
   const { trainer, organizer, leadUser, organizerUser, leadName } =
     await resolveEnrollmentContactsForEvent(event);
   const requiresOrganizerApproval =
     event.requiresOrganizerApproval ?? !isCommunityBrandStatus(event.brandStatus);
-  const photoRequired = await isEnrollmentPhotoRequired(event, trainer, organizer);
+  const photoMode = resolveEnrollmentPhotoModeForEvent(event, globalSettings);
   const requestRef = db.collection(collections.enrollmentRequests).doc();
 
   await requestRef.set({
@@ -2224,15 +2248,17 @@ export const createEnrollmentDraft = onCall(callableOptions(), async (request) =
     finalStatus: "pending",
     attendanceConfirmationStatus: "not-required",
     requiresOrganizerApproval,
-    photoRequired,
+    photoMode,
     createdAt: nowIso(),
   });
 
   return {
     ok: true,
     requestId: requestRef.id,
-    photoPath: `enrollment-photos/${requestRef.id}/original`,
-    photoRequired,
+    photoPath: isPhotoModeEnabled(photoMode)
+      ? `enrollment-photos/${requestRef.id}/original`
+      : null,
+    photoMode,
   };
 });
 
@@ -2253,9 +2279,16 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
     throw new HttpsError("permission-denied", "To nie jest Twoje zgłoszenie.");
   }
 
-  const photoRequired = enrollmentRequest.get("photoRequired") === true;
+  const photoMode = resolvePhotoMode(
+    enrollmentRequest.get("photoMode"),
+    enrollmentRequest.get("photoRequired") === true ? "required" : "optional",
+  );
 
-  if (!photoPath && photoRequired) {
+  if (!isPhotoModeEnabled(photoMode) && photoPath) {
+    throw new HttpsError("invalid-argument", "To szkolenie nie zbiera zdjęcia twarzy.");
+  }
+
+  if (!photoPath && isPhotoModeRequired(photoMode)) {
     throw new HttpsError("invalid-argument", "To szkolenie wymaga zdjęcia twarzy.");
   }
 

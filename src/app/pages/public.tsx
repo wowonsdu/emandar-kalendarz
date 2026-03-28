@@ -33,12 +33,14 @@ import { fetchAppUser } from "@/data/firebaseRepository";
 import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
+  isPhotoModeEnabled,
+  isPhotoModeRequired,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
-  isEnrollmentPhotoRequiredForEvent,
   isTrainingEventPubliclyVisible,
+  resolveEnrollmentPhotoModeForEvent,
   resolveBrandStatus,
   resolveTrainingEventStatus,
   sortEventsByDate,
@@ -969,7 +971,9 @@ export function EventDetailsPage() {
   const isCancelled = eventStatus === "cancelled";
   const eventTags = getEventTags(event);
   const canManage = canManagePublicEvent(event, currentUser);
-  const photoRequired = isEnrollmentPhotoRequiredForEvent(event, trainer, organizer);
+  const enrollmentPhotoMode = resolveEnrollmentPhotoModeForEvent(event, store.appSettings);
+  const enrollmentPhotoRequired = isPhotoModeRequired(enrollmentPhotoMode);
+  const enrollmentPhotoEnabled = isPhotoModeEnabled(enrollmentPhotoMode);
   const leadName = getPublicLeadName(event, trainer?.displayName);
   const leadDescription = getPublicLeadDescription(event, trainer?.heroNote);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
@@ -986,6 +990,15 @@ export function EventDetailsPage() {
       recaptchaRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!enrollmentPhotoEnabled && form.photoFile) {
+      setForm((current) => ({
+        ...current,
+        photoFile: null,
+      }));
+    }
+  }, [enrollmentPhotoEnabled, form.photoFile]);
 
   function handleFileChange(fileEvent: ChangeEvent<HTMLInputElement>) {
     const nextFile = fileEvent.target.files?.[0] ?? null;
@@ -1020,7 +1033,7 @@ export function EventDetailsPage() {
 
     normalizePhoneNumberForSms(form.telefon);
 
-    if (photoRequired && !form.photoFile) {
+    if (enrollmentPhotoRequired && !form.photoFile) {
       throw new Error("Dodaj zdjęcie twarzy.");
     }
   }
@@ -1029,16 +1042,17 @@ export function EventDetailsPage() {
     setLoading(true);
 
     try {
+      const hasEnrollmentPhoto = enrollmentPhotoEnabled && Boolean(form.photoFile);
       await submitEnrollment({
         eventId: event.id,
         imieNazwisko: form.imieNazwisko,
         telefon: phoneOverride ?? form.telefon,
         polecenieOdKogo: form.polecenieOdKogo,
         wiadomosc: form.wiadomosc,
-        photoFile: form.photoFile,
+        photoFile: enrollmentPhotoEnabled ? form.photoFile : null,
       });
       toast.success(
-        photoRequired
+        hasEnrollmentPhoto
           ? "Zgłoszenie i zdjęcie zostały zapisane."
           : "Zgłoszenie zostało zapisane.",
       );
@@ -1314,9 +1328,11 @@ export function EventDetailsPage() {
           <p className="mt-3 text-brand-muted">
             Zgłoszenie trafi do Przekazującego Wiedzę
             {organizer ? " i organizatora." : "."}{" "}
-            {photoRequired
+            {enrollmentPhotoMode === "required"
               ? "Zdjęcie jest wymagane i trafia do Firebase Storage tylko dla uprawnionych osób."
-              : "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."}
+              : enrollmentPhotoMode === "optional"
+                ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
+                : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."}
           </p>
           {isCancelled && (
             <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
@@ -1365,25 +1381,27 @@ export function EventDetailsPage() {
               placeholder="Czy jesteś z polecenia od kogoś?"
               className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
-            <label className="grid gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
-              <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                <ImagePlus size={16} />
-                Zdjęcie twarzy
-              </span>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                onChange={handleFileChange}
-                className="text-sm"
-              />
-              <span className="text-sm text-brand-muted">
-                {form.photoFile
-                  ? `Wybrany plik: ${form.photoFile.name}`
-                  : photoRequired
-                    ? "Wymagane: JPG, PNG albo WEBP"
-                    : "Opcjonalne: JPG, PNG albo WEBP"}
-              </span>
-            </label>
+            {enrollmentPhotoEnabled && (
+              <label className="grid gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+                <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                  <ImagePlus size={16} />
+                  Zdjęcie twarzy
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleFileChange}
+                  className="text-sm"
+                />
+                <span className="text-sm text-brand-muted">
+                  {form.photoFile
+                    ? `Wybrany plik: ${form.photoFile.name}`
+                    : enrollmentPhotoRequired
+                      ? "Wymagane: JPG, PNG albo WEBP"
+                      : "Opcjonalne: JPG, PNG albo WEBP"}
+                </span>
+              </label>
+            )}
             <textarea
               rows={5}
               value={form.wiadomosc}
@@ -2219,6 +2237,9 @@ function SmsRegisterScreen() {
     notes: "",
     avatarFile: null as File | null,
   });
+  const signupPhotoMode = store.appSettings.signupPhotoMode;
+  const signupPhotoRequired = isPhotoModeRequired(signupPhotoMode);
+  const signupPhotoEnabled = isPhotoModeEnabled(signupPhotoMode);
 
   useEffect(() => {
     if (firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous) {
@@ -2236,6 +2257,15 @@ function SmsRegisterScreen() {
       recaptchaRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!signupPhotoEnabled && form.avatarFile) {
+      setForm((current) => ({
+        ...current,
+        avatarFile: null,
+      }));
+    }
+  }, [signupPhotoEnabled, form.avatarFile]);
 
   if (currentUser) {
     return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
@@ -2258,7 +2288,7 @@ function SmsRegisterScreen() {
       throw new Error("Konto można założyć tylko posiadając ważny kod trenera.");
     }
 
-    if (store.appSettings.signupPhotoRequired && !form.avatarFile) {
+    if (signupPhotoRequired && !form.avatarFile) {
       throw new Error("Dodaj zdjęcie profilowe.");
     }
 
@@ -2276,7 +2306,7 @@ function SmsRegisterScreen() {
         phone: phoneOverride ?? form.phone,
         trainerAuthorizationCode: form.trainerAuthorizationCode,
         notes: form.notes,
-        avatarFile: form.avatarFile,
+        avatarFile: signupPhotoEnabled ? form.avatarFile : null,
       });
       toast.success("Konto uczestnika zostało utworzone.");
       navigate("/panel/dashboard");
@@ -2445,28 +2475,30 @@ function SmsRegisterScreen() {
             />
           </label>
 
-          <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
-            <span className="inline-flex items-center gap-2 text-sm font-semibold">
-              <ImagePlus size={16} />
-              Zdjęcie profilowe {store.appSettings.signupPhotoRequired ? "(wymagane)" : "(opcjonalne)"}
-            </span>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  avatarFile: event.target.files?.[0] ?? null,
-                }))
-              }
-              className="text-sm"
-            />
-            <span className="text-sm text-brand-muted">
-              {form.avatarFile
-                ? `Wybrany plik: ${form.avatarFile.name}`
-                : "JPG, PNG albo WEBP do 5 MB"}
-            </span>
-          </label>
+          {signupPhotoEnabled && (
+            <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+              <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                <ImagePlus size={16} />
+                Zdjęcie profilowe {signupPhotoRequired ? "(wymagane)" : "(opcjonalne)"}
+              </span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    avatarFile: event.target.files?.[0] ?? null,
+                  }))
+                }
+                className="text-sm"
+              />
+              <span className="text-sm text-brand-muted">
+                {form.avatarFile
+                  ? `Wybrany plik: ${form.avatarFile.name}`
+                  : "JPG, PNG albo WEBP do 5 MB"}
+              </span>
+            </label>
+          )}
 
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-brand-navy">Kilka słów o sobie</span>

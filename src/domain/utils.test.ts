@@ -12,10 +12,14 @@ import {
   getParticipantEnrollmentStatusLabel,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
+  isPhotoModeEnabled,
+  isPhotoModeRequired,
   isParticipantEnrollmentActive,
   isTrainingEventArchived,
   isTrainingEventCollaborationAccepted,
   isTrainingEventPubliclyVisible,
+  resolveEnrollmentPhotoModeForEvent,
+  resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveParticipantEnrollmentStatus,
   sortEventsByFillRate,
@@ -79,6 +83,59 @@ describe("participant enrollment status", () => {
         finalStatus: "rejected",
       }),
     ).toBe("odrzucone");
+  });
+});
+
+describe("photo mode resolution", () => {
+  it("normalizes unsupported values to optional by default", () => {
+    expect(resolvePhotoMode("required")).toBe("required");
+    expect(resolvePhotoMode("disabled")).toBe("disabled");
+    expect(resolvePhotoMode("bogus")).toBe("optional");
+    expect(resolvePhotoMode(undefined, "disabled")).toBe("disabled");
+  });
+
+  it("uses event override before global enrollment setting", () => {
+    expect(
+      resolveEnrollmentPhotoModeForEvent(
+        {
+          enrollmentPhotoRequirement: "required",
+        },
+        {
+          enrollmentPhotoMode: "disabled",
+        },
+      ),
+    ).toBe("required");
+
+    expect(
+      resolveEnrollmentPhotoModeForEvent(
+        {
+          enrollmentPhotoRequirement: "optional",
+        },
+        {
+          enrollmentPhotoMode: "required",
+        },
+      ),
+    ).toBe("optional");
+  });
+
+  it("falls back to the global enrollment mode when event inherits defaults", () => {
+    expect(
+      resolveEnrollmentPhotoModeForEvent(
+        {
+          enrollmentPhotoRequirement: "default",
+        },
+        {
+          enrollmentPhotoMode: "disabled",
+        },
+      ),
+    ).toBe("disabled");
+  });
+
+  it("exposes helper booleans for required and enabled states", () => {
+    expect(isPhotoModeRequired("required")).toBe(true);
+    expect(isPhotoModeRequired("optional")).toBe(false);
+    expect(isPhotoModeEnabled("disabled")).toBe(false);
+    expect(isPhotoModeEnabled("optional")).toBe(true);
   });
 });
 

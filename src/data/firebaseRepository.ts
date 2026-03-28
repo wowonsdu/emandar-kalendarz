@@ -58,6 +58,7 @@ import type {
   OrganizerProfile,
   OrganizerProfileUpdateInput,
   ParticipantProfileUpdateInput,
+  PhotoMode,
   TrainerAccountApproval,
   TrainerCalendarFeed,
   TrainerCalendarFeedInput,
@@ -81,12 +82,15 @@ import {
   canManageTrainingEvent,
   deriveEnrollmentFinalStatus,
   getTrainingEventScheduleDays,
+  isPhotoModeEnabled,
+  isPhotoModeRequired,
   isParticipantEnrollmentActive,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
   mergeBusyIntervals,
+  resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
@@ -128,7 +132,8 @@ export function createEmptyStore(): DemoStore {
     accountRequests: [],
     trainerAccountApprovals: [],
     appSettings: {
-      signupPhotoRequired: false,
+      signupPhotoMode: "optional",
+      enrollmentPhotoMode: "optional",
     },
   };
 }
@@ -552,9 +557,11 @@ function mergeById<T extends { id: string }>(...groups: T[][]) {
 
 function normalizeAppSettings(raw: unknown): AppSettings {
   const normalized = normalizeValue(raw) as Record<string, unknown>;
+  const signupFallback = normalized.signupPhotoRequired === true ? "required" : "optional";
 
   return {
-    signupPhotoRequired: normalized.signupPhotoRequired === true,
+    signupPhotoMode: resolvePhotoMode(normalized.signupPhotoMode, signupFallback),
+    enrollmentPhotoMode: resolvePhotoMode(normalized.enrollmentPhotoMode, "optional"),
   };
 }
 
@@ -572,7 +579,8 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
         appSettings: snapshot.exists()
           ? normalizeAppSettings(snapshot.data())
           : {
-              signupPhotoRequired: false,
+              signupPhotoMode: "optional",
+              enrollmentPhotoMode: "optional",
             },
       });
     }),
@@ -1338,7 +1346,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       EnrollmentFormInput,
       "eventId" | "imieNazwisko" | "telefon" | "polecenieOdKogo" | "wiadomosc"
     >,
-    { requestId: string; photoPath: string; photoRequired: boolean }
+    { requestId: string; photoPath: string | null; photoMode: PhotoMode }
   >("createEnrollmentDraft", {
     eventId: input.eventId,
     imieNazwisko: input.imieNazwisko,
@@ -1348,16 +1356,27 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   });
 
   try {
+    if (!isPhotoModeEnabled(draft.photoMode) && input.photoFile) {
+      throw new Error("To szkolenie nie zbiera zdjęcia twarzy.");
+    }
+
     const profileAvatar =
-      input.photoFile && auth.currentUser && !auth.currentUser.isAnonymous
+      input.photoFile &&
+      isPhotoModeEnabled(draft.photoMode) &&
+      auth.currentUser &&
+      !auth.currentUser.isAnonymous
         ? await uploadCurrentUserAvatar(input.photoFile)
         : null;
 
-    if (draft.photoRequired && !input.photoFile) {
+    if (isPhotoModeRequired(draft.photoMode) && !input.photoFile) {
       throw new Error("To szkolenie wymaga zdjęcia twarzy.");
     }
 
     if (input.photoFile) {
+      if (!draft.photoPath) {
+        throw new Error("To szkolenie nie przyjmuje teraz zdjęcia twarzy.");
+      }
+
       const metadata: UploadMetadata = { contentType: input.photoFile.type };
       await uploadBytes(ref(storage, draft.photoPath), input.photoFile, metadata);
     }
@@ -1372,7 +1391,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       { ok: true }
     >("finalizeEnrollmentDraft", {
       requestId: draft.requestId,
-      photoPath: input.photoFile ? draft.photoPath : undefined,
+      photoPath: input.photoFile ? draft.photoPath ?? undefined : undefined,
       avatarPath: profileAvatar?.avatarPath,
       avatarUrl: profileAvatar?.avatarUrl,
     });
@@ -2464,7 +2483,6 @@ export async function updateTrainerProfile(
     bio: input.bio.trim(),
     specialties,
     locations,
-    defaultEnrollmentPhotoRequired: input.defaultEnrollmentPhotoRequired === true,
   };
 
   if (input.avatarFile) {
@@ -2564,7 +2582,6 @@ export async function updateOrganizerProfile(
     contactName: input.contactName.trim(),
     location: input.location.trim(),
     description: input.description.trim(),
-    defaultEnrollmentPhotoRequired: input.defaultEnrollmentPhotoRequired === true,
   });
 }
 
@@ -3022,7 +3039,8 @@ export async function updateAppSettings(input: AppSettings) {
   await setDoc(
     doc(db, collections.appMeta, "publicSettings"),
     {
-      signupPhotoRequired: input.signupPhotoRequired === true,
+      signupPhotoMode: resolvePhotoMode(input.signupPhotoMode, "optional"),
+      enrollmentPhotoMode: resolvePhotoMode(input.enrollmentPhotoMode, "optional"),
     },
     { merge: true },
   );

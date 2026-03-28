@@ -26,6 +26,7 @@ export type EventCollaborationStatus =
   | "rejected"
   | "not-required";
 export type EnrollmentPhotoRequirement = "default" | "required" | "optional";
+export type PhotoMode = "required" | "optional" | "disabled";
 
 export interface NotificationSettings {
   reminderLeadDays: number;
@@ -81,7 +82,6 @@ export interface TrainerProfile {
   brandStatus: EmandarBrandStatus;
   authorizationCodeConfigured?: boolean;
   authorizationCodeUpdatedAt?: string;
-  defaultEnrollmentPhotoRequired?: boolean;
   notificationSettings?: NotificationSettings;
 }
 
@@ -94,7 +94,6 @@ export interface OrganizerProfile {
   contactName?: string;
   location?: string;
   trainingIntent?: string;
-  defaultEnrollmentPhotoRequired?: boolean;
   notificationSettings?: NotificationSettings;
 }
 
@@ -244,6 +243,7 @@ export interface EnrollmentRequest {
   polecenieOdKogo: string;
   wiadomosc: string;
   photoStatus: EnrollmentPhotoStatus;
+  photoMode?: PhotoMode;
   photoPath?: string;
   photoUploadedAt?: string;
   photoContentType?: string;
@@ -308,7 +308,8 @@ export interface TrainerAccountApproval {
 }
 
 export interface AppSettings {
-  signupPhotoRequired: boolean;
+  signupPhotoMode: PhotoMode;
+  enrollmentPhotoMode: PhotoMode;
 }
 
 export interface DemoStore {
@@ -405,7 +406,6 @@ export interface TrainerProfileUpdateInput {
   locations: string[];
   authorizationCode?: string;
   avatarFile?: File | null;
-  defaultEnrollmentPhotoRequired?: boolean;
 }
 
 export interface OrganizerProfileUpdateInput {
@@ -413,7 +413,6 @@ export interface OrganizerProfileUpdateInput {
   contactName: string;
   location: string;
   description: string;
-  defaultEnrollmentPhotoRequired?: boolean;
 }
 
 export interface NotificationSettingsUpdateInput {

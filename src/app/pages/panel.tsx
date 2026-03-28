@@ -64,6 +64,7 @@ import type {
   EnrollmentFinalStatus,
   EnrollmentRequest,
   OrganizerProfile,
+  PhotoMode,
   TrainerProfile,
   TrainingEventImage,
   TrainerCalendarFeedProvider,
@@ -952,6 +953,42 @@ function AdminBrandStatusSelect({
         <option value="supported">Wspierane przez Emandar</option>
       </select>
     </label>
+  );
+}
+
+const photoModeOptions: Array<{ value: PhotoMode; label: string }> = [
+  { value: "required", label: "WYMAGANE" },
+  { value: "optional", label: "OPCJONALNE" },
+  { value: "disabled", label: "WYŁĄCZONE" },
+];
+
+function PhotoModeSegmentedControl({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: PhotoMode;
+  onChange: (nextValue: PhotoMode) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-brand-line bg-white p-1 shadow-soft">
+      {photoModeOptions.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(option.value)}
+          className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition sm:text-sm ${
+            value === option.value
+              ? "bg-brand-navy text-white"
+              : "text-brand-muted hover:text-brand-navy"
+          } disabled:cursor-not-allowed disabled:opacity-60`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -5023,7 +5060,7 @@ export function EventManagementPage() {
               }
               className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
             >
-              <option value="default">Dziedzicz z ustawień właściciela szkolenia</option>
+              <option value="default">Dziedzicz z ustawień globalnych portalu</option>
               <option value="required">Zawsze wymagaj zdjęcia</option>
               <option value="optional">Zdjęcie opcjonalne</option>
             </select>
@@ -5572,14 +5609,12 @@ export function ProfileSettingsPage() {
     locations: "",
     authorizationCode: "",
     avatarFile: null as File | null,
-    defaultEnrollmentPhotoRequired: false,
   });
   const [organizerForm, setOrganizerForm] = useState({
     displayName: "",
     contactName: "",
     location: "",
     description: "",
-    defaultEnrollmentPhotoRequired: false,
   });
   const [participantForm, setParticipantForm] = useState({
     displayName: "",
@@ -5588,7 +5623,8 @@ export function ProfileSettingsPage() {
     avatarFile: null as File | null,
   });
   const [appSettingsForm, setAppSettingsForm] = useState({
-    signupPhotoRequired: false,
+    signupPhotoMode: "optional" as PhotoMode,
+    enrollmentPhotoMode: "optional" as PhotoMode,
   });
   const [saving, setSaving] = useState(false);
 
@@ -5604,7 +5640,6 @@ export function ProfileSettingsPage() {
       specialties: trainerProfile.specialties.join(", "),
       locations: trainerProfile.locations.join(", "),
       authorizationCode: "",
-      defaultEnrollmentPhotoRequired: trainerProfile.defaultEnrollmentPhotoRequired === true,
     }));
   }, [trainerProfile]);
 
@@ -5618,7 +5653,6 @@ export function ProfileSettingsPage() {
       contactName: organizerProfile.contactName ?? "",
       location: organizerProfile.location ?? "",
       description: organizerProfile.description ?? "",
-      defaultEnrollmentPhotoRequired: organizerProfile.defaultEnrollmentPhotoRequired === true,
     });
   }, [organizerProfile]);
 
@@ -5637,9 +5671,10 @@ export function ProfileSettingsPage() {
 
   useEffect(() => {
     setAppSettingsForm({
-      signupPhotoRequired: store.appSettings.signupPhotoRequired === true,
+      signupPhotoMode: store.appSettings.signupPhotoMode,
+      enrollmentPhotoMode: store.appSettings.enrollmentPhotoMode,
     });
-  }, [store.appSettings.signupPhotoRequired]);
+  }, [store.appSettings.enrollmentPhotoMode, store.appSettings.signupPhotoMode]);
 
   if (!currentUser) {
     return null;
@@ -5811,56 +5846,58 @@ export function ProfileSettingsPage() {
     return (
       <PanelSection
         eyebrow="Profil"
-        title="Ustawienia globalne rejestracji"
-        description="Admin kontroluje tutaj globalne wymagania na publicznej rejestracji."
+        title="Ustawienia globalne zdjęć uczestnika"
+        description="Admin ustawia tutaj portalowe zasady zbierania zdjęć przy rejestracji konta i przy zapisie na szkolenie."
       >
         <form
           onSubmit={handleSettingsSubmit}
           className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
         >
-          <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy">
-            <input
-              type="checkbox"
-              checked={appSettingsForm.signupPhotoRequired}
-              onChange={(event) =>
-                setAppSettingsForm({
-                  signupPhotoRequired: event.target.checked,
-                })
-              }
-              className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-            />
-            <span className="grid gap-1">
-              <span className="text-sm font-semibold">
-                Wymagaj zdjęcia przy zakładaniu konta
-              </span>
-              <span className="text-sm text-brand-muted">
-                Gdy ta opcja jest aktywna, publiczna rejestracja SMS nie pozwoli
-                dokończyć konta bez zdjęcia profilowego.
-              </span>
-            </span>
-          </label>
+          <div className="grid gap-4">
+            <div className="grid gap-4 rounded-3xl border border-brand-line bg-brand-shell p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <div className="grid gap-1">
+                <span className="text-sm font-semibold text-brand-navy">
+                  Zdjęcie uczestnika przy rejestracji konta
+                </span>
+                <span className="text-sm text-brand-muted">
+                  Steruje publiczną rejestracją SMS. Tryb wyłączony ukrywa pole zdjęcia i nie
+                  pozwala go wysłać w tym flow.
+                </span>
+              </div>
+              <PhotoModeSegmentedControl
+                value={appSettingsForm.signupPhotoMode}
+                onChange={(nextValue) =>
+                  setAppSettingsForm((previous) => ({
+                    ...previous,
+                    signupPhotoMode: nextValue,
+                  }))
+                }
+                disabled={saving}
+              />
+            </div>
 
-          <label className="mt-5 flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy">
-            <input
-              type="checkbox"
-              checked={organizerForm.defaultEnrollmentPhotoRequired}
-              onChange={(event) =>
-                setOrganizerForm((previous) => ({
-                  ...previous,
-                  defaultEnrollmentPhotoRequired: event.target.checked,
-                }))
-              }
-              className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-            />
-            <span className="grid gap-1">
-              <span className="text-sm font-semibold">
-                Wymagaj zdjęcia w zapisach na moje szkolenia
-              </span>
-              <span className="text-sm text-brand-muted">
-                To ustawienie stanie się domyślnym wymaganiem dla wydarzeń organizowanych z Twojego profilu.
-              </span>
-            </span>
-          </label>
+            <div className="grid gap-4 rounded-3xl border border-brand-line bg-brand-shell p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+              <div className="grid gap-1">
+                <span className="text-sm font-semibold text-brand-navy">
+                  Zdjęcie uczestnika przy zapisie na szkolenie
+                </span>
+                <span className="text-sm text-brand-muted">
+                  To globalny domyślny tryb dla szkoleń z ustawieniem dziedziczenia.
+                  Nadpisanie na poziomie konkretnego szkolenia nadal wygrywa.
+                </span>
+              </div>
+              <PhotoModeSegmentedControl
+                value={appSettingsForm.enrollmentPhotoMode}
+                onChange={(nextValue) =>
+                  setAppSettingsForm((previous) => ({
+                    ...previous,
+                    enrollmentPhotoMode: nextValue,
+                  }))
+                }
+                disabled={saving}
+              />
+            </div>
+          </div>
 
           <button
             type="submit"
@@ -5893,7 +5930,6 @@ export function ProfileSettingsPage() {
             .filter(Boolean),
           authorizationCode: trainerForm.authorizationCode,
           avatarFile: trainerForm.avatarFile,
-          defaultEnrollmentPhotoRequired: trainerForm.defaultEnrollmentPhotoRequired,
         });
         toast.success("Profil Przekazującego Wiedzę został zapisany.");
         setTrainerForm((previous) => ({
@@ -6065,28 +6101,6 @@ export function ProfileSettingsPage() {
                 </span>
               </label>
 
-              <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-white p-4 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={trainerForm.defaultEnrollmentPhotoRequired}
-                  onChange={(event) =>
-                    setTrainerForm((previous) => ({
-                      ...previous,
-                      defaultEnrollmentPhotoRequired: event.target.checked,
-                    }))
-                  }
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">
-                    Wymagaj zdjęcia w zapisach na moje szkolenia
-                  </span>
-                  <span className="text-sm text-brand-muted">
-                    To ustawienie staje się domyślne dla szkoleń bez nadpisania na poziomie wydarzenia.
-                  </span>
-                </span>
-              </label>
-
               <button
                 type="submit"
                 disabled={saving}
@@ -6192,27 +6206,6 @@ export function ProfileSettingsPage() {
               />
             </label>
 
-            <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy xl:col-span-2">
-              <input
-                type="checkbox"
-                checked={organizerForm.defaultEnrollmentPhotoRequired}
-                onChange={(event) =>
-                  setOrganizerForm((previous) => ({
-                    ...previous,
-                    defaultEnrollmentPhotoRequired: event.target.checked,
-                  }))
-                }
-                className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-              />
-              <span className="grid gap-1">
-                <span className="text-sm font-semibold">
-                  Wymagaj zdjęcia w zapisach na moje szkolenia
-                </span>
-                <span className="text-sm text-brand-muted">
-                  To ustawienie stanie się domyślnym wymaganiem dla wydarzeń organizowanych z Twojego profilu.
-                </span>
-              </span>
-            </label>
           </div>
 
           <button

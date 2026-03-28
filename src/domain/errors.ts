@@ -9,6 +9,10 @@ function isFirebaseError(error: unknown): error is FirebaseError {
   );
 }
 
+function normalizeFirebaseErrorCode(code: string) {
+  return code.startsWith("functions/") ? code.slice("functions/".length) : code;
+}
+
 export function mapAppError(error: unknown) {
   if (!isFirebaseError(error)) {
     if (error instanceof Error) {
@@ -18,7 +22,7 @@ export function mapAppError(error: unknown) {
     return new Error("Nie udalo sie wykonac tej operacji.");
   }
 
-  switch (error.code) {
+  switch (normalizeFirebaseErrorCode(error.code)) {
     case "auth/operation-not-allowed":
       return new Error(
         "Na tym projekcie Firebase nie jest wlaczone logowanie email/haslo. Po migracji trzeba domknac konfiguracje providerow Auth.",
@@ -38,10 +42,16 @@ export function mapAppError(error: unknown) {
       return new Error("Ten rekord juz istnieje.");
     case "failed-precondition":
       return new Error("Ta operacja nie moze zostac wykonana w obecnym stanie danych.");
+    case "invalid-argument":
+      return new Error("Przekazane dane sa nieprawidlowe.");
     case "resource-exhausted":
       return new Error("Limit zasobow zostal chwilowo przekroczony. Sprobuj ponownie za chwile.");
     case "cancelled":
       return new Error("Operacja zostala przerwana.");
+    case "deadline-exceeded":
+      return new Error("Operacja przekroczyla limit czasu. Sprobuj ponownie za chwile.");
+    case "internal":
+      return new Error("Nie udalo sie zsynchronizowac feedow iCal. Sprobuj ponownie za chwile.");
     case "unavailable":
       return new Error("Usluga jest chwilowo niedostepna. Sprobuj ponownie za chwile.");
     case "storage/unauthorized":

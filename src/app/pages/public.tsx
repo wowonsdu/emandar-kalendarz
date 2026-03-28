@@ -2255,7 +2255,7 @@ function SmsRegisterScreen() {
     normalizePhoneNumberForSms(form.phone);
 
     if (!form.trainerAuthorizationCode.trim()) {
-      throw new Error("Podaj kod trenera.");
+      throw new Error("Konto można założyć tylko posiadając ważny kod trenera.");
     }
 
     if (store.appSettings.signupPhotoRequired && !form.avatarFile) {
@@ -2391,10 +2391,6 @@ function SmsRegisterScreen() {
         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
           Rejestracja
         </p>
-        <p className="mt-4 max-w-3xl text-lg text-brand-muted">
-          Wypełnij formularz i utwórz konto uczestnika Emandar. Potwierdzenie kodem SMS
-          pojawi się dopiero na końcu, po kliknięciu głównego przycisku.
-        </p>
         {enrollmentSource && (
           <p className="mt-3 max-w-3xl rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-sm text-brand-muted">
             Jeśli wcześniej wysłałeś lub wysłałaś prośbę o kontakt do szkolenia na ten sam numer,
@@ -2437,7 +2433,6 @@ function SmsRegisterScreen() {
 
           <label className="grid gap-2">
             <input
-              required
               value={form.trainerAuthorizationCode}
               onChange={(event) =>
                 setForm((current) => ({
@@ -2448,10 +2443,6 @@ function SmsRegisterScreen() {
               placeholder="Kod trenera"
               className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
-            <p className="text-sm text-brand-muted">
-              Konto uczestnika utworzysz tylko z aktywnym kodem trenera. Ten sam mechanizm
-              później odblokuje Ci też flow organizatora wewnątrz panelu.
-            </p>
           </label>
 
           <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">

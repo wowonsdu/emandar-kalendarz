@@ -413,10 +413,26 @@ describe("firestore rules", () => {
   it("allows only event participants to update their own collaboration status", async () => {
     const trainerDb = await authenticatedFirestore(ids.trainerUid);
     const organizerDb = await authenticatedFirestore(ids.organizerUid);
+    const adminDb = await authenticatedFirestore(ids.adminUid, { admin: true });
+    const adminWithoutClaimDb = await authenticatedFirestore(ids.adminUid);
 
     await assertSucceeds(
       updateDoc(doc(trainerDb, "trainingEvents", ids.draftEventId), {
         trainerCollaborationStatus: "accepted",
+      }),
+    );
+
+    await assertSucceeds(
+      updateDoc(doc(adminDb, "trainingEvents", ids.draftEventId), {
+        trainerCollaborationStatus: "accepted",
+        organizerCollaborationStatus: "accepted",
+      }),
+    );
+
+    await assertSucceeds(
+      updateDoc(doc(adminWithoutClaimDb, "trainingEvents", ids.publicEventId), {
+        trainerCollaborationStatus: "accepted",
+        organizerCollaborationStatus: "accepted",
       }),
     );
 

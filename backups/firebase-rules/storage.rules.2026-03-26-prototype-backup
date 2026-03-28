@@ -1,0 +1,115 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function currentUid() {
+      return request.auth == null ? null : request.auth.uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        ("admin" in request.auth.token) &&
+        request.auth.token.admin == true;
+    }
+
+    function enrollmentDoc(requestId) {
+      return firestore.get(/databases/(default)/documents/enrollmentRequests/$(requestId));
+    }
+
+    function enrollmentRequestExists(requestId) {
+      return firestore.exists(/databases/(default)/documents/enrollmentRequests/$(requestId));
+    }
+
+    function enrollmentTrainerUserId(requestId) {
+      return enrollmentRequestExists(requestId)
+        ? (
+          enrollmentDoc(requestId).data == null
+            ? null
+            : enrollmentDoc(requestId).data.trainerUserId
+        )
+        : null;
+    }
+
+    function enrollmentOrganizerUserId(requestId) {
+      return enrollmentRequestExists(requestId)
+        ? (
+          enrollmentDoc(requestId).data == null
+            ? null
+            : enrollmentDoc(requestId).data.organizerUserId
+        )
+        : null;
+    }
+
+    function enrollmentSubmitterUid(requestId) {
+      return enrollmentRequestExists(requestId)
+        ? (
+          enrollmentDoc(requestId).data == null
+            ? null
+            : enrollmentDoc(requestId).data.submitterUid
+        )
+        : null;
+    }
+
+    function isEnrollmentParticipant(requestId) {
+      return isSignedIn() &&
+        enrollmentRequestExists(requestId) &&
+        (
+          isAdmin() ||
+          enrollmentTrainerUserId(requestId) == currentUid() ||
+          enrollmentOrganizerUserId(requestId) == currentUid() ||
+          enrollmentSubmitterUid(requestId) == currentUid()
+        );
+    }
+
+    function isSupportedImageUpload() {
+      return request.resource != null &&
+        request.resource.size < 5 * 1024 * 1024 &&
+        request.resource.contentType.matches("image/(jpeg|png|webp)");
+    }
+
+    match /enrollment-photos/{requestId}/original {
+      allow read: if isEnrollmentParticipant(requestId);
+      allow write: if isSignedIn() &&
+        enrollmentRequestExists(requestId) &&
+        enrollmentSubmitterUid(requestId) == currentUid() &&
+        isSupportedImageUpload();
+      allow delete: if isAdmin();
+    }
+
+    match /seeded/enrollment-photos/{requestId}/original {
+      allow read: if isEnrollmentParticipant(requestId);
+      allow write, delete: if isAdmin();
+    }
+
+    match /profile-photos/trainers/{ownerUid}/{fileName} {
+      allow read: if true;
+      allow write: if fileName == "avatar" &&
+        isSupportedImageUpload() &&
+        (ownerUid == currentUid() || isAdmin());
+      allow delete: if fileName == "avatar" &&
+        (ownerUid == currentUid() || isAdmin());
+    }
+
+    match /profile-photos/users/{ownerUid}/{fileName} {
+      allow read: if ownerUid == currentUid() || isAdmin();
+      allow write: if fileName == "avatar" &&
+        isSupportedImageUpload() &&
+        (ownerUid == currentUid() || isAdmin());
+      allow delete: if fileName == "avatar" &&
+        (ownerUid == currentUid() || isAdmin());
+    }
+
+    match /seeded/profile-photos/trainers/{trainerId}/{fileName} {
+      allow read: if true;
+      allow write, delete: if fileName == "avatar" && isAdmin();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

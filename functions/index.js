@@ -1617,111 +1617,109 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
   };
 });
 
-export const connectOrganizerToTrainerWithCode = onCall(callableOptions(), async (request) => {
-  const { uid, user } = await requireCurrentUser(request);
-  if (!user) {
-    throw new HttpsError("permission-denied", "Musisz być zalogowany.");
-  }
+export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (request) => {
+  const { uid, user } = await requireCurrentUser(request, { allowAnonymous: true });
+  const seedTrainerId = asString(request.data?.seedTrainerId);
+  const trainerAuthorizationCode = asString(request.data?.trainerAuthorizationCode);
 
-  if (!hasRole(user, "participant") && !hasRole(user, "organizer")) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Najpierw potrzebujesz aktywnego konta uczestnika.",
-    );
-  }
-
-  const trainerAuthorizationCode = requiredString(
-    request.data?.trainerAuthorizationCode,
-    "Podaj kod trenera.",
-  );
-  const trainer = await findOfficialTrainerByAuthorizationCode(trainerAuthorizationCode);
-  const currentUser = await requireAppUser(uid);
-  const userRef = db.collection(collections.users).doc(uid);
-  const organizerProfileId = currentUser.organizerProfileId || createId("organizer");
-  const organizerRef = db.collection(collections.organizers).doc(organizerProfileId);
-  const relationRef = db
-    .collection(collections.relations)
-    .doc(buildRelationId(trainer.id, organizerProfileId));
-  const createdAt = nowIso();
-  let organizerProfileCreated = false;
-
-  await db.runTransaction(async (transaction) => {
-    const existingUserSnapshot = await transaction.get(userRef);
-    const existingUser = existingUserSnapshot.exists
-      ? { id: existingUserSnapshot.id, ...existingUserSnapshot.data() }
-      : currentUser;
-    const existingRoles = normalizeRoleList(existingUser.roles);
-    const nextRoles = existingRoles.includes("organizer")
-      ? existingRoles
-      : Array.from(new Set([...existingRoles, "organizer"]));
-    const nextPrimaryRole =
-      existingUser.primaryRole && nextRoles.includes(existingUser.primaryRole)
-        ? existingUser.primaryRole
-        : "participant";
-    const nextRole =
-      existingUser.role && nextRoles.includes(existingUser.role)
-        ? existingUser.role
-        : nextPrimaryRole;
-    const nextSelectedTrainerIds = Array.from(
-      new Set([trainer.id, ...normalizeStringList(existingUser.selectedTrainerIds)]),
-    );
-    const nextApprovedTrainerIds = Array.from(
-      new Set([trainer.id, ...normalizeStringList(existingUser.approvedTrainerIds)]),
-    );
-
-    transaction.set(
-      userRef,
-      {
-        roles: nextRoles,
-        role: nextRole,
-        primaryRole: nextPrimaryRole,
-        organizerProfileId,
-        selectedTrainerIds: nextSelectedTrainerIds,
-        approvedTrainerIds: nextApprovedTrainerIds,
-        pendingRoles: normalizePendingRoles(existingUser.pendingRoles).filter(
-          (role) => role !== "organizer",
-        ),
-        accountApprovalStatus: "approved",
-      },
-      { merge: true },
-    );
-
-    if (!existingUser.organizerProfileId) {
-      organizerProfileCreated = true;
-      transaction.set(organizerRef, {
-        userId: uid,
-        displayName: asString(existingUser.displayName),
-        description: asString(existingUser.notes),
-        isVisible: false,
-        contactName:
-          asString(existingUser.displayName).split(/\s+/)[0] || asString(existingUser.displayName),
-        location: "",
-        defaultEnrollmentPhotoRequired: false,
-        notificationSettings: getDefaultNotificationSettings(),
-      });
+  if (trainerAuthorizationCode) {
+    if (!user) {
+      throw new HttpsError("permission-denied", "Musisz być zalogowany.");
     }
 
-    transaction.set(
-      relationRef,
-      {
-        trainerId: trainer.id,
-        organizerId: organizerProfileId,
-        trainerUserId: trainer.userId,
-        organizerUserId: uid,
-        status: "approved",
-        requestedBy: "organizer",
-        createdAt,
-      },
-      { merge: true },
-    );
-  });
+    if (!hasRole(user, "participant") && !hasRole(user, "organizer")) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Najpierw potrzebujesz aktywnego konta uczestnika.",
+      );
+    }
 
-  return { ok: true, trainerId: trainer.id, organizerProfileCreated };
-});
+    const trainer = await findOfficialTrainerByAuthorizationCode(trainerAuthorizationCode);
+    const currentUser = await requireAppUser(uid);
+    const userRef = db.collection(collections.users).doc(uid);
+    const organizerProfileId = currentUser.organizerProfileId || createId("organizer");
+    const organizerRef = db.collection(collections.organizers).doc(organizerProfileId);
+    const relationRef = db
+      .collection(collections.relations)
+      .doc(buildRelationId(trainer.id, organizerProfileId));
+    const createdAt = nowIso();
+    let organizerProfileCreated = false;
 
-export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (request) => {
-  const { uid } = await requireCurrentUser(request, { allowAnonymous: true });
-  const seedTrainerId = asString(request.data?.seedTrainerId);
+    await db.runTransaction(async (transaction) => {
+      const existingUserSnapshot = await transaction.get(userRef);
+      const existingUser = existingUserSnapshot.exists
+        ? { id: existingUserSnapshot.id, ...existingUserSnapshot.data() }
+        : currentUser;
+      const existingRoles = normalizeRoleList(existingUser.roles);
+      const nextRoles = existingRoles.includes("organizer")
+        ? existingRoles
+        : Array.from(new Set([...existingRoles, "organizer"]));
+      const nextPrimaryRole =
+        existingUser.primaryRole && nextRoles.includes(existingUser.primaryRole)
+          ? existingUser.primaryRole
+          : "participant";
+      const nextRole =
+        existingUser.role && nextRoles.includes(existingUser.role)
+          ? existingUser.role
+          : nextPrimaryRole;
+      const nextSelectedTrainerIds = Array.from(
+        new Set([trainer.id, ...normalizeStringList(existingUser.selectedTrainerIds)]),
+      );
+      const nextApprovedTrainerIds = Array.from(
+        new Set([trainer.id, ...normalizeStringList(existingUser.approvedTrainerIds)]),
+      );
+
+      transaction.set(
+        userRef,
+        {
+          roles: nextRoles,
+          role: nextRole,
+          primaryRole: nextPrimaryRole,
+          organizerProfileId,
+          selectedTrainerIds: nextSelectedTrainerIds,
+          approvedTrainerIds: nextApprovedTrainerIds,
+          pendingRoles: normalizePendingRoles(existingUser.pendingRoles).filter(
+            (role) => role !== "organizer",
+          ),
+          accountApprovalStatus: "approved",
+        },
+        { merge: true },
+      );
+
+      if (!existingUser.organizerProfileId) {
+        organizerProfileCreated = true;
+        transaction.set(organizerRef, {
+          userId: uid,
+          displayName: asString(existingUser.displayName),
+          description: asString(existingUser.notes),
+          isVisible: false,
+          contactName:
+            asString(existingUser.displayName).split(/\s+/)[0] ||
+            asString(existingUser.displayName),
+          location: "",
+          defaultEnrollmentPhotoRequired: false,
+          notificationSettings: getDefaultNotificationSettings(),
+        });
+      }
+
+      transaction.set(
+        relationRef,
+        {
+          trainerId: trainer.id,
+          organizerId: organizerProfileId,
+          trainerUserId: trainer.userId,
+          organizerUserId: uid,
+          status: "approved",
+          requestedBy: "organizer",
+          createdAt,
+        },
+        { merge: true },
+      );
+    });
+
+    return { ok: true, trainerId: trainer.id, organizerProfileCreated };
+  }
+
   return ensurePhoneParticipantAppUser(uid, {
     seedTrainerId,
   });

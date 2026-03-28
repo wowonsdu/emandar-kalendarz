@@ -627,12 +627,17 @@ export async function fetchAppUser(userId: string) {
   return normalizeAppUserRecord(snapshot.id, snapshot.data());
 }
 
-export async function ensurePhoneParticipantProfile() {
+export async function ensurePhoneParticipantProfile(input?: {
+  seedTrainerId?: string;
+  trainerAuthorizationCode?: string;
+}) {
   return callFirebaseFunction<
-    { seedTrainerId?: string } | undefined,
-    { ok: true; userId: string; accountCreated?: boolean }
+    { seedTrainerId?: string; trainerAuthorizationCode?: string } | undefined,
+    | { ok: true; userId: string; accountCreated?: boolean }
+    | { ok: true; trainerId: string; organizerProfileCreated: boolean }
   >(
     "ensurePhoneParticipantProfile",
+    input,
   );
 }
 
@@ -2368,10 +2373,7 @@ export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode
     throw new Error("Podaj kod trenera.");
   }
 
-  return callFirebaseFunction<
-    { trainerAuthorizationCode: string },
-    { ok: true; trainerId: string; organizerProfileCreated: boolean }
-  >("connectOrganizerToTrainerWithCode", {
+  return ensurePhoneParticipantProfile({
     trainerAuthorizationCode: trainerAuthorizationCode.trim(),
   });
 }

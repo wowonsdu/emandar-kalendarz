@@ -19,6 +19,8 @@ const DOTENV_PATHS = [
 const FIREBASE_CLI_CLIENT_ID =
   "563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com";
 const FIREBASE_CLI_CLIENT_SECRET = "j9iVZfS8kkCEFUPaAeJV0sAi";
+const MARCIN_PUBLIC_ICAL_URL =
+  "https://calendar.google.com/calendar/ical/marcinmlynek1988%40gmail.com/public/basic.ics";
 
 const trainers = [
   { id: "trainer-11", displayName: "Dariusz", email: "dariusz@emandar.pl", phone: "+48 601 100 100", city: "Warszawa" },
@@ -900,6 +902,27 @@ async function main() {
         futureEvent,
       );
       seededFutureTrainerEvents += 1;
+    }
+
+    if (trainer.id === "trainer-2") {
+      await writeFirestoreDocument(
+        projectId,
+        accessToken,
+        "trainerCalendarFeeds",
+        "trainer-2-google-public",
+        {
+          id: "trainer-2-google-public",
+          trainerId: trainer.id,
+          trainerUserId: trainer.userId,
+          provider: "google",
+          url: MARCIN_PUBLIC_ICAL_URL,
+          enabled: true,
+          lastSyncStatus: "idle",
+          createdAt: seededAt,
+          updatedAt: seededAt,
+          source: "scripts/seed-demo-network-and-events.mjs",
+        },
+      );
     }
   }
 

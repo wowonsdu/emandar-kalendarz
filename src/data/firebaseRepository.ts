@@ -198,7 +198,6 @@ function formatMonthKey(date: Date) {
 
 function getAvailabilitySyncRange() {
   const rangeStart = new Date();
-  rangeStart.setUTCMinutes(0, 0, 0);
 
   const rangeEnd = new Date(rangeStart);
   rangeEnd.setUTCFullYear(rangeEnd.getUTCFullYear() + 3);

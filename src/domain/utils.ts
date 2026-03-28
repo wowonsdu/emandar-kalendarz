@@ -12,6 +12,8 @@ import type {
   ParticipantEnrollmentStatus,
   PhotoMode,
   SharedAvailabilityWindow,
+  TrainerFreeDaySlice,
+  TrainerFreeDaySliceBucket,
   TrainingEventScheduleDay,
   TrainerOrganizerRelation,
   TrainingEventStatus,
@@ -525,6 +527,34 @@ function roundDownToHour(timestamp: number) {
   return date.getTime();
 }
 
+function getUtcDayStart(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setUTCHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function getNextUtcDayStart(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setUTCHours(24, 0, 0, 0);
+  return date.getTime();
+}
+
+function getTrainerFreeDaySliceBucket(spanDays: number): TrainerFreeDaySliceBucket {
+  if (spanDays <= 1) {
+    return "1-day";
+  }
+
+  if (spanDays === 2) {
+    return "2-days";
+  }
+
+  if (spanDays === 3) {
+    return "3-days";
+  }
+
+  return "4-plus-days";
+}
+
 export function mergeBusyIntervals(intervals: ExternalBusyInterval[]) {
   const sortedIntervals = [...intervals]
     .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt))
@@ -696,5 +726,103 @@ export function buildSharedAvailabilityWindows({
     }
 
     return toTimestamp(left.startsAt) - toTimestamp(right.startsAt);
+  });
+}
+
+export function buildTrainerFreeDaySlices({
+  busyIntervals,
+  rangeStart,
+  rangeEnd,
+  minimumDurationHours = 1,
+}: {
+  busyIntervals: ExternalBusyInterval[];
+  rangeStart: string;
+  rangeEnd: string;
+  minimumDurationHours?: number;
+}) {
+  const rangeStartTimestamp = roundUpToHour(toTimestamp(rangeStart));
+  const rangeEndTimestamp = roundDownToHour(toTimestamp(rangeEnd));
+  const minimumDurationMs = Math.max(1, minimumDurationHours) * 60 * 60 * 1000;
+
+  if (rangeEndTimestamp <= rangeStartTimestamp) {
+    return [] satisfies TrainerFreeDaySlice[];
+  }
+
+  const mergedBusyIntervals = mergeBusyIntervals(
+    busyIntervals
+      .map((interval) => {
+        const startsAt = Math.max(toTimestamp(interval.startsAt), rangeStartTimestamp);
+        const endsAt = Math.min(toTimestamp(interval.endsAt), rangeEndTimestamp);
+
+        return {
+          ...interval,
+          startsAt: toIso(startsAt),
+          endsAt: toIso(endsAt),
+        };
+      })
+      .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt)),
+  );
+
+  const freeWindows: Array<{ startsAt: number; endsAt: number }> = [];
+  let cursor = rangeStartTimestamp;
+
+  mergedBusyIntervals.forEach((interval) => {
+    const intervalStart = toTimestamp(interval.startsAt);
+    const intervalEnd = toTimestamp(interval.endsAt);
+
+    if (intervalStart > cursor) {
+      freeWindows.push({
+        startsAt: cursor,
+        endsAt: intervalStart,
+      });
+    }
+
+    if (intervalEnd > cursor) {
+      cursor = intervalEnd;
+    }
+  });
+
+  if (cursor < rangeEndTimestamp) {
+    freeWindows.push({
+      startsAt: cursor,
+      endsAt: rangeEndTimestamp,
+    });
+  }
+
+  return freeWindows.flatMap((window) => {
+    if (window.endsAt - window.startsAt < minimumDurationMs) {
+      return [];
+    }
+
+    const spanDays =
+      Math.floor(
+        (getUtcDayStart(window.endsAt - 1) - getUtcDayStart(window.startsAt)) /
+          (24 * 60 * 60 * 1000),
+      ) + 1;
+    const spanBucket = getTrainerFreeDaySliceBucket(spanDays);
+    const slices: TrainerFreeDaySlice[] = [];
+    let sliceStart = window.startsAt;
+
+    while (sliceStart < window.endsAt) {
+      const sliceEnd = Math.min(window.endsAt, getNextUtcDayStart(sliceStart));
+
+      if (sliceEnd - sliceStart >= minimumDurationMs) {
+        slices.push({
+          startsAt: toIso(sliceStart),
+          endsAt: toIso(sliceEnd),
+          dayKey: toIso(getUtcDayStart(sliceStart)).slice(0, 10),
+          durationHours:
+            Math.round(((sliceEnd - sliceStart) / (60 * 60 * 1000)) * 10) / 10,
+          spanStartsAt: toIso(window.startsAt),
+          spanEndsAt: toIso(window.endsAt),
+          spanDays,
+          spanBucket,
+        });
+      }
+
+      sliceStart = sliceEnd;
+    }
+
+    return slices;
   });
 }

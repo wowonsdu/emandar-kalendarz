@@ -1773,8 +1773,6 @@ export async function addTrainerCalendarFeed(
     createdAt,
     updatedAt: createdAt,
   });
-
-  await syncOwnTrainerCalendarFeeds(actor);
 }
 
 export async function updateTrainerCalendarFeedEnabled(
@@ -1799,8 +1797,6 @@ export async function updateTrainerCalendarFeedEnabled(
     enabled,
     updatedAt: nowIso(),
   });
-
-  await syncOwnTrainerCalendarFeeds(actor);
 }
 
 export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) {
@@ -1818,7 +1814,6 @@ export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) 
   }
 
   await deleteDoc(doc(db, collections.trainerCalendarFeeds, feedId));
-  await syncOwnTrainerCalendarFeeds(actor);
 }
 
 export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
@@ -1826,7 +1821,29 @@ export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
     throw new Error("Tylko trener moze synchronizowac feedy iCal.");
   }
 
-  await callFirebaseFunction<undefined, { ok: true }>("syncOwnTrainerCalendarFeeds");
+  const { db } = assertReady();
+  const trainer = await getTrainerProfile(actor.trainerProfileId);
+
+  if (isCommunityBrandStatus(trainer.brandStatus)) {
+    throw new Error("Panel wspolnych terminow jest dostepny tylko dla oficjalnych trenerow.");
+  }
+
+  const feeds = await mapQuery<TrainerCalendarFeed>(
+    query(
+      collection(db, collections.trainerCalendarFeeds),
+      where("trainerId", "==", trainer.id),
+    ),
+  );
+  const targetFeed = feeds.find((feed) => feed.enabled) ?? feeds[0];
+
+  if (!targetFeed) {
+    throw new Error("Najpierw dodaj feed iCal.");
+  }
+
+  await updateDoc(doc(db, collections.trainerCalendarFeeds, targetFeed.id), {
+    syncRequestedAt: nowIso(),
+    updatedAt: nowIso(),
+  });
 }
 
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {

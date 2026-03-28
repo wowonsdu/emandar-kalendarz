@@ -3014,32 +3014,59 @@ export const archiveTrainingEvent = onCall(callableOptions(), async (request) =>
   return { ok: true };
 });
 
-export const syncOwnTrainerCalendarFeeds = onCall(callableOptions(), async (request) => {
-  const { user } = await requireCurrentUser(request);
-  if (!user || user.role !== "trainer" || !user.trainerProfileId) {
-    throw new HttpsError("permission-denied", "Tylko trener może synchronizować feedy iCal.");
+function getTrainerCalendarFeedSyncSignature(feed) {
+  if (!feed) {
+    return "";
   }
 
-  const trainer = await requireTrainerProfile(user.trainerProfileId);
-  if (isCommunityBrandStatus(trainer.brandStatus)) {
-    throw new HttpsError("failed-precondition", "Panel wspólnych terminów jest dostępny tylko dla oficjalnych trenerów.");
-  }
+  return JSON.stringify({
+    trainerId: asString(feed.trainerId),
+    trainerUserId: asString(feed.trainerUserId),
+    provider: asString(feed.provider),
+    url: asString(feed.url),
+    enabled: feed.enabled === true,
+    syncRequestedAt: asString(feed.syncRequestedAt),
+  });
+}
 
-  try {
-    await rebuildTrainerExternalBusyMonths(trainer);
-  } catch (error) {
-    console.error("syncOwnTrainerCalendarFeeds failed", {
-      trainerId: trainer.id,
-      error: error instanceof Error ? error.message : error,
-    });
-    throw new HttpsError(
-      "internal",
-      "Nie udało się zsynchronizować feedów iCal. Spróbuj ponownie za chwilę.",
-    );
-  }
+export const onTrainerCalendarFeedWrite = onDocumentWritten(
+  {
+    region: FUNCTION_REGION,
+    document: `${collections.trainerCalendarFeeds}/{feedId}`,
+    retry: false,
+  },
+  async (event) => {
+    const before = event.data?.before.exists ? { id: event.data.before.id, ...event.data.before.data() } : null;
+    const after = event.data?.after.exists ? { id: event.data.after.id, ...event.data.after.data() } : null;
 
-  return { ok: true };
-});
+    if (getTrainerCalendarFeedSyncSignature(before) === getTrainerCalendarFeedSyncSignature(after)) {
+      return;
+    }
+
+    const feed = after ?? before;
+    const trainerId = asString(feed?.trainerId);
+
+    if (!trainerId) {
+      return;
+    }
+
+    const trainer = await findTrainerProfile(trainerId);
+
+    if (!trainer || isCommunityBrandStatus(trainer.brandStatus)) {
+      return;
+    }
+
+    try {
+      await rebuildTrainerExternalBusyMonths(trainer);
+    } catch (error) {
+      console.error("onTrainerCalendarFeedWrite failed", {
+        trainerId,
+        feedId: event.params.feedId,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  },
+);
 
 async function resolveNotificationContextForEvent(event) {
   const [trainer, organizer] = await Promise.all([

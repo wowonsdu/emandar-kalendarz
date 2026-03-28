@@ -3196,7 +3196,7 @@ export function AvailabilityPage() {
     try {
       setSyncingFeeds(true);
       await syncOwnTrainerCalendarFeeds();
-      toast.success("Feedy iCal zostaly zsynchronizowane.");
+      toast.success("Zlecono synchronizacje feedow iCal.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac kalendarzy.",

@@ -34,6 +34,7 @@ const shouldEnforceAppCheck =
   process.env.FUNCTIONS_EMULATOR !== "true" &&
   process.env.ENFORCE_APP_CHECK === "true";
 const PROXY_BASE_URL = "https://api.allorigins.win/raw?url=";
+const ICAL_FETCH_TIMEOUT_MS = 10000;
 const PUBLIC_APP_BASE_URL =
   asString(process.env.EMANDAR_PUBLIC_BASE_URL) ||
   asString(process.env.PUBLIC_APP_BASE_URL) ||
@@ -1216,11 +1217,25 @@ function normalizeFeedUrl(url) {
   return trimmedUrl;
 }
 
+async function fetchWithTimeout(url, init, timeoutMs = ICAL_FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function fetchCalendarResponse(url) {
   const normalizedUrl = normalizeFeedUrl(url);
 
   try {
-    const response = await fetch(normalizedUrl, {
+    const response = await fetchWithTimeout(normalizedUrl, {
       method: "GET",
       cache: "no-store",
     });
@@ -1232,7 +1247,7 @@ async function fetchCalendarResponse(url) {
     // Fallback below.
   }
 
-  const proxiedResponse = await fetch(
+  const proxiedResponse = await fetchWithTimeout(
     `${PROXY_BASE_URL}${encodeURIComponent(normalizedUrl)}`,
     {
       method: "GET",
@@ -3010,7 +3025,18 @@ export const syncOwnTrainerCalendarFeeds = onCall(callableOptions(), async (requ
     throw new HttpsError("failed-precondition", "Panel wspólnych terminów jest dostępny tylko dla oficjalnych trenerów.");
   }
 
-  await rebuildTrainerExternalBusyMonths(trainer);
+  try {
+    await rebuildTrainerExternalBusyMonths(trainer);
+  } catch (error) {
+    console.error("syncOwnTrainerCalendarFeeds failed", {
+      trainerId: trainer.id,
+      error: error instanceof Error ? error.message : error,
+    });
+    throw new HttpsError(
+      "internal",
+      "Nie udało się zsynchronizować feedów iCal. Spróbuj ponownie za chwilę.",
+    );
+  }
 
   return { ok: true };
 });

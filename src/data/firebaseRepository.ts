@@ -46,7 +46,6 @@ import type {
   AvailabilitySlot,
   DemoStore,
   EmandarBrandStatus,
-  ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFormInput,
   ParticipantEnrollmentManagementInput,
@@ -89,14 +88,12 @@ import {
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
-  mergeBusyIntervals,
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
   resolveTrainingEventStatus,
 } from "@/domain/utils";
-import { fetchIcalBusyIntervals } from "@/lib/ical";
 
 type StorePatch = Partial<DemoStore>;
 
@@ -190,32 +187,6 @@ async function hashTrainerAuthorizationCode(code: string) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function formatMonthKey(date: Date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function getAvailabilitySyncRange() {
-  const rangeStart = new Date();
-
-  const rangeEnd = new Date(rangeStart);
-  rangeEnd.setUTCFullYear(rangeEnd.getUTCFullYear() + 3);
-
-  return { rangeStart, rangeEnd };
-}
-
-function splitIntervalsByMonth(intervals: ExternalBusyInterval[]) {
-  const grouped = new Map<string, ExternalBusyInterval[]>();
-
-  intervals.forEach((interval) => {
-    const key = formatMonthKey(new Date(interval.startsAt));
-    const existing = grouped.get(key) ?? [];
-    existing.push(interval);
-    grouped.set(key, existing);
-  });
-
-  return grouped;
 }
 
 function resolveBrandStatus(
@@ -1775,103 +1746,6 @@ export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUs
   });
 }
 
-async function rebuildTrainerExternalBusyMonths(trainer: TrainerProfile) {
-  const { db } = assertReady();
-  const { rangeStart, rangeEnd } = getAvailabilitySyncRange();
-  const feedSnapshots = await mapQuery<TrainerCalendarFeed>(
-    query(
-      collection(db, collections.trainerCalendarFeeds),
-      where("trainerId", "==", trainer.id),
-    ),
-  );
-  const enabledFeeds = feedSnapshots.filter((feed) => feed.enabled);
-  const trainerEvents = await mapQuery<TrainingEvent>(
-    query(
-      collection(db, collections.trainingEvents),
-      where("trainerId", "==", trainer.id),
-    ),
-  );
-  const emandarIntervals = trainerEvents
-    .filter(
-      (event) =>
-        !isTrainingEventArchived(event) &&
-        resolveEventStatus(event.status) !== "cancelled",
-    )
-    .flatMap((event) =>
-      getTrainingEventScheduleDays(event).map((day) => ({
-        startsAt: day.startsAt,
-        endsAt: day.endsAt,
-        source: "emandar" as const,
-        sourceLabel: event.title || event.location,
-      })),
-    );
-
-  const successfulIntervals: ExternalBusyInterval[] = [];
-  let successfulFeedCount = 0;
-
-  for (const feed of enabledFeeds) {
-    try {
-      const fetchedIntervals = await fetchIcalBusyIntervals({
-        provider: feed.provider,
-        sourceLabel: feed.id,
-        url: feed.url,
-        rangeStart,
-        rangeEnd,
-      });
-
-      successfulIntervals.push(...fetchedIntervals);
-      successfulFeedCount += 1;
-      await updateDoc(doc(db, collections.trainerCalendarFeeds, feed.id), {
-        lastSyncedAt: nowIso(),
-        lastSyncStatus: "success",
-        lastSyncError: deleteField(),
-        updatedAt: nowIso(),
-      });
-    } catch (error) {
-      await updateDoc(doc(db, collections.trainerCalendarFeeds, feed.id), {
-        lastSyncedAt: nowIso(),
-        lastSyncStatus: "error",
-        lastSyncError:
-          error instanceof Error ? error.message : "Nie udało się pobrać feedu iCal.",
-        updatedAt: nowIso(),
-      });
-    }
-  }
-
-  if (enabledFeeds.length > 0 && successfulFeedCount === 0) {
-    return;
-  }
-
-  const mergedIntervals = mergeBusyIntervals([
-    ...emandarIntervals,
-    ...successfulIntervals,
-  ]);
-  const groupedIntervals = splitIntervalsByMonth(mergedIntervals);
-  const existingMonthDocs = await mapQuery<TrainerExternalBusyMonth>(
-    query(
-      collection(db, collections.trainerExternalBusyMonths),
-      where("trainerId", "==", trainer.id),
-    ),
-  );
-  const batch = writeBatch(db);
-
-  existingMonthDocs.forEach((monthDoc) => {
-    batch.delete(doc(db, collections.trainerExternalBusyMonths, monthDoc.id));
-  });
-
-  groupedIntervals.forEach((intervals, monthKey) => {
-    const monthDocId = `${trainer.id}__${monthKey}`;
-    batch.set(doc(db, collections.trainerExternalBusyMonths, monthDocId), {
-      trainerId: trainer.id,
-      monthKey,
-      intervals,
-      updatedAt: nowIso(),
-    });
-  });
-
-  await batch.commit();
-}
-
 export async function addTrainerCalendarFeed(
   input: TrainerCalendarFeedInput,
   actor: AppUser,
@@ -1900,7 +1774,7 @@ export async function addTrainerCalendarFeed(
     updatedAt: createdAt,
   });
 
-  await rebuildTrainerExternalBusyMonths(trainer);
+  await syncOwnTrainerCalendarFeeds(actor);
 }
 
 export async function updateTrainerCalendarFeedEnabled(
@@ -1926,7 +1800,7 @@ export async function updateTrainerCalendarFeedEnabled(
     updatedAt: nowIso(),
   });
 
-  await rebuildTrainerExternalBusyMonths(trainer);
+  await syncOwnTrainerCalendarFeeds(actor);
 }
 
 export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) {
@@ -1944,24 +1818,15 @@ export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) 
   }
 
   await deleteDoc(doc(db, collections.trainerCalendarFeeds, feedId));
-  await rebuildTrainerExternalBusyMonths(trainer);
+  await syncOwnTrainerCalendarFeeds(actor);
 }
 
 export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
-  void actor;
-  await callFirebaseFunction<undefined, { ok: true }>("syncOwnTrainerCalendarFeeds");
-  return;
   if (actor.role !== "trainer" || !actor.trainerProfileId) {
-    throw new Error("Tylko trener może synchronizować feedy iCal.");
+    throw new Error("Tylko trener moze synchronizowac feedy iCal.");
   }
 
-  const trainer = await getTrainerProfile(actor.trainerProfileId);
-
-  if (isCommunityBrandStatus(trainer.brandStatus)) {
-    throw new Error("Panel wspólnych terminów jest dostępny tylko dla oficjalnych trenerów.");
-  }
-
-  await rebuildTrainerExternalBusyMonths(trainer);
+  await callFirebaseFunction<undefined, { ok: true }>("syncOwnTrainerCalendarFeeds");
 }
 
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {

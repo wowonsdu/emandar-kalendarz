@@ -35,7 +35,7 @@ import { useAppState } from "../providers/AppProviders";
 import { resolveAttendanceConfirmationStatusLabel } from "@/domain/notifications";
 import {
   aggregateEventCapacityStats,
-  buildSharedAvailabilityWindows,
+  buildTrainerFreeDaySlices,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
   getEventCollaborationStatusLabel,
@@ -65,6 +65,7 @@ import type {
   EnrollmentRequest,
   OrganizerProfile,
   TrainerProfile,
+  TrainerFreeDaySliceBucket,
   TrainingEventImage,
   TrainerCalendarFeedProvider,
   TrainingEvent,
@@ -104,6 +105,26 @@ function formatDurationHours(hours: number) {
 
   return `${hours.toFixed(1).replace(".", ",")} h`;
 }
+
+function getFreeSliceBucketLabel(bucket: TrainerFreeDaySliceBucket) {
+  switch (bucket) {
+    case "2-days":
+      return "2 dni";
+    case "3-days":
+      return "3 dni";
+    case "4-plus-days":
+      return "Wiecej niz 3 dni";
+    default:
+      return "1 dzien";
+  }
+}
+
+const FREE_SLICE_BUCKETS = [
+  "1-day",
+  "2-days",
+  "3-days",
+  "4-plus-days",
+] as const satisfies TrainerFreeDaySliceBucket[];
 
 function getAvailabilityHorizonEnd() {
   const end = new Date();
@@ -3019,10 +3040,10 @@ export function AvailabilityPage() {
     provider: "google" as TrainerCalendarFeedProvider,
     url: "",
   });
-  const [selectedTrainerIds, setSelectedTrainerIds] = useState<string[]>([]);
-  const [minimumDurationHours, setMinimumDurationHours] = useState(1);
-  const [showOnlyFullMatch, setShowOnlyFullMatch] = useState(false);
   const [syncingFeeds, setSyncingFeeds] = useState(false);
+  const [activeFreeSliceBucket, setActiveFreeSliceBucket] = useState<
+    "all" | TrainerFreeDaySliceBucket
+  >("all");
 
   if (!currentUser) {
     return null;
@@ -3046,13 +3067,6 @@ export function AvailabilityPage() {
       : currentUser.role === "trainer"
         ? store.availabilitySlots.filter((slot) => slot.trainerId === trainerProfile?.id)
         : store.availabilitySlots;
-  const officialTrainers = useMemo(
-    () =>
-      sortTrainerProfiles(
-        store.trainers.filter((trainer) => !isCommunityTrainerProfile(trainer.brandStatus)),
-      ),
-    [store.trainers],
-  );
   const ownCalendarFeeds = useMemo(
     () =>
       (trainerProfile
@@ -3070,112 +3084,76 @@ export function AvailabilityPage() {
       return;
     }
 
-    setSelectedTrainerIds((previous) => {
-      const preservedIds = previous.filter((trainerId) =>
-        officialTrainers.some((trainer) => trainer.id === trainerId),
-      );
-
-      if (!preservedIds.includes(trainerProfile.id)) {
-        preservedIds.unshift(trainerProfile.id);
-      }
-
-      return preservedIds.length > 0 ? preservedIds : [trainerProfile.id];
-    });
-  }, [currentUser.role, isCommunityTrainer, officialTrainers, trainerProfile]);
-
-  useEffect(() => {
-    if (!trainerProfile || currentUser.role !== "trainer" || isCommunityTrainer) {
-      return;
-    }
-
     void syncOwnTrainerCalendarFeeds().catch(() => {});
   }, [currentUser.role, isCommunityTrainer, syncOwnTrainerCalendarFeeds, trainerProfile?.id]);
 
-  const selectedTrainerProfiles = useMemo(
-    () => officialTrainers.filter((trainer) => selectedTrainerIds.includes(trainer.id)),
-    [officialTrainers, selectedTrainerIds],
-  );
-  const eventBusyIntervalsByTrainer = useMemo(
-    () =>
-      selectedTrainerIds.reduce<Record<string, Array<{ startsAt: string; endsAt: string; source: "emandar" }>>>(
-        (accumulator, trainerId) => {
-          accumulator[trainerId] = store.trainingEvents
-            .filter(
-              (event) =>
-                event.trainerId === trainerId &&
-                !isTrainingEventArchived(event) &&
-                resolveTrainingEventStatus(event.status) !== "cancelled",
-            )
-            .flatMap((event) =>
-              getTrainingEventScheduleDays(event).map((day) => ({
-                startsAt: day.startsAt,
-                endsAt: day.endsAt,
-                source: "emandar" as const,
-              })),
-            );
-
-          return accumulator;
-        },
-        {},
-      ),
-    [selectedTrainerIds, store.trainingEvents],
-  );
-  const externalBusyIntervalsByTrainer = useMemo(
-    () =>
-      selectedTrainerIds.reduce<Record<string, typeof store.trainerExternalBusyMonths[number]["intervals"]>>(
-        (accumulator, trainerId) => {
-          accumulator[trainerId] = store.trainerExternalBusyMonths
-            .filter((month) => month.trainerId === trainerId)
-            .flatMap((month) => month.intervals);
-
-          return accumulator;
-        },
-        {},
-      ),
-    [selectedTrainerIds, store.trainerExternalBusyMonths],
-  );
-  const trainerNamesById = useMemo(
-    () =>
-      Object.fromEntries(
-        officialTrainers.map((trainer) => [trainer.id, trainer.displayName]),
-      ) as Record<string, string>,
-    [officialTrainers],
-  );
-  const sharedAvailabilityWindows = useMemo(() => {
-    if (selectedTrainerIds.length === 0) {
+  const ownBusyIntervals = useMemo(() => {
+    if (!trainerProfile) {
       return [];
     }
 
-    const rangeStart = new Date();
-    rangeStart.setUTCMinutes(0, 0, 0);
-
-    const computedWindows = buildSharedAvailabilityWindows({
-      trainerIds: selectedTrainerIds,
-      rangeStart: rangeStart.toISOString(),
-      rangeEnd: getAvailabilityHorizonEnd(),
-      minimumDurationHours,
-      busyIntervalsByTrainer: selectedTrainerIds.reduce<
-        Record<string, Array<{ startsAt: string; endsAt: string; source: "emandar" | "ical"; sourceLabel?: string }>>
-      >((accumulator, trainerId) => {
-        accumulator[trainerId] = [
-          ...(eventBusyIntervalsByTrainer[trainerId] ?? []),
-          ...(externalBusyIntervalsByTrainer[trainerId] ?? []),
-        ];
-
-        return accumulator;
-      }, {}),
-    });
-
-    return computedWindows
-      .filter((window) => (showOnlyFullMatch ? window.isFullMatch : true))
-      .slice(0, 80);
+    return [
+      ...store.trainingEvents
+        .filter(
+          (event) =>
+            event.trainerId === trainerProfile.id &&
+            !isTrainingEventArchived(event) &&
+            resolveTrainingEventStatus(event.status) !== "cancelled",
+        )
+        .flatMap((event) =>
+          getTrainingEventScheduleDays(event).map((day) => ({
+            startsAt: day.startsAt,
+            endsAt: day.endsAt,
+            source: "emandar" as const,
+          })),
+        ),
+      ...store.trainerExternalBusyMonths
+        .filter((month) => month.trainerId === trainerProfile.id)
+        .flatMap((month) => month.intervals),
+    ];
   }, [
-    eventBusyIntervalsByTrainer,
-    externalBusyIntervalsByTrainer,
-    minimumDurationHours,
-    selectedTrainerIds,
-    showOnlyFullMatch,
+    store.trainerExternalBusyMonths,
+    store.trainingEvents,
+    trainerProfile,
   ]);
+  const freeDaySlices = useMemo(() => {
+    if (!trainerProfile || ownCalendarFeeds.length === 0) {
+      return [];
+    }
+
+    return buildTrainerFreeDaySlices({
+      busyIntervals: ownBusyIntervals,
+      rangeStart: new Date().toISOString(),
+      rangeEnd: getAvailabilityHorizonEnd(),
+      minimumDurationHours: 1,
+    }).slice(0, 240);
+  }, [ownBusyIntervals, ownCalendarFeeds.length, trainerProfile]);
+  const freeDaySlicesByBucket = useMemo(
+    () =>
+      FREE_SLICE_BUCKETS.reduce<Record<TrainerFreeDaySliceBucket, typeof freeDaySlices>>(
+        (accumulator, bucket) => {
+          accumulator[bucket] = freeDaySlices.filter((slice) => slice.spanBucket === bucket);
+          return accumulator;
+        },
+        {
+          "1-day": [],
+          "2-days": [],
+          "3-days": [],
+          "4-plus-days": [],
+        },
+      ),
+    [freeDaySlices],
+  );
+  const enabledFeedCount = ownCalendarFeeds.filter((feed) => feed.enabled).length;
+  const visibleFreeSliceBuckets = useMemo(() => {
+    if (activeFreeSliceBucket !== "all") {
+      return [activeFreeSliceBucket];
+    }
+
+    return FREE_SLICE_BUCKETS.filter(
+      (bucket) => (freeDaySlicesByBucket[bucket] ?? []).length > 0,
+    );
+  }, [activeFreeSliceBucket, freeDaySlicesByBucket]);
 
   async function handleSyncFeeds() {
     try {
@@ -3191,16 +3169,255 @@ export function AvailabilityPage() {
     }
   }
 
+  async function handleAddFeed(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      await addTrainerCalendarFeed(feedForm);
+      setFeedForm((current) => ({
+        ...current,
+        url: "",
+      }));
+      toast.success("Dodano feed iCal.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu iCal.");
+    }
+  }
+
   return (
     <PanelSection
       eyebrow="Terminy"
       title={
         currentUser.role === "organizer"
-        ? "Terminy zatwierdzonych Przekazujących Wiedzę"
-          : "Dostępność i sloty pod nowe grupy"
+          ? "Terminy zatwierdzonych Przekazujacych Wiedze"
+          : "Dostepnosc, sloty i wolne okna"
       }
-      description="Organizator widzi tylko sloty Przekazujących Wiedzę z zatwierdzoną relacją. Przekazujący Wiedzę i admin mogą dodawać nowe terminy."
+      description="Organizator widzi tylko reczne sloty trenerow z zatwierdzona relacja. Trener dodatkowo moze podpiac iCal i przegladac tylko przyszle wolne przedzialy bez podgladu swoich eventow."
     >
+      {currentUser.role === "trainer" && trainerProfile && !isCommunityTrainer && (
+        <div className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <SectionBlockHeading
+              title="Feedy iCal"
+              description="Podpinamy publiczny kalendarz tylko po to, by policzyc przyszle wolne przedzialy. Szczegoly wydarzen pozostaja ukryte."
+            />
+
+            <div className="mt-6 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void handleSyncFeeds()}
+                disabled={enabledFeedCount === 0 || syncingFeeds}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCcw size={16} />
+                {syncingFeeds ? "Synchronizowanie..." : "Synchronizuj feedy"}
+              </button>
+              <p className="text-sm text-brand-muted">
+                Aktywne feedy: {enabledFeedCount} / {ownCalendarFeeds.length}
+              </p>
+            </div>
+
+            <form
+              onSubmit={(event) => void handleAddFeed(event)}
+              className="mt-6 grid gap-4 xl:grid-cols-[160px_minmax(0,1fr)_auto]"
+            >
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-brand-navy">Provider</span>
+                <select
+                  value={feedForm.provider}
+                  onChange={(event) =>
+                    setFeedForm((current) => ({
+                      ...current,
+                      provider: event.target.value as TrainerCalendarFeedProvider,
+                    }))
+                  }
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                >
+                  <option value="google">Google</option>
+                  <option value="apple">Apple</option>
+                  <option value="ical">iCal</option>
+                </select>
+              </label>
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-brand-navy">URL feedu</span>
+                <input
+                  value={feedForm.url}
+                  onChange={(event) =>
+                    setFeedForm((current) => ({
+                      ...current,
+                      url: event.target.value,
+                    }))
+                  }
+                  placeholder="https://.../basic.ics"
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                />
+              </label>
+              <div className="flex items-end">
+                <button
+                  type="submit"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sky px-5 py-3 text-sm font-semibold text-brand-navy"
+                >
+                  <Link2 size={16} />
+                  Dodaj feed
+                </button>
+              </div>
+            </form>
+
+            <div className="mt-6 space-y-3">
+              {ownCalendarFeeds.length === 0 ? (
+                <EmptyPanelState
+                  title="Brak feedow iCal"
+                  description="Dodaj feed, aby wyliczyc tylko przyszle wolne przedzialy dzienne."
+                />
+              ) : (
+                ownCalendarFeeds.map((feed) => (
+                  <article
+                    key={feed.id}
+                    className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
+                          {feed.provider}
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-brand-navy">
+                          Status:{" "}
+                          {feed.lastSyncStatus === "error"
+                            ? "blad"
+                            : feed.lastSyncStatus === "success"
+                              ? "zsynchronizowano"
+                              : "oczekuje"}
+                        </p>
+                        <p className="mt-2 break-all text-sm text-brand-muted">{feed.url}</p>
+                        {feed.lastSyncedAt && (
+                          <p className="mt-2 text-xs text-brand-muted">
+                            Ostatnia synchronizacja: {formatDateTime(feed.lastSyncedAt)}
+                          </p>
+                        )}
+                        {feed.lastSyncError && (
+                          <p className="mt-2 text-sm text-red-600">{feed.lastSyncError}</p>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void updateTrainerCalendarFeedEnabled(feed.id, !feed.enabled)
+                          }
+                          className="inline-flex items-center gap-2 rounded-full border border-brand-line px-4 py-2 text-sm font-semibold text-brand-navy"
+                        >
+                          {feed.enabled ? <Check size={14} /> : <X size={14} />}
+                          {feed.enabled ? "Wylacz" : "Wlacz"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void removeTrainerCalendarFeed(feed.id)}
+                          className="inline-flex items-center gap-2 rounded-full border border-brand-line px-4 py-2 text-sm font-semibold text-brand-navy"
+                        >
+                          <Trash2 size={14} />
+                          Usun
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </article>
+
+          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <SectionBlockHeading
+              title="Wolne terminy z kalendarza"
+              description="Pokazujemy tylko przyszle wolne przedzialy dzienne. Zrodlowe eventy kalendarza nie sa nigdzie wyswietlane."
+            />
+
+            <div className="mt-6 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveFreeSliceBucket("all")}
+                className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                  activeFreeSliceBucket === "all"
+                    ? "bg-brand-navy text-white"
+                    : "border border-brand-line text-brand-navy"
+                }`}
+              >
+                Wszystkie ({freeDaySlices.length})
+              </button>
+              {FREE_SLICE_BUCKETS.map((bucket) => (
+                <button
+                  key={bucket}
+                  type="button"
+                  onClick={() => setActiveFreeSliceBucket(bucket)}
+                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                    activeFreeSliceBucket === bucket
+                      ? "bg-brand-navy text-white"
+                      : "border border-brand-line text-brand-navy"
+                  }`}
+                >
+                  {getFreeSliceBucketLabel(bucket)} ({freeDaySlicesByBucket[bucket].length})
+                </button>
+              ))}
+            </div>
+
+            {enabledFeedCount === 0 ? (
+              <div className="mt-6">
+                <EmptyPanelState
+                  title="Brak aktywnego feedu"
+                  description="Aktywuj przynajmniej jeden feed iCal, aby zobaczyc przyszle wolne przedzialy."
+                />
+              </div>
+            ) : freeDaySlices.length === 0 ? (
+              <div className="mt-6">
+                <EmptyPanelState
+                  title="Brak wolnych przedzialow"
+                  description="W aktualnym horyzoncie nie ma jeszcze wolnych dziennych okien spelniajacych minimum jednej godziny."
+                />
+              </div>
+            ) : (
+              <div className="mt-6 space-y-6">
+                {visibleFreeSliceBuckets.map((bucket) => (
+                  <section key={bucket}>
+                    <div className="flex items-center justify-between gap-3">
+                      <h4 className="text-lg font-semibold text-brand-navy">
+                        {getFreeSliceBucketLabel(bucket)}
+                      </h4>
+                      <p className="text-sm text-brand-muted">
+                        {freeDaySlicesByBucket[bucket].length} przedzialow
+                      </p>
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {freeDaySlicesByBucket[bucket].map((slice) => (
+                        <article
+                          key={`${slice.startsAt}-${slice.endsAt}`}
+                          className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
+                        >
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-lg font-semibold text-brand-navy">
+                                {formatDate(slice.startsAt)}
+                              </p>
+                              <p className="mt-1 text-brand-muted">
+                                {formatShortTime(slice.startsAt)} - {formatShortTime(slice.endsAt)}
+                              </p>
+                            </div>
+                            <div className="text-right text-sm text-brand-muted">
+                              <p>{formatDurationHours(slice.durationHours)}</p>
+                              <p className="mt-1">
+                                Luka: {slice.spanDays} {slice.spanDays === 1 ? "dzien" : "dni"}
+                              </p>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
+          </article>
+        </div>
+      )}
+
       {(currentUser.role === "trainer" || currentUser.role === "admin") && (
         <form
           onSubmit={async (event) => {
@@ -3305,12 +3522,19 @@ export function AvailabilityPage() {
         </form>
       )}
 
+      <div className="mt-6">
+        <SectionBlockHeading
+          title="Reczne sloty"
+          description="Ta lista pokazuje tylko sloty dodane recznie w panelu. Nie zawiera wydarzen z iCal ani ich szczegolow."
+        />
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-2">
         {slots.length === 0 && (
           <div className="lg:col-span-2">
             <EmptyPanelState
               title="Brak terminów"
-            description="Terminy Przekazujących Wiedzę widoczne dla tej roli pojawią się tutaj."
+              description="Reczne terminy Przekazujacych Wiedzy widoczne dla tej roli pojawia sie tutaj."
             />
           </div>
         )}

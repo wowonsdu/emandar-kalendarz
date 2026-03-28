@@ -224,6 +224,23 @@ export interface SharedAvailabilityWindow {
   isFullMatch: boolean;
 }
 
+export type TrainerFreeDaySliceBucket =
+  | "1-day"
+  | "2-days"
+  | "3-days"
+  | "4-plus-days";
+
+export interface TrainerFreeDaySlice {
+  startsAt: string;
+  endsAt: string;
+  dayKey: string;
+  durationHours: number;
+  spanStartsAt: string;
+  spanEndsAt: string;
+  spanDays: number;
+  spanBucket: TrainerFreeDaySliceBucket;
+}
+
 export interface EnrollmentRequest {
   id: string;
   eventId: string;

@@ -1250,6 +1250,17 @@ function toJsDate(value) {
   return value ? value.toJSDate() : null;
 }
 
+function getNormalizedPropertyValue(vevent, propertyName) {
+  const value = vevent.getFirstPropertyValue(propertyName);
+  return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
+function shouldTreatEventAsBusy(vevent) {
+  const transparency = getNormalizedPropertyValue(vevent, "transp");
+  const status = getNormalizedPropertyValue(vevent, "status");
+  return transparency !== "TRANSPARENT" && status !== "CANCELLED";
+}
+
 async function fetchIcalBusyIntervals({ provider, sourceLabel, url, rangeStart, rangeEnd }) {
   const response = await fetchCalendarResponse(url);
   const rawCalendar = await response.text();
@@ -1259,6 +1270,10 @@ async function fetchIcalBusyIntervals({ provider, sourceLabel, url, rangeStart, 
   const busyIntervals = [];
 
   vevents.forEach((vevent) => {
+    if (!shouldTreatEventAsBusy(vevent)) {
+      return;
+    }
+
     const event = new ICAL.Event(vevent);
 
     if (!event.startDate) {
@@ -1372,7 +1387,6 @@ function splitIntervalsByMonth(intervals) {
 
 function getAvailabilitySyncRange() {
   const rangeStart = new Date();
-  rangeStart.setUTCMinutes(0, 0, 0);
 
   const rangeEnd = new Date(rangeStart);
   rangeEnd.setUTCFullYear(rangeEnd.getUTCFullYear() + 3);

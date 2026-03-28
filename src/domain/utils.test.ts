@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateEventCapacityStats,
   buildSharedAvailabilityWindows,
+  buildTrainerFreeDaySlices,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
   canOrganizerAccessTrainer,
@@ -477,5 +478,44 @@ describe("permissions and sorting", () => {
     });
 
     expect(windows.some((window) => window.availableCount === 1)).toBe(true);
+  });
+
+  it("builds future free day slices grouped by span length", () => {
+    const slices = buildTrainerFreeDaySlices({
+      rangeStart: "2026-03-10T08:20:00.000Z",
+      rangeEnd: "2026-03-16T20:00:00.000Z",
+      minimumDurationHours: 1,
+      busyIntervals: [
+        {
+          startsAt: "2026-03-10T09:00:00.000Z",
+          endsAt: "2026-03-10T12:00:00.000Z",
+          source: "ical",
+        },
+        {
+          startsAt: "2026-03-12T10:00:00.000Z",
+          endsAt: "2026-03-12T13:00:00.000Z",
+          source: "emandar",
+        },
+      ],
+    });
+
+    expect(slices[0]).toEqual({
+      startsAt: "2026-03-10T12:00:00.000Z",
+      endsAt: "2026-03-11T00:00:00.000Z",
+      dayKey: "2026-03-10",
+      durationHours: 12,
+      spanStartsAt: "2026-03-10T12:00:00.000Z",
+      spanEndsAt: "2026-03-12T10:00:00.000Z",
+      spanDays: 3,
+      spanBucket: "3-days",
+    });
+
+    expect(slices[1]).toMatchObject({
+      startsAt: "2026-03-11T00:00:00.000Z",
+      endsAt: "2026-03-12T00:00:00.000Z",
+      spanDays: 3,
+      spanBucket: "3-days",
+    });
+    expect(slices.some((slice) => slice.spanBucket === "4-plus-days")).toBe(true);
   });
 });

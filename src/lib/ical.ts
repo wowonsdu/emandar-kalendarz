@@ -71,27 +71,45 @@ function toJsDate(value: ICAL.Time | null) {
   return value.toJSDate();
 }
 
-export async function fetchIcalBusyIntervals({
+function getNormalizedPropertyValue(
+  vevent: ICAL.Component,
+  propertyName: string,
+) {
+  const value = vevent.getFirstPropertyValue(propertyName);
+
+  return typeof value === "string" ? value.trim().toUpperCase() : "";
+}
+
+function shouldTreatEventAsBusy(vevent: ICAL.Component) {
+  const transparency = getNormalizedPropertyValue(vevent, "transp");
+  const status = getNormalizedPropertyValue(vevent, "status");
+
+  return transparency !== "TRANSPARENT" && status !== "CANCELLED";
+}
+
+export function parseIcalBusyIntervals({
   provider,
   sourceLabel,
-  url,
+  rawCalendar,
   rangeStart,
   rangeEnd,
 }: {
   provider: TrainerCalendarFeedProvider;
   sourceLabel: string;
-  url: string;
+  rawCalendar: string;
   rangeStart: Date;
   rangeEnd: Date;
 }) {
-  const response = await fetchCalendarResponse(url);
-  const rawCalendar = await response.text();
   const jcalData = ICAL.parse(rawCalendar);
   const component = new ICAL.Component(jcalData);
   const vevents = component.getAllSubcomponents("vevent");
   const busyIntervals: ExternalBusyInterval[] = [];
 
   vevents.forEach((vevent) => {
+    if (!shouldTreatEventAsBusy(vevent)) {
+      return;
+    }
+
     const event = new ICAL.Event(vevent);
 
     if (!event.startDate) {
@@ -165,4 +183,28 @@ export async function fetchIcalBusyIntervals({
   });
 
   return busyIntervals;
+}
+
+export async function fetchIcalBusyIntervals({
+  provider,
+  sourceLabel,
+  url,
+  rangeStart,
+  rangeEnd,
+}: {
+  provider: TrainerCalendarFeedProvider;
+  sourceLabel: string;
+  url: string;
+  rangeStart: Date;
+  rangeEnd: Date;
+}) {
+  const response = await fetchCalendarResponse(url);
+  const rawCalendar = await response.text();
+  return parseIcalBusyIntervals({
+    provider,
+    sourceLabel,
+    rawCalendar,
+    rangeStart,
+    rangeEnd,
+  });
 }

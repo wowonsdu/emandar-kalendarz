@@ -119,8 +119,16 @@ function getFreeSliceBucketLabel(bucket: TrainerFreeDaySliceBucket) {
       return "2 dni";
     case "3-days":
       return "3 dni";
-    case "4-plus-days":
-      return "Wiecej niz 3 dni";
+    case "4-days":
+      return "4 dni";
+    case "5-days":
+      return "5 dni";
+    case "6-days":
+      return "6 dni";
+    case "7-days":
+      return "7 dni";
+    case "more-than-7-days":
+      return "Wiecej niz 7 dni";
     default:
       return "1 dzien";
   }
@@ -130,7 +138,11 @@ const FREE_SLICE_BUCKETS = [
   "1-day",
   "2-days",
   "3-days",
-  "4-plus-days",
+  "4-days",
+  "5-days",
+  "6-days",
+  "7-days",
+  "more-than-7-days",
 ] as const satisfies TrainerFreeDaySliceBucket[];
 
 function getAvailabilityHorizonEnd() {
@@ -3266,7 +3278,11 @@ export function AvailabilityPage() {
           "1-day": [],
           "2-days": [],
           "3-days": [],
-          "4-plus-days": [],
+          "4-days": [],
+          "5-days": [],
+          "6-days": [],
+          "7-days": [],
+          "more-than-7-days": [],
         },
       ),
     [freeDaySlices],

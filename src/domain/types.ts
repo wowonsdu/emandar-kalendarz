@@ -236,7 +236,11 @@ export type TrainerFreeDaySliceBucket =
   | "1-day"
   | "2-days"
   | "3-days"
-  | "4-plus-days";
+  | "4-days"
+  | "5-days"
+  | "6-days"
+  | "7-days"
+  | "more-than-7-days";
 
 export interface TrainerFreeDaySlice {
   startsAt: string;

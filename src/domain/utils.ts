@@ -552,7 +552,23 @@ function getTrainerFreeDaySliceBucket(spanDays: number): TrainerFreeDaySliceBuck
     return "3-days";
   }
 
-  return "4-plus-days";
+  if (spanDays === 4) {
+    return "4-days";
+  }
+
+  if (spanDays === 5) {
+    return "5-days";
+  }
+
+  if (spanDays === 6) {
+    return "6-days";
+  }
+
+  if (spanDays === 7) {
+    return "7-days";
+  }
+
+  return "more-than-7-days";
 }
 
 export function mergeBusyIntervals(intervals: ExternalBusyInterval[]) {

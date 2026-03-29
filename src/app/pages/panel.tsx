@@ -65,6 +65,7 @@ import type {
   EnrollmentRequest,
   OrganizerProfile,
   PhotoMode,
+  TrainerCalendarLivePreview,
   TrainerProfile,
   TrainerFreeDaySliceBucket,
   TrainingEventImage,
@@ -3074,10 +3075,12 @@ export function AvailabilityPage() {
     notes: "Nowy termin",
   });
   const [feedForm, setFeedForm] = useState({
-    provider: "google" as TrainerCalendarFeedProvider,
+    provider: "ical" as TrainerCalendarFeedProvider,
     url: "",
   });
   const [syncingFeeds, setSyncingFeeds] = useState(false);
+  const [liveCalendarPreview, setLiveCalendarPreview] =
+    useState<TrainerCalendarLivePreview | null>(null);
   const [activeFreeSliceBucket, setActiveFreeSliceBucket] = useState<
     "all" | TrainerFreeDaySliceBucket
   >("all");
@@ -3116,55 +3119,61 @@ export function AvailabilityPage() {
     [store.trainerCalendarFeeds, trainerProfile],
   );
 
+  async function loadOwnCalendarPreview() {
+    const preview = await syncOwnTrainerCalendarFeeds();
+    setLiveCalendarPreview(preview);
+    return preview;
+  }
+
   useEffect(() => {
     if (!trainerProfile || currentUser.role !== "trainer" || isCommunityTrainer) {
+      setLiveCalendarPreview(null);
       return;
     }
 
-    void syncOwnTrainerCalendarFeeds().catch(() => {});
+    let cancelled = false;
+
+    void syncOwnTrainerCalendarFeeds()
+      .then((preview) => {
+        if (!cancelled) {
+          setLiveCalendarPreview(preview);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLiveCalendarPreview(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser.role, isCommunityTrainer, syncOwnTrainerCalendarFeeds, trainerProfile?.id]);
 
   const ownBusyIntervals = useMemo(() => {
-    if (!trainerProfile) {
+    if (!trainerProfile || !liveCalendarPreview) {
       return [];
     }
 
-    return [
-      ...store.trainingEvents
-        .filter(
-          (event) =>
-            event.trainerId === trainerProfile.id &&
-            !isTrainingEventArchived(event) &&
-            resolveTrainingEventStatus(event.status) !== "cancelled",
-        )
-        .flatMap((event) =>
-          getTrainingEventScheduleDays(event).map((day) => ({
-            startsAt: day.startsAt,
-            endsAt: day.endsAt,
-            source: "emandar" as const,
-          })),
-        ),
-      ...store.trainerExternalBusyMonths
-        .filter((month) => month.trainerId === trainerProfile.id)
-        .flatMap((month) => month.intervals),
-    ];
-  }, [
-    store.trainerExternalBusyMonths,
-    store.trainingEvents,
-    trainerProfile,
-  ]);
+    return liveCalendarPreview.busyIntervals;
+  }, [liveCalendarPreview, trainerProfile]);
   const freeDaySlices = useMemo(() => {
-    if (!trainerProfile || ownCalendarFeeds.length === 0) {
+    if (
+      !trainerProfile ||
+      ownCalendarFeeds.length === 0 ||
+      !liveCalendarPreview ||
+      liveCalendarPreview.successfulFeedCount === 0
+    ) {
       return [];
     }
 
     return buildTrainerFreeDaySlices({
       busyIntervals: ownBusyIntervals,
-      rangeStart: new Date().toISOString(),
-      rangeEnd: getAvailabilityHorizonEnd(),
+      rangeStart: liveCalendarPreview.rangeStart,
+      rangeEnd: liveCalendarPreview.rangeEnd,
       minimumDurationHours: 1,
     }).slice(0, 240);
-  }, [ownBusyIntervals, ownCalendarFeeds.length, trainerProfile]);
+  }, [liveCalendarPreview, ownBusyIntervals, ownCalendarFeeds.length, trainerProfile]);
   const freeDaySlicesByBucket = useMemo(
     () =>
       FREE_SLICE_BUCKETS.reduce<Record<TrainerFreeDaySliceBucket, typeof freeDaySlices>>(
@@ -3195,8 +3204,15 @@ export function AvailabilityPage() {
   async function handleSyncFeeds() {
     try {
       setSyncingFeeds(true);
-      await syncOwnTrainerCalendarFeeds();
-      toast.success("Zlecono synchronizacje feedow iCal.");
+      const preview = await loadOwnCalendarPreview();
+
+      if (preview.enabledFeedCount === 0) {
+        toast.success("Brak aktywnych feedow iCal.");
+      } else if (preview.successfulFeedCount === 0) {
+        toast.error("Nie udalo sie odczytac zadnego aktywnego feedu iCal.");
+      } else {
+        toast.success("Odczytano feedy iCal bezposrednio ze zrodla.");
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac kalendarzy.",
@@ -3211,6 +3227,7 @@ export function AvailabilityPage() {
 
     try {
       await addTrainerCalendarFeed(feedForm);
+      await loadOwnCalendarPreview();
       setFeedForm((current) => ({
         ...current,
         url: "",
@@ -3218,6 +3235,26 @@ export function AvailabilityPage() {
       toast.success("Dodano feed iCal.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu iCal.");
+    }
+  }
+
+  async function handleToggleFeed(feedId: string, enabled: boolean) {
+    try {
+      await updateTrainerCalendarFeedEnabled(feedId, enabled);
+      await loadOwnCalendarPreview();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udalo sie zaktualizowac feedu iCal.",
+      );
+    }
+  }
+
+  async function handleRemoveFeed(feedId: string) {
+    try {
+      await removeTrainerCalendarFeed(feedId);
+      await loadOwnCalendarPreview();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udalo sie usunac feedu iCal.");
     }
   }
 
@@ -3235,8 +3272,8 @@ export function AvailabilityPage() {
         <div className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
           <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
-              title="Feedy iCal"
-              description="Podpinamy publiczny kalendarz tylko po to, by policzyc przyszle wolne przedzialy. Szczegoly wydarzen pozostaja ukryte."
+              title="Import ICS"
+              description="Podpinamy plik lub feed ICS tylko po to, by policzyc przyszle wolne przedzialy 1:1 ze zrodla. Szczegoly wydarzen pozostaja ukryte."
             />
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -3259,7 +3296,7 @@ export function AvailabilityPage() {
               className="mt-6 grid gap-4 xl:grid-cols-[160px_minmax(0,1fr)_auto]"
             >
               <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Provider</span>
+                <span className="text-sm font-semibold text-brand-navy">Typ zrodla</span>
                 <select
                   value={feedForm.provider}
                   onChange={(event) =>
@@ -3276,7 +3313,7 @@ export function AvailabilityPage() {
                 </select>
               </label>
               <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">URL feedu</span>
+                <span className="text-sm font-semibold text-brand-navy">URL pliku ICS</span>
                 <input
                   value={feedForm.url}
                   onChange={(event) =>
@@ -3285,7 +3322,7 @@ export function AvailabilityPage() {
                       url: event.target.value,
                     }))
                   }
-                  placeholder="https://.../basic.ics"
+                  placeholder="https://panel.ceo/emandar/demo-ical/marcin-free-slots-demo.ics"
                   className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                 />
               </label>
@@ -3295,7 +3332,7 @@ export function AvailabilityPage() {
                   className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sky px-5 py-3 text-sm font-semibold text-brand-navy"
                 >
                   <Link2 size={16} />
-                  Dodaj feed
+                  Dodaj ICS
                 </button>
               </div>
             </form>
@@ -3303,8 +3340,8 @@ export function AvailabilityPage() {
             <div className="mt-6 space-y-3">
               {ownCalendarFeeds.length === 0 ? (
                 <EmptyPanelState
-                  title="Brak feedow iCal"
-                  description="Dodaj feed, aby wyliczyc tylko przyszle wolne przedzialy dzienne."
+                  title="Brak importu ICS"
+                  description="Dodaj URL pliku ICS, aby wyliczyc tylko przyszle wolne przedzialy dzienne."
                 />
               ) : (
                 ownCalendarFeeds.map((feed) => (
@@ -3338,9 +3375,7 @@ export function AvailabilityPage() {
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          onClick={() =>
-                            void updateTrainerCalendarFeedEnabled(feed.id, !feed.enabled)
-                          }
+                          onClick={() => void handleToggleFeed(feed.id, !feed.enabled)}
                           className="inline-flex items-center gap-2 rounded-full border border-brand-line px-4 py-2 text-sm font-semibold text-brand-navy"
                         >
                           {feed.enabled ? <Check size={14} /> : <X size={14} />}
@@ -3348,7 +3383,7 @@ export function AvailabilityPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void removeTrainerCalendarFeed(feed.id)}
+                          onClick={() => void handleRemoveFeed(feed.id)}
                           className="inline-flex items-center gap-2 rounded-full border border-brand-line px-4 py-2 text-sm font-semibold text-brand-navy"
                         >
                           <Trash2 size={14} />
@@ -3365,7 +3400,7 @@ export function AvailabilityPage() {
           <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
               title="Wolne terminy z kalendarza"
-              description="Pokazujemy tylko przyszle wolne przedzialy dzienne. Zrodlowe eventy kalendarza nie sa nigdzie wyswietlane."
+              description="Pokazujemy tylko przyszle wolne przedzialy dzienne odczytane bezposrednio z aktywnych feedow iCal. Lokalny cache nie jest zrodlem prawdy dla tego widoku."
             />
 
             <div className="mt-6 flex flex-wrap gap-2">

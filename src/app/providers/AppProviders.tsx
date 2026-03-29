@@ -70,6 +70,7 @@ import type {
   NotificationSettingsUpdateInput,
   OrganizerProfileUpdateInput,
   TrainerCalendarFeedInput,
+  TrainerCalendarLivePreview,
   TrainingEventImage,
   TrainingEvent,
   TrainingEventScheduleDay,
@@ -139,7 +140,7 @@ interface AppStateContextValue {
   addTrainerCalendarFeed: (input: TrainerCalendarFeedInput) => Promise<void>;
   updateTrainerCalendarFeedEnabled: (feedId: string, enabled: boolean) => Promise<void>;
   removeTrainerCalendarFeed: (feedId: string) => Promise<void>;
-  syncOwnTrainerCalendarFeeds: () => Promise<void>;
+  syncOwnTrainerCalendarFeeds: () => Promise<TrainerCalendarLivePreview>;
   updateTrainerProfile: (input: TrainerProfileUpdateInput) => Promise<void>;
   updateOrganizerProfile: (input: OrganizerProfileUpdateInput) => Promise<void>;
   updateParticipantProfile: (input: ParticipantProfileUpdateInput) => Promise<void>;
@@ -541,7 +542,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
           throw new Error("Musisz być zalogowany.");
         }
 
-        await withFriendlyErrors(() => syncOwnTrainerCalendarFeedsAction(currentUser));
+        return withFriendlyErrors(() => syncOwnTrainerCalendarFeedsAction(currentUser));
       },
       async updateTrainerProfile(input) {
         if (!currentUser) {

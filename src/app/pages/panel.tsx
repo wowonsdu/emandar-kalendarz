@@ -10,6 +10,7 @@ import {
   Bell,
   CalendarDays,
   Check,
+  Download,
   ImagePlus,
   Link2,
   Phone,
@@ -74,6 +75,10 @@ import type {
   TrainingEventScheduleDay,
   TrainingEventStatus,
 } from "@/domain/types";
+import { serializeBusyIntervalsToIcal } from "@/lib/ical";
+
+const MARCIN_DEMO_TRAINER_ID = "trainer-2";
+const MARCIN_DEMO_ICS_URL = "https://panel.ceo/emandar/demo-ical/marcin-free-slots-demo.ics";
 
 function formatDate(date: string) {
   return new Intl.DateTimeFormat("pl-PL", {
@@ -3079,8 +3084,10 @@ export function AvailabilityPage() {
     url: "",
   });
   const [syncingFeeds, setSyncingFeeds] = useState(false);
+  const [bootstrappingDemoFeed, setBootstrappingDemoFeed] = useState(false);
   const [liveCalendarPreview, setLiveCalendarPreview] =
     useState<TrainerCalendarLivePreview | null>(null);
+  const [demoFeedBootstrapAttempted, setDemoFeedBootstrapAttempted] = useState(false);
   const [activeFreeSliceBucket, setActiveFreeSliceBucket] = useState<
     "all" | TrainerFreeDaySliceBucket
   >("all");
@@ -3149,6 +3156,80 @@ export function AvailabilityPage() {
       cancelled = true;
     };
   }, [currentUser.role, isCommunityTrainer, syncOwnTrainerCalendarFeeds, trainerProfile?.id]);
+
+  useEffect(() => {
+    if (
+      !trainerProfile ||
+      trainerProfile.id !== MARCIN_DEMO_TRAINER_ID ||
+      ownCalendarFeeds.length > 0
+    ) {
+      return;
+    }
+
+    setFeedForm((current) =>
+      current.url
+        ? current
+        : {
+            ...current,
+            provider: "ical",
+            url: MARCIN_DEMO_ICS_URL,
+          },
+    );
+  }, [ownCalendarFeeds.length, trainerProfile?.id]);
+
+  useEffect(() => {
+    if (
+      demoFeedBootstrapAttempted ||
+      currentUser.role !== "trainer" ||
+      !trainerProfile ||
+      isCommunityTrainer ||
+      trainerProfile.id !== MARCIN_DEMO_TRAINER_ID ||
+      ownCalendarFeeds.length > 0
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    setDemoFeedBootstrapAttempted(true);
+    setBootstrappingDemoFeed(true);
+
+    void addTrainerCalendarFeed({
+      provider: "ical",
+      url: MARCIN_DEMO_ICS_URL,
+    })
+      .then(() => syncOwnTrainerCalendarFeeds())
+      .then((preview) => {
+        if (!cancelled) {
+          setLiveCalendarPreview(preview);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFeedForm((current) => ({
+            ...current,
+            provider: "ical",
+            url: current.url || MARCIN_DEMO_ICS_URL,
+          }));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setBootstrappingDemoFeed(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    addTrainerCalendarFeed,
+    currentUser.role,
+    demoFeedBootstrapAttempted,
+    isCommunityTrainer,
+    ownCalendarFeeds.length,
+    syncOwnTrainerCalendarFeeds,
+    trainerProfile?.id,
+  ]);
 
   const ownBusyIntervals = useMemo(() => {
     if (!trainerProfile || !liveCalendarPreview) {
@@ -3258,6 +3339,32 @@ export function AvailabilityPage() {
     }
   }
 
+  function handleExportParsedCalendar() {
+    if (!liveCalendarPreview || liveCalendarPreview.successfulFeedCount === 0) {
+      toast.error("Najpierw odczytaj aktywny plik ICS.");
+      return;
+    }
+
+    const serializedCalendar = serializeBusyIntervalsToIcal({
+      intervals: liveCalendarPreview.busyIntervals,
+      calendarName: `${trainerProfile?.displayName ?? "Trainer"} Parsed Busy Export`,
+    });
+    const blob = new Blob([serializedCalendar], {
+      type: "text/calendar;charset=utf-8",
+    });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const fileSuffix = liveCalendarPreview.fetchedAt.slice(0, 19).replace(/[:T]/g, "-");
+
+    link.href = objectUrl;
+    link.download = `${trainerProfile?.slug ?? "trainer"}-parsed-busy-${fileSuffix}.ics`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+    toast.success("Wyeksportowano sparsowany plik ICS.");
+  }
+
   return (
     <PanelSection
       eyebrow="Terminy"
@@ -3280,11 +3387,11 @@ export function AvailabilityPage() {
               <button
                 type="button"
                 onClick={() => void handleSyncFeeds()}
-                disabled={enabledFeedCount === 0 || syncingFeeds}
+                disabled={enabledFeedCount === 0 || syncingFeeds || bootstrappingDemoFeed}
                 className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <RefreshCcw size={16} />
-                {syncingFeeds ? "Synchronizowanie..." : "Synchronizuj feedy"}
+                {syncingFeeds || bootstrappingDemoFeed ? "Synchronizowanie..." : "Synchronizuj feedy"}
               </button>
               <p className="text-sm text-brand-muted">
                 Aktywne feedy: {enabledFeedCount} / {ownCalendarFeeds.length}
@@ -3322,7 +3429,7 @@ export function AvailabilityPage() {
                       url: event.target.value,
                     }))
                   }
-                  placeholder="https://panel.ceo/emandar/demo-ical/marcin-free-slots-demo.ics"
+                  placeholder={MARCIN_DEMO_ICS_URL}
                   className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                 />
               </label>
@@ -3394,6 +3501,28 @@ export function AvailabilityPage() {
                   </article>
                 ))
               )}
+            </div>
+
+            <div className="mt-6 rounded-3xl border border-dashed border-brand-line bg-brand-shell/40 p-4">
+              <p className="text-sm text-brand-muted">
+                Dla debugowania mozesz pobrac nowy plik ICS z dokladnie tym, co parser frontu
+                zrozumial po imporcie. To jest eksport juz sparsowanych blokow zajetosci, bez
+                szczegolow oryginalnych eventow.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleExportParsedCalendar}
+                  disabled={!liveCalendarPreview || liveCalendarPreview.successfulFeedCount === 0}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line px-4 py-2 text-sm font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Download size={14} />
+                  Eksportuj sparsowany ICS
+                </button>
+                <p className="text-xs text-brand-muted">
+                  Demo Marcina: <span className="break-all">{MARCIN_DEMO_ICS_URL}</span>
+                </p>
+              </div>
             </div>
           </article>
 

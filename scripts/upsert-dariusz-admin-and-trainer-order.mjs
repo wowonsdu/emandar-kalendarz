@@ -50,9 +50,6 @@ const trainerSortOrder = new Map([
   ["trainer-5", 6],
   ["trainer-6", 7],
   ["trainer-3", 20],
-  ["trainer-7", 100],
-  ["trainer-8", 101],
-  ["trainer-9", 102],
 ]);
 
 async function readJson(filePath) {
@@ -204,6 +201,26 @@ async function writeFirestoreDocument(
   });
 }
 
+async function firestoreDocumentExists(projectId, accessToken, collectionName, docId) {
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${collectionName}/${docId}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (response.status === 404) {
+    return false;
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `${response.status} ${response.statusText}`);
+  }
+
+  return true;
+}
+
 async function ensureDariuszAuthUser(auth) {
   try {
     const existing = await auth.getUserByEmail(DARIUSZ_EMAIL);
@@ -314,6 +331,18 @@ async function main() {
   });
 
   for (const [trainerId, sortOrder] of trainerSortOrder.entries()) {
+    const trainerExists = await firestoreDocumentExists(
+      projectId,
+      accessToken,
+      "trainers",
+      trainerId,
+    );
+
+    if (!trainerExists) {
+      console.log(`Skipping missing trainer ${trainerId} while updating sortOrder.`);
+      continue;
+    }
+
     await writeFirestoreDocument(
       projectId,
       accessToken,

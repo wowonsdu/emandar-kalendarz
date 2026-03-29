@@ -2,14 +2,19 @@
 import {
   ArrowRight,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   ImagePlus,
+  Images,
   MapPin,
   Phone,
   ShieldCheck,
   Sparkles,
   Users,
+  X,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
   RecaptchaVerifier,
   signInWithPhoneNumber,
@@ -17,17 +22,25 @@ import {
 } from "firebase/auth";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
-import type { AppUser, EmandarBrandStatus, TrainingEvent } from "@/domain/types";
+import type {
+  AppUser,
+  EmandarBrandStatus,
+  TrainingEvent,
+  TrainingEventImage,
+} from "@/domain/types";
 import { updateActiveRole as updateActiveRoleAction } from "@/data/firebaseRepository";
 import { fetchAppUser } from "@/data/firebaseRepository";
 import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
+  isPhotoModeEnabled,
+  isPhotoModeRequired,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
-  isEnrollmentPhotoRequiredForEvent,
+  isTrainingEventPubliclyVisible,
+  resolveEnrollmentPhotoModeForEvent,
   resolveBrandStatus,
   resolveTrainingEventStatus,
   sortEventsByDate,
@@ -35,9 +48,12 @@ import {
 import { firebaseAuth } from "@/lib/firebase";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
+  DialogOverlay,
+  DialogPortal,
   DialogTitle,
 } from "@/app/components/ui/dialog";
 import { useAppState } from "../providers/AppProviders";
@@ -82,6 +98,18 @@ function firstName(value?: string) {
   }
 
   return value.trim().split(/\s+/)[0] ?? "";
+}
+
+function hasCompletedParticipantRegistration(user: AppUser | null) {
+  if (!user) {
+    return false;
+  }
+
+  if (user.role !== "participant") {
+    return true;
+  }
+
+  return typeof user.participantOnboardingCompletedAt === "string";
 }
 
 const demoLoginPassword = "kocham";
@@ -216,6 +244,205 @@ function EmptyState({
   );
 }
 
+function getEventImagePreviewWidth(image: TrainingEventImage, height = 112) {
+  const ratio = image.width > 0 && image.height > 0 ? image.width / image.height : 1;
+  return Math.max(88, Math.round(height * ratio));
+}
+
+function getCommunityEventCoverImageIndex(
+  event: Pick<TrainingEvent, "eventImages" | "useEventImageAsCover">,
+) {
+  return event.useEventImageAsCover === true && (event.eventImages?.length ?? 0) > 0 ? 0 : null;
+}
+
+function getCommunityEventImageAlt(eventTitle: string, index: number) {
+  return `${eventTitle} zdjęcie ${index + 1}`;
+}
+
+function CommunityEventGalleryThumbnail({
+  image,
+  alt,
+  onClick,
+  height = 112,
+  width,
+  isActive = false,
+}: {
+  image: TrainingEventImage;
+  alt: string;
+  onClick: () => void;
+  height?: number;
+  width?: number;
+  isActive?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Powiększ ${alt}`}
+      className={`group relative shrink-0 overflow-hidden rounded-[1.4rem] border bg-brand-shell text-left shadow-soft transition hover:-translate-y-0.5 ${
+        isActive ? "border-brand-navy ring-2 ring-brand-sky/40" : "border-brand-line"
+      }`}
+      style={{
+        height: `${height}px`,
+        width: `${width ?? getEventImagePreviewWidth(image, height)}px`,
+      }}
+    >
+      <img
+        src={image.url}
+        alt={alt}
+        className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
+      />
+      <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
+    </button>
+  );
+}
+
+function CommunityEventGalleryLightbox({
+  eventTitle,
+  images,
+  openIndex,
+  onOpenIndexChange,
+}: {
+  eventTitle: string;
+  images: TrainingEventImage[];
+  openIndex: number | null;
+  onOpenIndexChange: (nextIndex: number | null) => void;
+}) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  useEffect(() => {
+    if (openIndex === null) {
+      return;
+    }
+
+    setCurrentIndex(Math.max(0, Math.min(images.length - 1, openIndex)));
+  }, [images.length, openIndex]);
+
+  useEffect(() => {
+    if (openIndex === null || images.length < 2) {
+      return;
+    }
+
+    function handleKeyDown(keyboardEvent: KeyboardEvent) {
+      if (keyboardEvent.key === "ArrowLeft") {
+        setCurrentIndex((previous) => Math.max(previous - 1, 0));
+      }
+
+      if (keyboardEvent.key === "ArrowRight") {
+        setCurrentIndex((previous) => Math.min(previous + 1, images.length - 1));
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [images.length, openIndex]);
+
+  const currentImage = images[currentIndex];
+
+  if (!currentImage) {
+    return null;
+  }
+
+  const canGoPrev = currentIndex > 0;
+  const canGoNext = currentIndex < images.length - 1;
+
+  return (
+    <Dialog
+      open={openIndex !== null}
+      onOpenChange={(nextOpen) => onOpenIndexChange(nextOpen ? currentIndex : null)}
+    >
+      <DialogPortal>
+        <DialogOverlay className="bg-brand-navy/12 backdrop-blur-[2px]" />
+
+        <DialogPrimitive.Content
+          className="fixed left-1/2 top-1/2 z-50 w-[min(90vw,780px)] max-w-none max-h-[92vh] -translate-x-1/2 -translate-y-1/2 outline-none"
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>Galeria wydarzenia społeczności</DialogTitle>
+            <DialogDescription>
+              Przeglądaj zdjęcia wydarzenia {eventTitle}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex max-h-[92vh] flex-col overflow-hidden rounded-[1.75rem] border border-white/75 bg-white/96 p-2.5 text-brand-navy shadow-[0_18px_56px_rgba(21,52,105,0.14)] backdrop-blur-xl sm:p-4">
+            <div className="mb-2 flex justify-end sm:mb-3">
+              <DialogClose className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-brand-line/70 bg-white/90 text-brand-navy shadow-[0_10px_24px_rgba(21,52,105,0.10)] transition hover:bg-white">
+                <X size={20} />
+                <span className="sr-only">Zamknij galerię</span>
+              </DialogClose>
+            </div>
+
+            <div className="relative h-[min(44vh,360px)] overflow-hidden rounded-[1.35rem] border border-brand-line/60 bg-[#f7fbff] sm:h-[min(62vh,520px)]">
+              <div className="flex h-full w-full items-center justify-center p-3 sm:p-4">
+                <img
+                  src={currentImage.url}
+                  alt={getCommunityEventImageAlt(eventTitle, currentIndex)}
+                  className="max-h-full max-w-full object-contain"
+                />
+              </div>
+
+              {images.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentIndex((previous) => Math.max(previous - 1, 0))}
+                    disabled={!canGoPrev}
+                    aria-label="Poprzednie zdjęcie"
+                    className="absolute left-3 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 text-brand-navy shadow-[0_8px_20px_rgba(21,52,105,0.10)] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:left-4"
+                  >
+                    <ChevronLeft size={22} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrentIndex((previous) => Math.min(previous + 1, images.length - 1))
+                    }
+                    disabled={!canGoNext}
+                    aria-label="Następne zdjęcie"
+                    className="absolute right-3 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 text-brand-navy shadow-[0_8px_20px_rgba(21,52,105,0.10)] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:right-4"
+                  >
+                    <ChevronRight size={22} />
+                  </button>
+                </>
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-end justify-between gap-3 px-1">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                  Galeria wydarzenia
+                </p>
+                <p className="mt-1 text-base font-semibold text-brand-navy sm:text-lg">{eventTitle}</p>
+              </div>
+              <span className="rounded-full border border-brand-line/70 bg-white px-3 py-1 text-xs font-semibold text-brand-muted shadow-[0_8px_20px_rgba(21,52,105,0.06)] sm:text-sm">
+                {currentIndex + 1} / {images.length}
+              </span>
+            </div>
+
+            {images.length > 1 && (
+              <div className="mt-2 flex gap-2 overflow-x-auto px-1 pb-1 sm:mt-3 sm:gap-3">
+                {images.map((image, index) => (
+                  <CommunityEventGalleryThumbnail
+                    key={image.id}
+                    image={image}
+                    alt={getCommunityEventImageAlt(eventTitle, index)}
+                    onClick={() => setCurrentIndex(index)}
+                    height={56}
+                    width={68}
+                    isActive={index === currentIndex}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
+  );
+}
+
 function EventFeedSection({
   eyebrow,
   title,
@@ -273,8 +500,178 @@ function EventCard({
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const eventImages = event.eventImages ?? [];
+  const communityLeadMaxHeight = eventImages.length > 0 ? "544px" : "336px";
   const canManage = canManagePublicEvent(event, currentUser);
   const leadName = getPublicLeadName(event, trainer?.displayName);
+  const leadAvatarUrl = isCommunityEvent
+    ? event.useEventImageAsCover === true
+      ? eventImages[0]?.url || event.creatorAvatarUrl
+      : event.creatorAvatarUrl
+    : trainer?.avatarUrl;
+  const communityEventTitle = event.title || event.location;
+  const communityCoverImageIndex = isCommunityEvent ? getCommunityEventCoverImageIndex(event) : null;
+  const managementPath = isCommunityEvent
+    ? `/panel/wydarzenia-spolecznosci/${event.id}`
+    : `/panel/szkolenia/${event.id}`;
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+
+  if (isCommunityEvent) {
+    return (
+      <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+        <div
+          className={`grid gap-6 md:items-stretch ${
+            showTrainerImage ? "md:grid-cols-[228px_minmax(0,1fr)]" : "grid-cols-1"
+          }`}
+        >
+          {showTrainerImage && (
+            <div
+              className="relative overflow-hidden rounded-[1.75rem] bg-brand-shell md:h-full md:min-h-[336px]"
+              style={{ maxHeight: communityLeadMaxHeight }}
+            >
+              {leadAvatarUrl ? (
+                communityCoverImageIndex !== null ? (
+                  <button
+                    type="button"
+                    onClick={() => setLightboxIndex(communityCoverImageIndex)}
+                    aria-label="Otwórz galerię wydarzenia"
+                    className="group h-full w-full cursor-zoom-in text-left"
+                  >
+                    <img
+                      src={leadAvatarUrl}
+                      alt={leadName}
+                      className="h-full w-full object-cover object-top transition duration-300 group-hover:scale-[1.02]"
+                    />
+                    <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
+                    <span className="pointer-events-none absolute right-4 top-4 inline-flex items-center gap-2 rounded-full bg-white/92 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy shadow-soft">
+                      <Images size={14} />
+                      Otwórz galerię
+                    </span>
+                  </button>
+                ) : (
+                  <img
+                    src={leadAvatarUrl}
+                    alt={leadName}
+                    className="h-full w-full object-cover object-top"
+                  />
+                )
+              ) : (
+                <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand-sky/40 to-white text-4xl font-semibold text-brand-navy">
+                  {leadName.slice(0, 1)}
+                </div>
+              )}
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/45 to-transparent px-5 py-5 text-white">
+                <p className="text-lg font-semibold">{leadName}</p>
+              </div>
+            </div>
+          )}
+
+          <div className="flex min-w-0 flex-col">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-2xl font-semibold text-brand-navy md:text-[2.2rem]">
+                  {event.title || event.location}
+                </h3>
+                <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                  {event.location}
+                </p>
+                <p className="mt-3 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                  {scheduleRangeLabel}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                {canManage && (
+                  <Link
+                    to={managementPath}
+                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                  >
+                    Edytuj wydarzenie
+                  </Link>
+                )}
+                <Link
+                  to={`/kalendarz/${event.id}`}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                >
+                  Poproś o kontakt
+                  <ArrowRight size={16} />
+                </Link>
+              </div>
+            </div>
+
+            <p className="mt-5 max-w-3xl text-brand-muted">{event.summary}</p>
+
+            <div
+              className="mt-6 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]"
+            >
+              {scheduleRows.map((row) => (
+                <div
+                  key={row.key}
+                  className="rounded-2xl bg-brand-shell px-4 py-3 text-sm text-brand-muted"
+                >
+                  <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
+                    <CalendarDays size={16} />
+                    {row.title}
+                  </div>
+                  <p>{row.label}</p>
+                  <p>{row.range}</p>
+                </div>
+              ))}
+            </div>
+
+            {eventTags.length > 0 && (
+              <div className="mt-5 flex flex-wrap gap-2">
+                {eventTags.map((tag) => (
+                  <span
+                    key={`${event.id}-${tag}`}
+                    className="rounded-full bg-brand-sky/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {eventImages.length > 0 && (
+              <div className="mt-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
+                    Galeria wydarzenia
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setLightboxIndex(0)}
+                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft"
+                  >
+                    <Images size={16} />
+                    Zobacz {eventImages.length} zdjęć
+                  </button>
+                </div>
+                <div className="mt-3 flex gap-4 overflow-x-auto pb-1 pr-2">
+                  {eventImages.map((image, index) => (
+                    <CommunityEventGalleryThumbnail
+                      key={image.id}
+                      image={image}
+                      alt={getCommunityEventImageAlt(communityEventTitle, index)}
+                      onClick={() => setLightboxIndex(index)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+        {eventImages.length > 0 && (
+          <CommunityEventGalleryLightbox
+            eventTitle={communityEventTitle}
+            images={eventImages}
+            openIndex={lightboxIndex}
+            onOpenIndexChange={setLightboxIndex}
+          />
+        )}
+      </article>
+    );
+  }
 
   return (
     <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
@@ -285,10 +682,10 @@ function EventCard({
       >
         {showTrainerImage && (
           <div className="relative h-full min-h-[21rem] overflow-hidden rounded-[1.75rem] bg-brand-shell">
-            {trainer?.avatarUrl ? (
+            {leadAvatarUrl ? (
               <img
-                src={trainer.avatarUrl}
-                alt={trainer.displayName}
+                src={leadAvatarUrl}
+                alt={leadName}
                 className="h-full w-full object-cover object-top"
               />
             ) : (
@@ -307,7 +704,14 @@ function EventCard({
 
         <div className="flex h-full flex-col">
           <div>
-            <h3 className="text-2xl font-semibold text-brand-navy">{event.location}</h3>
+            <h3 className="text-2xl font-semibold text-brand-navy">
+              {isCommunityEvent ? event.title || event.location : event.location}
+            </h3>
+            {isCommunityEvent && (
+              <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                {event.location}
+              </p>
+            )}
             <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
             {scheduleRangeLabel}
             </p>
@@ -332,18 +736,32 @@ function EventCard({
               </div>
             ))}
           </div>
-          <div className="mt-5 text-sm text-brand-muted">
-            <div>
-              {isCommunityEvent || isSelfManagedTrainingEvent(event)
-                ? "Prowadzone samodzielnie"
-                : "Organizator:"}{" "}
-              {!isCommunityEvent && !isSelfManagedTrainingEvent(event) && (
+          {!(isCommunityEvent || isSelfManagedTrainingEvent(event)) && (
+            <div className="mt-5 text-sm text-brand-muted">
+              <div>
+                Organizator:{" "}
                 <span className="font-semibold text-brand-navy">
                   {getPublicOrganizerName(event, undefined, trainer?.displayName)}
                 </span>
-              )}
+              </div>
             </div>
-          </div>
+          )}
+          {isCommunityEvent && eventImages.length > 0 && (
+            <div className="mt-5 flex flex-wrap gap-4">
+              {eventImages.map((image, index) => (
+                <img
+                  key={image.id}
+                  src={image.url}
+                  alt={`${event.title || event.location} ${index + 1}`}
+                  className="rounded-[1.4rem] border border-brand-line bg-brand-shell object-cover shadow-soft"
+                  style={{
+                    height: "112px",
+                    width: `${Math.max(88, Math.round(112 * (image.width / image.height || 1)))}px`,
+                  }}
+                />
+              ))}
+            </div>
+          )}
           <div className="mt-auto flex flex-wrap items-end justify-between gap-4 pt-5">
             {eventTags.length > 0 ? (
               <div className="flex flex-wrap gap-2">
@@ -362,7 +780,7 @@ function EventCard({
             <div className="flex flex-wrap items-center gap-3">
               {canManage && (
                 <Link
-                  to={`/panel/szkolenia/${event.id}`}
+                  to={managementPath}
                   className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
                 >
                   Edytuj szkolenie
@@ -478,10 +896,8 @@ export function CalendarPage() {
       sortEventsByDate(
         store.trainingEvents.filter(
           (item) =>
-            item.isPublished &&
-            !isTrainingEventArchived(item) &&
             resolveBrandStatus(item.brandStatus) === "official" &&
-            isTrainingEventCollaborationAccepted(item),
+            isTrainingEventPubliclyVisible(item),
         ),
       ),
     [store.trainingEvents],
@@ -506,10 +922,8 @@ export function CommunityEventsPage() {
       sortEventsByDate(
         store.trainingEvents.filter(
           (item) =>
-            item.isPublished &&
-            !isTrainingEventArchived(item) &&
             resolveBrandStatus(item.brandStatus) === "supported" &&
-            isTrainingEventCollaborationAccepted(item),
+            isTrainingEventPubliclyVisible(item),
         ),
       ),
     [store.trainingEvents],
@@ -553,6 +967,7 @@ export function EventDetailsPage() {
     wiadomosc: "",
     photoFile: null as File | null,
   });
+  const [galleryLightboxIndex, setGalleryLightboxIndex] = useState<number | null>(null);
 
   if (!event) {
     return <Navigate to="/kalendarz" replace />;
@@ -568,9 +983,17 @@ export function EventDetailsPage() {
   const isCancelled = eventStatus === "cancelled";
   const eventTags = getEventTags(event);
   const canManage = canManagePublicEvent(event, currentUser);
-  const photoRequired = isEnrollmentPhotoRequiredForEvent(event, trainer, organizer);
+  const enrollmentPhotoMode = resolveEnrollmentPhotoModeForEvent(event, store.appSettings);
+  const enrollmentPhotoRequired = isPhotoModeRequired(enrollmentPhotoMode);
+  const enrollmentPhotoEnabled = isPhotoModeEnabled(enrollmentPhotoMode);
   const leadName = getPublicLeadName(event, trainer?.displayName);
   const leadDescription = getPublicLeadDescription(event, trainer?.heroNote);
+  const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const eventImages = event.eventImages ?? [];
+  const detailEventTitle = event.title || event.location;
+  const managementPath = isCommunityEvent
+    ? `/panel/wydarzenia-spolecznosci/${event.id}`
+    : `/panel/szkolenia/${event.id}`;
   const returnPath = "/panel/dashboard";
 
   useEffect(() => {
@@ -579,6 +1002,15 @@ export function EventDetailsPage() {
       recaptchaRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    if (!enrollmentPhotoEnabled && form.photoFile) {
+      setForm((current) => ({
+        ...current,
+        photoFile: null,
+      }));
+    }
+  }, [enrollmentPhotoEnabled, form.photoFile]);
 
   function handleFileChange(fileEvent: ChangeEvent<HTMLInputElement>) {
     const nextFile = fileEvent.target.files?.[0] ?? null;
@@ -613,7 +1045,7 @@ export function EventDetailsPage() {
 
     normalizePhoneNumberForSms(form.telefon);
 
-    if (photoRequired && !form.photoFile) {
+    if (enrollmentPhotoRequired && !form.photoFile) {
       throw new Error("Dodaj zdjęcie twarzy.");
     }
   }
@@ -622,16 +1054,17 @@ export function EventDetailsPage() {
     setLoading(true);
 
     try {
+      const hasEnrollmentPhoto = enrollmentPhotoEnabled && Boolean(form.photoFile);
       await submitEnrollment({
         eventId: event.id,
         imieNazwisko: form.imieNazwisko,
         telefon: phoneOverride ?? form.telefon,
         polecenieOdKogo: form.polecenieOdKogo,
         wiadomosc: form.wiadomosc,
-        photoFile: form.photoFile,
+        photoFile: enrollmentPhotoEnabled ? form.photoFile : null,
       });
       toast.success(
-        photoRequired
+        hasEnrollmentPhoto
           ? "Zgłoszenie i zdjęcie zostały zapisane."
           : "Zgłoszenie zostało zapisane.",
       );
@@ -757,12 +1190,77 @@ export function EventDetailsPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
             {event.type}
           </p>
-          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">{event.location}</h1>
+          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
+            {isCommunityBrandStatus(event.brandStatus)
+              ? event.title || event.location
+              : event.location}
+          </h1>
+          {isCommunityBrandStatus(event.brandStatus) ? (
+            <p className="mt-3 text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+              {event.location}
+            </p>
+          ) : null}
           <p className="mt-3 text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
             {scheduleRangeLabel}
           </p>
           <p className="mt-4 text-lg font-medium text-brand-sky-deep">{event.summary}</p>
           <p className="mt-4 text-lg text-brand-muted">{event.description}</p>
+
+          {isCommunityEvent && eventImages.length > 0 && (
+            <div className="mt-8 rounded-[2rem] border border-brand-line bg-brand-shell/55 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+                    Galeria wydarzenia
+                  </p>
+                  <p className="mt-2 text-sm text-brand-muted">
+                    Kliknij zdjęcie, żeby otworzyć pełny podgląd i przejść po całej galerii.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGalleryLightboxIndex(0)}
+                  className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-brand-navy shadow-soft"
+                >
+                  <Images size={16} />
+                  Zobacz wszystkie
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setGalleryLightboxIndex(0)}
+                aria-label="Otwórz galerię wydarzenia"
+                className="group relative mt-5 block w-full overflow-hidden rounded-[1.8rem] border border-brand-line bg-white text-left shadow-soft"
+              >
+                <img
+                  src={eventImages[0].url}
+                  alt={getCommunityEventImageAlt(detailEventTitle, 0)}
+                  className="h-[20rem] w-full object-cover transition duration-300 group-hover:scale-[1.02] sm:h-[26rem]"
+                />
+                <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
+                <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/30 to-transparent px-5 py-5 text-white">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white/14 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-white">
+                    <Images size={14} />
+                    Kliknij, aby powiększyć
+                  </span>
+                </span>
+              </button>
+
+              {eventImages.length > 1 && (
+                <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
+                  {eventImages.map((image, index) => (
+                    <CommunityEventGalleryThumbnail
+                      key={image.id}
+                      image={image}
+                      alt={getCommunityEventImageAlt(detailEventTitle, index)}
+                      onClick={() => setGalleryLightboxIndex(index)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           <div
             className={`mt-8 grid gap-4 ${
@@ -842,9 +1340,11 @@ export function EventDetailsPage() {
           <p className="mt-3 text-brand-muted">
             Zgłoszenie trafi do Przekazującego Wiedzę
             {organizer ? " i organizatora." : "."}{" "}
-            {photoRequired
+            {enrollmentPhotoMode === "required"
               ? "Zdjęcie jest wymagane i trafia do Firebase Storage tylko dla uprawnionych osób."
-              : "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."}
+              : enrollmentPhotoMode === "optional"
+                ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
+                : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."}
           </p>
           {isCancelled && (
             <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
@@ -893,25 +1393,27 @@ export function EventDetailsPage() {
               placeholder="Czy jesteś z polecenia od kogoś?"
               className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
-            <label className="grid gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
-              <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                <ImagePlus size={16} />
-                Zdjęcie twarzy
-              </span>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                onChange={handleFileChange}
-                className="text-sm"
-              />
-              <span className="text-sm text-brand-muted">
-                {form.photoFile
-                  ? `Wybrany plik: ${form.photoFile.name}`
-                  : photoRequired
-                    ? "Wymagane: JPG, PNG albo WEBP"
-                    : "Opcjonalne: JPG, PNG albo WEBP"}
-              </span>
-            </label>
+            {enrollmentPhotoEnabled && (
+              <label className="grid gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+                <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                  <ImagePlus size={16} />
+                  Zdjęcie twarzy
+                </span>
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={handleFileChange}
+                  className="text-sm"
+                />
+                <span className="text-sm text-brand-muted">
+                  {form.photoFile
+                    ? `Wybrany plik: ${form.photoFile.name}`
+                    : enrollmentPhotoRequired
+                      ? "Wymagane: JPG, PNG albo WEBP"
+                      : "Opcjonalne: JPG, PNG albo WEBP"}
+                </span>
+              </label>
+            )}
             <textarea
               rows={5}
               value={form.wiadomosc}
@@ -933,10 +1435,10 @@ export function EventDetailsPage() {
           <div className="mt-6 flex flex-wrap items-center gap-3">
             {canManage && (
               <Link
-                to={`/panel/szkolenia/${event.id}`}
+                to={managementPath}
                 className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy shadow-soft"
               >
-                Edytuj szkolenie
+                {isCommunityEvent ? "Edytuj wydarzenie" : "Edytuj szkolenie"}
               </Link>
             )}
             <button
@@ -950,6 +1452,16 @@ export function EventDetailsPage() {
           </div>
         </form>
       </div>
+
+      {isCommunityEvent && eventImages.length > 0 && (
+        <CommunityEventGalleryLightbox
+          eventTitle={detailEventTitle}
+          images={eventImages}
+          openIndex={galleryLightboxIndex}
+          onOpenIndexChange={setGalleryLightboxIndex}
+        />
+      )}
+
       <Dialog open={isSmsDialogOpen} onOpenChange={handleSmsDialogOpenChange}>
         <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
           <div className="bg-white p-6 sm:p-7">
@@ -1059,7 +1571,6 @@ export function CommunityEventReviewPage() {
     creatorPhone: string;
   } | null>(null);
   const [reviewMessage, setReviewMessage] = useState("");
-  const [enableAutoApprove, setEnableAutoApprove] = useState(false);
   const [decision, setDecision] = useState<"accepted" | "rejected" | null>(null);
 
   useEffect(() => {
@@ -1108,7 +1619,6 @@ export function CommunityEventReviewPage() {
         token,
         decision: nextDecision,
         message: reviewMessage,
-        enableAutoApprove,
       });
       setDecision(nextDecision);
       toast.success(
@@ -1154,8 +1664,11 @@ export function CommunityEventReviewPage() {
             Moderacja wydarzenia społeczności
           </p>
           <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
-            {reviewLoaded.event.location}
+            {reviewLoaded.event.title || reviewLoaded.event.location}
           </h1>
+          <p className="mt-3 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+            {reviewLoaded.event.location}
+          </p>
           <p className="mt-3 text-lg text-brand-muted">{reviewLoaded.event.summary}</p>
           <div className="mt-6 grid gap-4 md:grid-cols-2">
             {scheduleRows.map((row) => (
@@ -1201,23 +1714,6 @@ export function CommunityEventReviewPage() {
                   onChange={(event) => setReviewMessage(event.target.value)}
                   className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
-              </label>
-
-              <label className="mt-5 flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={enableAutoApprove}
-                  onChange={(event) => setEnableAutoApprove(event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">
-                    Akceptuj automatycznie kolejne wydarzenia tej osoby
-                  </span>
-                  <span className="text-sm text-brand-muted">
-                    Włączy auto-akceptację przyszłych wydarzeń społeczności tego autora.
-                  </span>
-                </span>
               </label>
 
               <div className="mt-6 flex flex-wrap gap-3">
@@ -1724,25 +2220,22 @@ function SmsLoginScreen() {
 
 function SmsRegisterScreen() {
   const {
+    authReady,
     currentUser,
-    ensurePhoneParticipantProfileForFlow,
     getRoleHomePath,
     store,
     submitAccountRequest,
   } = useAppState();
-  const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const searchParams =
     typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
-  const participantSignup = searchParams.get("role") === "participant";
   const enrollmentSource = searchParams.get("source") === "enrollment";
   const prefetchedPhone =
     typeof window === "undefined" ? "" : searchParams.get("phone") ?? "";
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
-  const [checkingExistingAccount, setCheckingExistingAccount] = useState(false);
-  const [stayOnRegistrationFlow, setStayOnRegistrationFlow] = useState(false);
+  const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [smsVerified, setSmsVerified] = useState(
@@ -1751,18 +2244,13 @@ function SmsRegisterScreen() {
   const [form, setForm] = useState({
     displayName: "",
     phone: prefetchedPhone,
-    requestedRoles: participantSignup
-      ? (["participant"] as Array<"trainer" | "organizer" | "participant">)
-      : ([] as Array<"trainer" | "organizer" | "participant">),
+    trainerAuthorizationCode: "",
     notes: "",
-    organizerTrainingIntent: "",
-    selectedTrainerIds: [] as string[],
     avatarFile: null as File | null,
   });
-  const officialTrainers = useMemo(
-    () => store.trainers.filter((trainer) => !isCommunityBrandStatus(trainer.brandStatus)),
-    [store.trainers],
-  );
+  const signupPhotoMode = store.appSettings.signupPhotoMode;
+  const signupPhotoRequired = isPhotoModeRequired(signupPhotoMode);
+  const signupPhotoEnabled = isPhotoModeEnabled(signupPhotoMode);
 
   useEffect(() => {
     if (firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous) {
@@ -1781,31 +2269,66 @@ function SmsRegisterScreen() {
     };
   }, []);
 
-  if (currentUser && !checkingExistingAccount && !stayOnRegistrationFlow) {
+  useEffect(() => {
+    if (!signupPhotoEnabled && form.avatarFile) {
+      setForm((current) => ({
+        ...current,
+        avatarFile: null,
+      }));
+    }
+  }, [signupPhotoEnabled, form.avatarFile]);
+
+  if (hasCompletedParticipantRegistration(currentUser)) {
     return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
   }
 
-  function toggleTrainer(trainerId: string, checked: boolean) {
-    setForm((current) => ({
-      ...current,
-      selectedTrainerIds: checked
-        ? Array.from(new Set([...current.selectedTrainerIds, trainerId]))
-        : current.selectedTrainerIds.filter((item) => item !== trainerId),
-    }));
+  function resetSmsVerification() {
+    setSmsVerified(false);
+    setVerificationCode("");
+    setConfirmationResult(null);
   }
 
-  function toggleRole(
-    role: "trainer" | "organizer" | "participant",
-    checked: boolean,
-  ) {
-    setForm((current) => ({
-      ...current,
-      requestedRoles: checked
-        ? Array.from(new Set([...current.requestedRoles, role]))
-        : current.requestedRoles.filter((item) => item !== role),
-      organizerTrainingIntent:
-        role === "organizer" && !checked ? "" : current.organizerTrainingIntent,
-    }));
+  function validateRegistrationForm() {
+    if (!form.displayName.trim()) {
+      throw new Error("Podaj imię i nazwisko.");
+    }
+
+    normalizePhoneNumberForSms(form.phone);
+
+    if (!form.trainerAuthorizationCode.trim()) {
+      throw new Error("Konto można założyć tylko posiadając ważny kod trenera.");
+    }
+
+    if (signupPhotoRequired && !form.avatarFile) {
+      throw new Error("Dodaj zdjęcie profilowe.");
+    }
+
+    if (!form.notes.trim()) {
+      throw new Error("Napisz kilka słów o sobie.");
+    }
+  }
+
+  async function finalizeRegistration(phoneOverride?: string) {
+    setLoading(true);
+
+    try {
+      await submitAccountRequest({
+        displayName: form.displayName,
+        phone: phoneOverride ?? form.phone,
+        trainerAuthorizationCode: form.trainerAuthorizationCode,
+        notes: form.notes,
+        avatarFile: signupPhotoEnabled ? form.avatarFile : null,
+      });
+      toast.success("Konto uczestnika zostało utworzone.");
+      return true;
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się utworzyć konta.",
+      );
+      return false;
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleSendCode() {
@@ -1832,7 +2355,9 @@ function SmsRegisterScreen() {
         ...current,
         phone: normalizedPhone,
       }));
+      setVerificationCode("");
       setConfirmationResult(result);
+      setIsSmsDialogOpen(true);
       toast.success("Kod SMS został wysłany.");
     } catch (error) {
       toast.error(
@@ -1854,36 +2379,23 @@ function SmsRegisterScreen() {
     setConfirmingCode(true);
 
     try {
-      setCheckingExistingAccount(true);
       const result = await confirmationResult.confirm(verificationCode.trim());
       const confirmedPhone = result.user.phoneNumber ?? form.phone;
-      await ensurePhoneParticipantProfileForFlow();
-      const appUser = await fetchAppUser(result.user.uid);
-
       setForm((current) => ({
         ...current,
-        displayName: current.displayName || appUser.displayName || "",
         phone: confirmedPhone,
-        selectedTrainerIds:
-          current.selectedTrainerIds.length > 0
-            ? current.selectedTrainerIds
-            : appUser.selectedTrainerIds ?? [],
-        requestedRoles: current.requestedRoles.includes("participant")
-          ? current.requestedRoles
-          : (["participant", ...current.requestedRoles] as Array<
-              "trainer" | "organizer" | "participant"
-            >),
       }));
-
-      setStayOnRegistrationFlow(true);
       setSmsVerified(true);
-      toast.success("Numer telefonu został potwierdzony. Dokończ onboarding konta.");
+      setVerificationCode("");
+      setConfirmationResult(null);
+      setIsSmsDialogOpen(false);
+      toast.success("Numer telefonu został potwierdzony.");
+      await finalizeRegistration(confirmedPhone);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
       );
     } finally {
-      setCheckingExistingAccount(false);
       setConfirmingCode(false);
     }
   }
@@ -1891,37 +2403,26 @@ function SmsRegisterScreen() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!smsVerified) {
-      toast.error("Najpierw potwierdź numer telefonu kodem SMS.");
+    try {
+      validateRegistrationForm();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Uzupełnij wymagane pola formularza.",
+      );
       return;
     }
 
-    setLoading(true);
-
-    try {
-      if (form.requestedRoles.length === 0) {
-        toast.error("Wybierz przynajmniej jeden typ konta.");
-        return;
-      }
-
-      await submitAccountRequest({
-        displayName: form.displayName,
-        phone: form.phone,
-        requestedRoles: form.requestedRoles,
-        notes: form.notes,
-        avatarFile: form.avatarFile,
-        organizerTrainingIntent: form.organizerTrainingIntent,
-        selectedTrainerIds: form.selectedTrainerIds,
-      });
-      navigate("/panel/dashboard");
-      toast.success("Onboarding został zapisany.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Nie udało się utworzyć konta.",
-      );
-    } finally {
-      setLoading(false);
+    if (smsVerified) {
+      await finalizeRegistration();
+      return;
     }
+
+    if (confirmationResult) {
+      setIsSmsDialogOpen(true);
+      return;
+    }
+
+    await handleSendCode();
   }
 
   return (
@@ -1931,8 +2432,7 @@ function SmsRegisterScreen() {
           Rejestracja
         </p>
         <p className="mt-4 max-w-3xl text-lg text-brand-muted">
-          Najpierw potwierdzasz numer telefonu, a potem uzupełniasz profil uczestnika i,
-          jeśli chcesz, prosisz o rolę organizatora grup Emandar.
+          Konto założysz tylko potwierdzając swój numer telefonu SMS-kodem.
         </p>
         {enrollmentSource && (
           <p className="mt-3 max-w-3xl rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-sm text-brand-muted">
@@ -1942,195 +2442,76 @@ function SmsRegisterScreen() {
         )}
 
         <form onSubmit={handleSubmit} className="mt-8 grid gap-5">
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
-              <input
-                required
-                autoComplete="name"
-                value={form.displayName}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    displayName: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
+          <input
+            required
+            autoComplete="name"
+            value={form.displayName}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                displayName: event.target.value,
+              }))
+            }
+            placeholder="Imię i nazwisko"
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
 
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Numer telefonu</span>
-              <input
-                required
-                autoComplete="tel"
-                value={form.phone}
-                disabled={smsVerified}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    phone: event.target.value,
-                  }))
-                }
-                placeholder="+48 500 600 700"
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
-              />
-            </label>
-          </div>
+          <input
+            required
+            autoComplete="tel"
+            value={form.phone}
+            onChange={(event) => {
+              if (smsVerified || confirmationResult) {
+                resetSmsVerification();
+              }
 
-          <div className="rounded-[2rem] border border-brand-line bg-brand-shell p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                  Weryfikacja SMS
-                </p>
-                <p className="mt-2 text-sm text-brand-muted">
-                  {smsVerified
-                    ? "Numer został już potwierdzony."
-                    : "Najpierw wyślij kod i potwierdź numer telefonu."}
-                </p>
-              </div>
-              {!smsVerified && (
-                <button
-                  type="button"
-                  disabled={sendingCode}
-                  onClick={() => void handleSendCode()}
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  {sendingCode ? "Wysyłanie..." : "Wyślij kod SMS"}
-                  <Phone size={16} />
-                </button>
-              )}
-            </div>
-
-            {!smsVerified && (
-              <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]">
-                <input
-                  value={verificationCode}
-                  onChange={(event) => setVerificationCode(event.target.value)}
-                  placeholder="Kod z SMS"
-                  className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <button
-                  type="button"
-                  disabled={!confirmationResult || confirmingCode}
-                  onClick={() => void handleConfirmCode()}
-                  className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                >
-                  {confirmingCode ? "Potwierdzanie..." : "Potwierdź kod"}
-                </button>
-              </div>
-            )}
-            <div id="register-phone-recaptcha" />
-          </div>
-
-          <div className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Zakres konta</span>
-            <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4 text-brand-navy">
-              <label className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("participant")}
-                  onChange={(event) => toggleRole("participant", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Uczestnik</span>
-                  <span className="text-sm text-brand-muted">
-                    Widzisz swoje zgłoszenia i szkolenia, także zanim trener potwierdzi konto.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("organizer")}
-                  onChange={(event) => toggleRole("organizer", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Organizator grup Emandar</span>
-                  <span className="text-sm text-brand-muted">
-                    Po akceptacji konta i relacji z trenerem możesz organizować oficjalne szkolenia.
-                  </span>
-                </span>
-              </label>
-            </div>
-          </div>
-
-          {form.requestedRoles.includes("organizer") && (
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">
-                Jakie szkolenia chcesz organizować?
-              </span>
-              <textarea
-                required
-                rows={4}
-                value={form.organizerTrainingIntent}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    organizerTrainingIntent: event.target.value,
-                  }))
-                }
-                className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
-          )}
+              setForm((current) => ({
+                ...current,
+                phone: event.target.value,
+              }));
+            }}
+            placeholder="Numer telefonu"
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
 
           <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">
-              Do czyjej grupy chodzisz?
-            </span>
-            <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4">
-              {officialTrainers.length === 0 && (
-                <p className="text-sm text-brand-muted">
-                  Brak dostępnych trenerów do wyboru. Dodaj najpierw widoczne profile
-                  trenerów w danych aplikacji.
-                </p>
-              )}
-              {officialTrainers.map((trainer) => (
-                <label key={trainer.id} className="flex items-start gap-3 text-brand-navy">
-                  <input
-                    type="checkbox"
-                    checked={form.selectedTrainerIds.includes(trainer.id)}
-                    onChange={(event) => toggleTrainer(trainer.id, event.target.checked)}
-                    className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                  />
-                  <span className="grid gap-1">
-                    <span className="text-sm font-semibold">{trainer.displayName}</span>
-                    <span className="text-sm text-brand-muted">{trainer.heroNote}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <p className="text-sm text-brand-muted">
-              Wystarczy jedna akceptacja od wybranego trenera, żeby konto zostało potwierdzone.
-            </p>
-          </label>
-
-          <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
-            <span className="inline-flex items-center gap-2 text-sm font-semibold">
-              <ImagePlus size={16} />
-              Zdjęcie profilowe {store.appSettings.signupPhotoRequired ? "(wymagane)" : "(opcjonalne)"}
-            </span>
             <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
+              value={form.trainerAuthorizationCode}
               onChange={(event) =>
                 setForm((current) => ({
                   ...current,
-                  avatarFile: event.target.files?.[0] ?? null,
+                  trainerAuthorizationCode: event.target.value,
                 }))
               }
-              className="text-sm"
+              placeholder="Kod trenera"
+              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
-            <span className="text-sm text-brand-muted">
-              {form.avatarFile
-                ? `Wybrany plik: ${form.avatarFile.name}`
-                : "JPG, PNG albo WEBP do 5 MB"}
-            </span>
           </label>
+
+          {signupPhotoEnabled && (
+            <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+              <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                <ImagePlus size={16} />
+                Zdjęcie profilowe {signupPhotoRequired ? "(wymagane)" : "(opcjonalne)"}
+              </span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    avatarFile: event.target.files?.[0] ?? null,
+                  }))
+                }
+                className="text-sm"
+              />
+              <span className="text-sm text-brand-muted">
+                {form.avatarFile
+                  ? `Wybrany plik: ${form.avatarFile.name}`
+                  : "JPG, PNG albo WEBP do 5 MB"}
+              </span>
+            </label>
+          )}
 
           <label className="grid gap-2">
             <span className="text-sm font-semibold text-brand-navy">Kilka słów o sobie</span>
@@ -2151,16 +2532,74 @@ function SmsRegisterScreen() {
 
           <button
             type="submit"
-            disabled={loading || !smsVerified}
+            disabled={loading || sendingCode || confirmingCode || !authReady}
             className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
           >
             {loading
-              ? "Zapisywanie profilu..."
-              : "Zapisz profil i przejdź do panelu"}
+              ? "Tworzenie konta..."
+              : sendingCode
+                ? "Wysyłanie kodu..."
+                : "Utwórz konto"}
             <ArrowRight size={16} />
           </button>
+
+          {smsVerified && !loading && (
+            <p className="text-sm text-brand-muted">
+              Numer telefonu jest już potwierdzony. Kliknięcie przycisku utworzy konto bez
+              ponownej weryfikacji SMS.
+            </p>
+          )}
+
+          <div id="register-phone-recaptcha" className="sr-only" />
         </form>
       </div>
+
+      <Dialog open={isSmsDialogOpen} onOpenChange={setIsSmsDialogOpen}>
+        <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
+          <div className="grid gap-5 p-6 sm:p-8">
+            <DialogHeader className="text-left">
+              <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
+                Potwierdzenie SMS
+              </p>
+              <DialogTitle className="text-2xl font-semibold text-brand-navy">
+                Potwierdź numer telefonu
+              </DialogTitle>
+              <DialogDescription className="text-sm leading-6 text-brand-muted">
+                Wysłaliśmy kod SMS na numer <strong className="text-brand-navy">{form.phone}</strong>.
+                Wpisz go, żeby dokończyć tworzenie konta.
+              </DialogDescription>
+            </DialogHeader>
+
+            <input
+              required
+              inputMode="numeric"
+              value={verificationCode}
+              onChange={(event) => setVerificationCode(event.target.value)}
+              placeholder="Kod z SMS"
+              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            />
+
+            <div className="flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsSmsDialogOpen(false)}
+                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+              >
+                Zamknij
+              </button>
+              <button
+                type="button"
+                disabled={!confirmationResult || !verificationCode.trim() || confirmingCode || loading}
+                onClick={() => void handleConfirmCode()}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+              >
+                {confirmingCode || loading ? "Potwierdzanie..." : "Potwierdź kod i utwórz konto"}
+                <Phone size={16} />
+              </button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -2374,11 +2813,9 @@ function RegisterPageLegacyUnused() {
 
       await submitAccountRequest({
         displayName: form.displayName,
-        email: form.email,
         phone: form.phone,
-        requestedRoles: form.requestedRoles,
+        trainerAuthorizationCode: form.password,
         notes: form.notes,
-        password: form.password,
       });
       toast.success("Konto zostało utworzone. Możesz się zalogować.");
       navigate("/login");

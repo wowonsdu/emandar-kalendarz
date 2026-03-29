@@ -57,9 +57,14 @@ import type {
   NotificationSettingsUpdateInput,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
+  OrganizerCalendarFeedInput,
+  ParticipantProfileUpdateInput,
+  PhotoMode,
   TrainerAccountApproval,
   TrainerCalendarFeed,
   TrainerCalendarFeedInput,
+  TrainerSharedSlotInput,
+  TrainerSharedSlotUpdateInput,
   TrainerExternalBusyMonth,
   TrainerBrandStatusUpdateInput,
   TrainerOrganizerRelation,
@@ -67,11 +72,15 @@ import type {
   TrainerProfileUpdateInput,
   TrainingEventBrandStatusUpdateInput,
   TrainingEventCollaborationUpdateInput,
+  TrainingEventImage,
   TrainingEventManagementUpdateInput,
   TrainingEventInput,
   TrainingEventScheduleDay,
   TrainingEventStatus,
   TrainingEvent,
+  OrganizerTrainingDraftDecisionInput,
+  OrganizerTrainingDraftInput,
+  OrganizerTrainingDraftUpdateInput,
 } from "@/domain/types";
 import { normalizeNotificationSettings } from "@/domain/notifications";
 import {
@@ -79,12 +88,16 @@ import {
   canManageTrainingEvent,
   deriveEnrollmentFinalStatus,
   getTrainingEventScheduleDays,
+  isPhotoModeEnabled,
+  isPhotoModeRequired,
   isParticipantEnrollmentActive,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
+  isTrainerSharedSlotActive,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
   mergeBusyIntervals,
+  resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
@@ -102,7 +115,11 @@ const collections = {
   enrollmentRequests: "enrollmentRequests",
   relations: "trainerOrganizerRelations",
   availabilitySlots: "availabilitySlots",
+  trainerSharedSlots: "trainerSharedSlots",
   trainerCalendarFeeds: "trainerCalendarFeeds",
+  organizerCalendarFeeds: "organizerCalendarFeeds",
+  organizerExternalBusyMonths: "organizerExternalBusyMonths",
+  trainerOrganizerCalendarFeeds: "trainerOrganizerCalendarFeeds",
   trainerExternalBusyMonths: "trainerExternalBusyMonths",
   notifications: "notifications",
   accountRequests: "accountRequests",
@@ -119,14 +136,19 @@ export function createEmptyStore(): DemoStore {
     trainingEvents: [],
     publicTrainingEvents: [],
     availabilitySlots: [],
+    trainerSharedSlots: [],
     trainerCalendarFeeds: [],
+    organizerCalendarFeeds: [],
+    organizerExternalBusyMonths: [],
+    trainerOrganizerCalendarFeeds: [],
     trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     accountRequests: [],
     trainerAccountApprovals: [],
     appSettings: {
-      signupPhotoRequired: false,
+      signupPhotoMode: "optional",
+      enrollmentPhotoMode: "optional",
     },
   };
 }
@@ -160,6 +182,27 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+async function hashTrainerAuthorizationCode(code: string) {
+  const normalized = code.trim();
+
+  if (!normalized) {
+    throw new Error("Podaj kod trenera.");
+  }
+
+  if (!globalThis.crypto?.subtle) {
+    throw new Error("Przeglądarka nie obsługuje bezpiecznego hashowania kodu.");
+  }
+
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(normalized),
+  );
+
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -170,7 +213,6 @@ function formatMonthKey(date: Date) {
 
 function getAvailabilitySyncRange() {
   const rangeStart = new Date();
-  rangeStart.setUTCMinutes(0, 0, 0);
 
   const rangeEnd = new Date(rangeStart);
   rangeEnd.setUTCFullYear(rangeEnd.getUTCFullYear() + 3);
@@ -211,6 +253,16 @@ function normalizeEventTags(tags: string[] | null | undefined) {
         .filter(Boolean),
     ),
   );
+}
+
+function normalizeEventImages(images: TrainingEventImage[] | null | undefined) {
+  return (images ?? []).map((image) => ({
+    id: image.id,
+    url: image.url,
+    storagePath: image.storagePath,
+    width: image.width,
+    height: image.height,
+  }));
 }
 
 function normalizeScheduleDays(
@@ -519,9 +571,11 @@ function mergeById<T extends { id: string }>(...groups: T[][]) {
 
 function normalizeAppSettings(raw: unknown): AppSettings {
   const normalized = normalizeValue(raw) as Record<string, unknown>;
+  const signupFallback = normalized.signupPhotoRequired === true ? "required" : "optional";
 
   return {
-    signupPhotoRequired: normalized.signupPhotoRequired === true,
+    signupPhotoMode: resolvePhotoMode(normalized.signupPhotoMode, signupFallback),
+    enrollmentPhotoMode: resolvePhotoMode(normalized.enrollmentPhotoMode, "optional"),
   };
 }
 
@@ -539,7 +593,8 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
         appSettings: snapshot.exists()
           ? normalizeAppSettings(snapshot.data())
           : {
-              signupPhotoRequired: false,
+              signupPhotoMode: "optional",
+              enrollmentPhotoMode: "optional",
             },
       });
     }),
@@ -594,12 +649,17 @@ export async function fetchAppUser(userId: string) {
   return normalizeAppUserRecord(snapshot.id, snapshot.data());
 }
 
-export async function ensurePhoneParticipantProfile() {
+export async function ensurePhoneParticipantProfile(input?: {
+  seedTrainerId?: string;
+  trainerAuthorizationCode?: string;
+}) {
   return callFirebaseFunction<
-    { seedTrainerId?: string } | undefined,
-    { ok: true; userId: string; accountCreated?: boolean }
+    { seedTrainerId?: string; trainerAuthorizationCode?: string } | undefined,
+    | { ok: true; userId: string; accountCreated?: boolean }
+    | { ok: true; trainerId: string; organizerProfileCreated: boolean }
   >(
     "ensurePhoneParticipantProfile",
+    input,
   );
 }
 
@@ -679,6 +739,28 @@ export function subscribePrivateStore(
       ),
     );
     unsubs.push(
+      subscribeArray<TrainerSharedSlot>(
+        query(
+          collection(db, collections.trainerSharedSlots),
+          where("trainerId", "==", trainerProfileId),
+        ),
+        (trainerSharedSlots) => {
+          onPatch({ trainerSharedSlots });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerOrganizerCalendarFeed>(
+        query(
+          collection(db, collections.trainerOrganizerCalendarFeeds),
+          where("trainerId", "==", trainerProfileId),
+        ),
+        (trainerOrganizerCalendarFeeds) => {
+          onPatch({ trainerOrganizerCalendarFeeds });
+        },
+      ),
+    );
+    unsubs.push(
       subscribeArray<TrainerExternalBusyMonth>(
         query(
           collection(db, collections.trainerExternalBusyMonths),
@@ -690,7 +772,11 @@ export function subscribePrivateStore(
       ),
     );
   } else {
-    onPatch({ trainerCalendarFeeds: [], trainerExternalBusyMonths: [] });
+    onPatch({
+      trainerCalendarFeeds: [],
+      trainerExternalBusyMonths: [],
+      trainerSharedSlots: currentUser.role === "organizer" ? undefined : [],
+    });
   }
 
   if (currentUser.role === "admin") {
@@ -722,6 +808,38 @@ export function subscribePrivateStore(
         collection(db, collections.availabilitySlots),
         (availabilitySlots) => {
           onPatch({ availabilitySlots });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerSharedSlot>(
+        collection(db, collections.trainerSharedSlots),
+        (trainerSharedSlots) => {
+          onPatch({ trainerSharedSlots });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<OrganizerCalendarFeed>(
+        collection(db, collections.organizerCalendarFeeds),
+        (organizerCalendarFeeds) => {
+          onPatch({ organizerCalendarFeeds });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<OrganizerExternalBusyMonth>(
+        collection(db, collections.organizerExternalBusyMonths),
+        (organizerExternalBusyMonths) => {
+          onPatch({ organizerExternalBusyMonths });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerOrganizerCalendarFeed>(
+        collection(db, collections.trainerOrganizerCalendarFeeds),
+        (trainerOrganizerCalendarFeeds) => {
+          onPatch({ trainerOrganizerCalendarFeeds });
         },
       ),
     );
@@ -845,6 +963,14 @@ export function subscribePrivateStore(
   if (currentUser.role === "organizer") {
     if (organizerProfileId) {
       unsubs.push(
+        subscribeArray<TrainerSharedSlot>(
+          collection(db, collections.trainerSharedSlots),
+          (trainerSharedSlots) => {
+            onPatch({ trainerSharedSlots });
+          },
+        ),
+      );
+      unsubs.push(
         subscribeArray<AvailabilitySlot>(
           query(
             collection(db, collections.availabilitySlots),
@@ -855,8 +981,47 @@ export function subscribePrivateStore(
           },
         ),
       );
+      unsubs.push(
+        subscribeArray<OrganizerCalendarFeed>(
+          query(
+            collection(db, collections.organizerCalendarFeeds),
+            where("organizerId", "==", organizerProfileId),
+          ),
+          (organizerCalendarFeeds) => {
+            onPatch({ organizerCalendarFeeds });
+          },
+        ),
+      );
+      unsubs.push(
+        subscribeArray<OrganizerExternalBusyMonth>(
+          query(
+            collection(db, collections.organizerExternalBusyMonths),
+            where("organizerId", "==", organizerProfileId),
+          ),
+          (organizerExternalBusyMonths) => {
+            onPatch({ organizerExternalBusyMonths });
+          },
+        ),
+      );
+      unsubs.push(
+        subscribeArray<TrainerOrganizerCalendarFeed>(
+          query(
+            collection(db, collections.trainerOrganizerCalendarFeeds),
+            where("organizerId", "==", organizerProfileId),
+          ),
+          (trainerOrganizerCalendarFeeds) => {
+            onPatch({ trainerOrganizerCalendarFeeds });
+          },
+        ),
+      );
     } else {
-      onPatch({ availabilitySlots: [] });
+      onPatch({
+        availabilitySlots: [],
+        trainerSharedSlots: [],
+        organizerCalendarFeeds: [],
+        organizerExternalBusyMonths: [],
+        trainerOrganizerCalendarFeeds: [],
+      });
     }
 
     const organizerRequestsQuery = buildRoleQuery(
@@ -873,6 +1038,11 @@ export function subscribePrivateStore(
     } else {
       onPatch({ enrollmentRequests: [] });
     }
+  } else {
+    onPatch({
+      organizerCalendarFeeds: [],
+      organizerExternalBusyMonths: [],
+    });
   }
 
   if (currentUser.role === "participant") {
@@ -916,7 +1086,11 @@ export function subscribePrivateStore(
     onPatch({
       relations: [],
       availabilitySlots: [],
+      trainerSharedSlots: [],
       trainerCalendarFeeds: [],
+      organizerCalendarFeeds: [],
+      organizerExternalBusyMonths: [],
+      trainerOrganizerCalendarFeeds: [],
       trainerExternalBusyMonths: [],
     });
   }
@@ -1300,7 +1474,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       EnrollmentFormInput,
       "eventId" | "imieNazwisko" | "telefon" | "polecenieOdKogo" | "wiadomosc"
     >,
-    { requestId: string; photoPath: string; photoRequired: boolean }
+    { requestId: string; photoPath: string | null; photoMode: PhotoMode }
   >("createEnrollmentDraft", {
     eventId: input.eventId,
     imieNazwisko: input.imieNazwisko,
@@ -1310,16 +1484,27 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   });
 
   try {
+    if (!isPhotoModeEnabled(draft.photoMode) && input.photoFile) {
+      throw new Error("To szkolenie nie zbiera zdjęcia twarzy.");
+    }
+
     const profileAvatar =
-      input.photoFile && auth.currentUser && !auth.currentUser.isAnonymous
+      input.photoFile &&
+      isPhotoModeEnabled(draft.photoMode) &&
+      auth.currentUser &&
+      !auth.currentUser.isAnonymous
         ? await uploadCurrentUserAvatar(input.photoFile)
         : null;
 
-    if (draft.photoRequired && !input.photoFile) {
+    if (isPhotoModeRequired(draft.photoMode) && !input.photoFile) {
       throw new Error("To szkolenie wymaga zdjęcia twarzy.");
     }
 
     if (input.photoFile) {
+      if (!draft.photoPath) {
+        throw new Error("To szkolenie nie przyjmuje teraz zdjęcia twarzy.");
+      }
+
       const metadata: UploadMetadata = { contentType: input.photoFile.type };
       await uploadBytes(ref(storage, draft.photoPath), input.photoFile, metadata);
     }
@@ -1334,7 +1519,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       { ok: true }
     >("finalizeEnrollmentDraft", {
       requestId: draft.requestId,
-      photoPath: input.photoFile ? draft.photoPath : undefined,
+      photoPath: input.photoFile ? draft.photoPath ?? undefined : undefined,
       avatarPath: profileAvatar?.avatarPath,
       avatarUrl: profileAvatar?.avatarUrl,
     });
@@ -1908,6 +2093,138 @@ export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
   await rebuildTrainerExternalBusyMonths(trainer);
 }
 
+export async function addTrainerSharedSlot(
+  input: TrainerSharedSlotInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    TrainerSharedSlotInput,
+    { ok: true; slotId: string }
+  >("addTrainerSharedSlot", input);
+}
+
+export async function updateTrainerSharedSlot(
+  input: TrainerSharedSlotUpdateInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    TrainerSharedSlotUpdateInput,
+    { ok: true }
+  >("updateTrainerSharedSlot", input);
+}
+
+export async function archiveTrainerSharedSlot(slotId: string, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<{ slotId: string }, { ok: true }>(
+    "archiveTrainerSharedSlot",
+    { slotId },
+  );
+}
+
+export async function addOrganizerCalendarFeed(
+  input: OrganizerCalendarFeedInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerCalendarFeedInput,
+    { ok: true; feedId: string }
+  >("addOrganizerCalendarFeed", input);
+}
+
+export async function updateOrganizerCalendarFeedEnabled(
+  feedId: string,
+  enabled: boolean,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    { feedId: string; enabled: boolean },
+    { ok: true }
+  >("updateOrganizerCalendarFeedEnabled", { feedId, enabled });
+}
+
+export async function removeOrganizerCalendarFeed(feedId: string, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<{ feedId: string }, { ok: true }>(
+    "removeOrganizerCalendarFeed",
+    { feedId },
+  );
+}
+
+export async function syncOwnOrganizerCalendarFeeds(actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<undefined, { ok: true }>("syncOwnOrganizerCalendarFeeds");
+}
+
+export async function createOrganizerTrainingDraft(
+  input: OrganizerTrainingDraftInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerTrainingDraftInput,
+    { ok: true; eventId: string }
+  >("createOrganizerTrainingDraft", input);
+}
+
+export async function updateOrganizerTrainingDraft(
+  input: OrganizerTrainingDraftUpdateInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerTrainingDraftUpdateInput,
+    { ok: true }
+  >("updateOrganizerTrainingDraft", input);
+}
+
+export async function withdrawOrganizerTrainingDraft(
+  eventId: string,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<{ eventId: string }, { ok: true }>(
+    "withdrawOrganizerTrainingDraft",
+    { eventId },
+  );
+}
+
+export async function decideOrganizerTrainingDraft(
+  input: OrganizerTrainingDraftDecisionInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerTrainingDraftDecisionInput,
+    { ok: true }
+  >("decideOrganizerTrainingDraft", input);
+}
+
+export async function resetTrainerOrganizerCalendarFeedToken(
+  feedId: string,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    { feedId: string },
+    { ok: true; subscribeUrl: string }
+  >("resetTrainerOrganizerCalendarFeedToken", { feedId });
+}
+
+export async function getTrainerOrganizerGoogleCalendarSubscribeUrl(
+  feedId: string,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    { feedId: string },
+    { ok: true; subscribeUrl: string }
+  >("getTrainerOrganizerGoogleCalendarSubscribeUrl", { feedId });
+}
+
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {
   const { db } = assertReady();
   if (actor.role !== "trainer" || !actor.trainerProfileId) {
@@ -1956,18 +2273,23 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
   }
 
   const trimmedLocation = input.location.trim();
+  const trimmedTitle = input.title?.trim() ?? "";
   const normalizedTags = normalizeEventTags(input.tags);
   const minimumParticipants = Math.max(
     1,
     Math.min(input.capacity, input.minimumParticipants ?? input.capacity),
   );
 
+  if (isCommunityTrainer && !trimmedTitle) {
+    throw new Error("Podaj tytuł wydarzenia społeczności.");
+  }
+
   await addDoc(collection(db, collections.trainingEvents), {
     trainerId: trainer.id,
     organizerId: organizer?.id ?? null,
     trainerUserId: trainer.userId,
     organizerUserId: organizer?.userId ?? null,
-    title: trimmedLocation,
+    title: isCommunityTrainer ? trimmedTitle : trimmedLocation,
     summary: input.summary.trim(),
     description: input.description.trim(),
     type: input.type.trim(),
@@ -2005,6 +2327,9 @@ export async function createUnifiedTrainingEvent(
     {
       trainerId?: string;
       organizerId?: string;
+      title?: string;
+      eventImages?: TrainingEventImage[];
+      useEventImageAsCover?: boolean;
       summary: string;
       description: string;
       type: string;
@@ -2022,6 +2347,9 @@ export async function createUnifiedTrainingEvent(
   >("createUnifiedTrainingEvent", {
     trainerId: input.trainerId,
     organizerId: input.organizerId,
+    title: input.title,
+    eventImages: normalizeEventImages(input.eventImages),
+    useEventImageAsCover: input.useEventImageAsCover === true,
     summary: input.summary,
     description: input.description,
     type: input.type,
@@ -2216,25 +2544,79 @@ async function uploadCurrentUserAvatar(file: File) {
   };
 }
 
+async function readImageSize(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Nie udało się odczytać wymiarów zdjęcia."));
+      element.src = objectUrl;
+    });
+
+    return {
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+export async function uploadCommunityEventImages(files: File[]) {
+  const { auth, storage } = assertReady();
+
+  if (!auth.currentUser || auth.currentUser.isAnonymous) {
+    throw new Error("Najpierw zaloguj się do panelu.");
+  }
+
+  const pendingFiles = files.filter(Boolean);
+
+  if (pendingFiles.length === 0) {
+    return [];
+  }
+
+  return Promise.all(
+    pendingFiles.map(async (file) => {
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        throw new Error("Zdjęcia wydarzenia muszą być w formacie JPG, PNG albo WEBP.");
+      }
+
+      if (file.size > 8 * 1024 * 1024) {
+        throw new Error("Każde zdjęcie wydarzenia może mieć maksymalnie 8 MB.");
+      }
+
+      const imageId = crypto.randomUUID();
+      const extension =
+        file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
+      const storagePath = `event-photos/users/${auth.currentUser.uid}/${imageId}.${extension}`;
+      const imageRef = ref(storage, storagePath);
+      const metadata: UploadMetadata = { contentType: file.type };
+      const dimensions = await readImageSize(file);
+
+      await uploadBytes(imageRef, file, metadata);
+
+      return {
+        id: imageId,
+        url: await getDownloadURL(imageRef),
+        storagePath,
+        width: dimensions.width,
+        height: dimensions.height,
+      } satisfies TrainingEventImage;
+    }),
+  );
+}
+
 export async function submitAccountRequest(input: AccountRequestInput) {
   const { auth } = assertReady();
-  const requestedRoles = normalizeRequestedRoles(input.requestedRoles);
-  const selectedTrainerIds = Array.from(new Set(input.selectedTrainerIds.filter(Boolean)));
 
   if (!auth.currentUser || auth.currentUser.isAnonymous) {
     throw new Error("Najpierw potwierdź numer telefonu kodem SMS.");
   }
 
-  if (requestedRoles.length === 0) {
-    throw new Error("Wybierz przynajmniej jeden typ konta.");
-  }
-
-  if (selectedTrainerIds.length === 0) {
-    throw new Error("Wybierz przynajmniej jednego trenera, do którego chodzisz na grupę.");
-  }
-
-  if (requestedRoles.includes("organizer") && !input.organizerTrainingIntent?.trim()) {
-    throw new Error("Opisz, jakie szkolenia chcesz organizować.");
+  if (!input.trainerAuthorizationCode.trim()) {
+    throw new Error("Podaj kod trenera.");
   }
 
   const avatar = input.avatarFile ? await uploadCurrentUserAvatar(input.avatarFile) : null;
@@ -2243,23 +2625,35 @@ export async function submitAccountRequest(input: AccountRequestInput) {
     {
       displayName: string;
       phone: string;
-      requestedRoles: Array<"trainer" | "organizer" | "participant">;
+      trainerAuthorizationCode: string;
       notes: string;
       avatarPath?: string;
       avatarUrl?: string;
-      organizerTrainingIntent?: string;
-      selectedTrainerIds: string[];
     },
     { ok: true; accountCreated?: boolean }
   >("finalizePhoneRegistration", {
     displayName: input.displayName,
     phone: input.phone,
-    requestedRoles,
+    trainerAuthorizationCode: input.trainerAuthorizationCode.trim(),
     notes: input.notes,
     avatarPath: avatar?.avatarPath,
     avatarUrl: avatar?.avatarUrl,
-    organizerTrainingIntent: input.organizerTrainingIntent?.trim() || undefined,
-    selectedTrainerIds,
+  });
+}
+
+export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode: string) {
+  const { auth } = assertReady();
+
+  if (!auth.currentUser || auth.currentUser.isAnonymous) {
+    throw new Error("Musisz być zalogowany.");
+  }
+
+  if (!trainerAuthorizationCode.trim()) {
+    throw new Error("Podaj kod trenera.");
+  }
+
+  return ensurePhoneParticipantProfile({
+    trainerAuthorizationCode: trainerAuthorizationCode.trim(),
   });
 }
 
@@ -2311,7 +2705,6 @@ export async function reviewCommunityEvent(input: {
   token: string;
   decision: "accepted" | "rejected";
   message?: string;
-  enableAutoApprove?: boolean;
 }) {
   await ensureAnonymousSession();
   return callFirebaseFunction<
@@ -2319,7 +2712,6 @@ export async function reviewCommunityEvent(input: {
       token: string;
       decision: "accepted" | "rejected";
       message?: string;
-      enableAutoApprove?: boolean;
     },
     { ok: true; eventId: string }
   >("reviewCommunityEvent", input);
@@ -2351,7 +2743,6 @@ export async function updateTrainerProfile(
     bio: input.bio.trim(),
     specialties,
     locations,
-    defaultEnrollmentPhotoRequired: input.defaultEnrollmentPhotoRequired === true,
   };
 
   if (input.avatarFile) {
@@ -2374,7 +2765,66 @@ export async function updateTrainerProfile(
     updates.avatarUploadedAt = nowIso();
   }
 
+  const nextAuthorizationCode = input.authorizationCode?.trim() ?? "";
+  if (nextAuthorizationCode) {
+    updates.authorizationCodeHash = await hashTrainerAuthorizationCode(nextAuthorizationCode);
+    updates.authorizationCodeConfigured = true;
+    updates.authorizationCodeUpdatedAt = nowIso();
+  } else if (trainer.authorizationCodeConfigured === true) {
+    updates.authorizationCodeConfigured = true;
+  }
+
   await updateDoc(trainerRef, updates);
+}
+
+export async function updateParticipantProfile(
+  currentUser: AppUser,
+  input: ParticipantProfileUpdateInput,
+) {
+  const { db } = assertReady();
+
+  if (currentUser.role !== "participant") {
+    throw new Error("Tylko uczestnik może edytować ten profil.");
+  }
+
+  const updates: Record<string, unknown> = {
+    displayName: input.displayName.trim(),
+    referralSource: input.referralSource?.trim() || "",
+    notes: input.notes?.trim() || "",
+  };
+
+  if (input.avatarFile) {
+    const avatar = await uploadCurrentUserAvatar(input.avatarFile);
+    updates.avatarPath = avatar.avatarPath;
+    updates.avatarUrl = avatar.avatarUrl;
+  }
+
+  await updateDoc(doc(db, collections.users, currentUser.id), updates);
+
+  const communityEvents = await getDocs(
+    query(
+      collection(db, collections.trainingEvents),
+      where("creatorUserId", "==", currentUser.id),
+      where("brandStatus", "==", "supported"),
+    ),
+  );
+
+  if (!communityEvents.empty) {
+    const batch = writeBatch(db);
+    const creatorAvatarUrl =
+      typeof updates.avatarUrl === "string"
+        ? updates.avatarUrl
+        : currentUser.avatarUrl ?? null;
+
+    communityEvents.docs.forEach((eventDoc) => {
+      batch.update(eventDoc.ref, {
+        creatorDisplayName: updates.displayName,
+        creatorAvatarUrl,
+      });
+    });
+
+    await batch.commit();
+  }
 }
 
 export async function updateOrganizerProfile(
@@ -2392,7 +2842,6 @@ export async function updateOrganizerProfile(
     contactName: input.contactName.trim(),
     location: input.location.trim(),
     description: input.description.trim(),
-    defaultEnrollmentPhotoRequired: input.defaultEnrollmentPhotoRequired === true,
   });
 }
 
@@ -2542,10 +2991,16 @@ export async function updateTrainingEventManagement(
       status: TrainingEventStatus;
       capacity: number;
       minimumParticipants: number;
+      title?: string;
+      location?: string;
       tags?: string[];
+      eventImages?: TrainingEventImage[];
+      useEventImageAsCover?: boolean;
       scheduleDays?: TrainingEventScheduleDay[];
       transferTargetEventId?: string;
       enrollmentPhotoRequirement?: "default" | "required" | "optional";
+      publicationDecision?: "accepted" | "rejected";
+      publicationReviewMessage?: string;
     },
     { ok: true }
   >("updateTrainingEventManagement", {
@@ -2553,10 +3008,16 @@ export async function updateTrainingEventManagement(
     status: input.status,
     capacity: input.capacity,
     minimumParticipants: input.minimumParticipants,
+    title: input.title?.trim() || undefined,
+    location: input.location?.trim() || undefined,
     tags: input.tags,
+    eventImages: normalizeEventImages(input.eventImages),
+    useEventImageAsCover: input.useEventImageAsCover === true,
     scheduleDays: input.scheduleDays,
     transferTargetEventId: input.transferTargetEventId?.trim() || undefined,
     enrollmentPhotoRequirement: input.enrollmentPhotoRequirement,
+    publicationDecision: input.publicationDecision,
+    publicationReviewMessage: input.publicationReviewMessage?.trim() || undefined,
   });
   return;
 
@@ -2838,7 +3299,8 @@ export async function updateAppSettings(input: AppSettings) {
   await setDoc(
     doc(db, collections.appMeta, "publicSettings"),
     {
-      signupPhotoRequired: input.signupPhotoRequired === true,
+      signupPhotoMode: resolvePhotoMode(input.signupPhotoMode, "optional"),
+      enrollmentPhotoMode: resolvePhotoMode(input.enrollmentPhotoMode, "optional"),
     },
     { merge: true },
   );

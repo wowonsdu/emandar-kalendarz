@@ -13,7 +13,7 @@ const config = {
   },
   functions: {
     source: ".",
-    runtime: "nodejs20",
+    runtime: "nodejs22",
   },
   emulators: {
     auth: {
@@ -50,7 +50,7 @@ async function main() {
   await writeFile(tempConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 
   const command =
-    'firebase emulators:exec --config .firebase.rules.test.json --only auth,firestore,storage,functions "vitest run tests/firebase/rules tests/firebaseRepository.integration.test.ts --reporter=dot --pool=forks --poolOptions.forks.singleFork"';
+    'bash scripts/firebase-cli.sh emulators:exec --config .firebase.rules.test.json --only auth,firestore,storage,functions "vitest run tests/firebase/rules tests/firebaseRepository.integration.test.ts --reporter=dot --pool=forks --poolOptions.forks.singleFork"';
 
   const child = spawn(command, {
     cwd: process.cwd(),

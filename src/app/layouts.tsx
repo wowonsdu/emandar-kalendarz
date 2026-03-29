@@ -143,13 +143,23 @@ export function PublicLayout() {
   );
 }
 
-function panelItems(role: AppRole, isCommunityTrainer = false) {
+function panelItems(
+  role: AppRole,
+  isCommunityTrainer = false,
+  pendingCommunityApprovals = 0,
+) {
   const base = [{ to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard }];
 
   if (role === "participant") {
     return [
       ...base,
-      { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
+      { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
+      { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
+      {
+        to: "/panel/wydarzenia-spolecznosci",
+        label: "Wydarzenia społeczności",
+        icon: CalendarDays,
+      },
     ];
   }
 
@@ -157,7 +167,12 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
     return [
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
-      { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
+      { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
+      {
+        to: "/panel/wydarzenia-spolecznosci",
+        label: "Wydarzenia społeczności",
+        icon: CalendarDays,
+      },
       {
         to: "/panel/terminy",
         label: "Terminy Przekazujacych Wiedze",
@@ -170,23 +185,24 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
   }
 
   if (role === "trainer") {
-    if (isCommunityTrainer) {
-      return [
-        ...base,
-        { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
-        { to: "/panel/szkolenia", label: "Moje wydarzenia", icon: CalendarDays },
-        { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
-        { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
-      ];
-    }
-
     return [
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
-      { to: "/panel/szkolenia", label: "Moje szkolenia", icon: CalendarDays },
-      { to: "/panel/terminy", label: "Dostepnosc", icon: CalendarDays },
+      { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
+      {
+        to: "/panel/wydarzenia-spolecznosci",
+        label: "Wydarzenia społeczności",
+        icon: CalendarDays,
+      },
+      {
+        to: "/panel/terminy",
+        label: "Dostepnosc",
+        icon: CalendarDays,
+      },
       { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
-      { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },
+      ...(isCommunityTrainer
+        ? []
+        : [{ to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users }]),
       { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
     ];
   }
@@ -197,7 +213,13 @@ function panelItems(role: AppRole, isCommunityTrainer = false) {
     { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
     { to: "/panel/trenerzy", label: "Przekazujacy Wiedze", icon: Users },
     { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },
-    { to: "/panel/szkolenia", label: "Szkolenia", icon: CalendarDays },
+    { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
+    {
+      to: "/panel/wydarzenia-spolecznosci",
+      label: "Wydarzenia społeczności",
+      icon: CalendarDays,
+      badgeCount: pendingCommunityApprovals,
+    },
     { to: "/panel/terminy", label: "Terminy", icon: CalendarDays },
     { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
     { to: "/panel/relacje", label: "Relacje", icon: ShieldCheck },
@@ -230,9 +252,15 @@ export function PanelLayout() {
   }
 
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
+  const pendingCommunityApprovals = store.trainingEvents.filter(
+    (item) =>
+      isCommunityBrandStatus(item.brandStatus) &&
+      item.publicationApprovalStatus === "pending",
+  ).length;
   const items = panelItems(
     currentUser.role,
     currentUser.role === "trainer" && isCommunityBrandStatus(trainerProfile?.brandStatus),
+    currentUser.role === "admin" ? pendingCommunityApprovals : 0,
   );
 
   return (
@@ -289,7 +317,13 @@ export function PanelLayout() {
                     }
                   >
                     <Icon size={18} />
-                    {item.label}
+                    <span className="min-w-0 flex-1">{item.label}</span>
+                    {item.badgeCount ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/90 px-2 py-1 text-xs font-semibold text-white">
+                        <Bell size={12} />
+                        {item.badgeCount}
+                      </span>
+                    ) : null}
                   </NavLink>
                 );
               })}

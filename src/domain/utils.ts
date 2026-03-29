@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   AppUser,
   AppRole,
   DecisionStatus,
@@ -9,8 +10,13 @@ import type {
   EnrollmentRequest,
   OrganizerProfile,
   ParticipantEnrollmentStatus,
+  PhotoMode,
   SharedAvailabilityWindow,
+  TrainerFreeDaySlice,
+  TrainerFreeDaySliceBucket,
+  TrainerSharedSlot,
   TrainingEventScheduleDay,
+  TrainingEventWorkflowStatus,
   TrainerOrganizerRelation,
   TrainingEventStatus,
   TrainingEvent,
@@ -160,6 +166,30 @@ export function isTrainingEventCollaborationAccepted(
     resolveTrainerCollaborationStatus(event) === "accepted" &&
     resolveOrganizerCollaborationStatus(event) === "accepted"
   );
+}
+
+export function isTrainingEventPubliclyVisible(
+  event: Pick<
+    TrainingEvent,
+    | "archivedAt"
+    | "brandStatus"
+    | "isPublished"
+    | "organizerCollaborationStatus"
+    | "organizerId"
+    | "publicationApprovalStatus"
+    | "selfManagedByTrainer"
+    | "trainerCollaborationStatus"
+  >,
+) {
+  if (!event.isPublished || isTrainingEventArchived(event)) {
+    return false;
+  }
+
+  if (isCommunityBrandStatus(event.brandStatus)) {
+    return event.publicationApprovalStatus === "accepted";
+  }
+
+  return isTrainingEventCollaborationAccepted(event);
 }
 
 export function canManageTrainingEvent(
@@ -370,6 +400,54 @@ export function resolveTrainingEventStatus(
   return "active";
 }
 
+export function resolveTrainingEventWorkflowStatus(
+  event: Pick<
+    TrainingEvent,
+    | "archivedAt"
+    | "isPublished"
+    | "trainerDecisionReason"
+    | "withdrawnAt"
+    | "workflowStatus"
+  >,
+): TrainingEventWorkflowStatus {
+  if (
+    event.workflowStatus === "draft-requested" ||
+    event.workflowStatus === "trainer-accepted" ||
+    event.workflowStatus === "trainer-rejected" ||
+    event.workflowStatus === "withdrawn" ||
+    event.workflowStatus === "published"
+  ) {
+    return event.workflowStatus;
+  }
+
+  if (event.withdrawnAt) {
+    return "withdrawn";
+  }
+
+  if (event.isPublished) {
+    return "published";
+  }
+
+  return event.trainerDecisionReason ? "trainer-rejected" : "trainer-accepted";
+}
+
+export function getTrainingEventWorkflowStatusLabel(
+  workflowStatus: TrainingEventWorkflowStatus | undefined | null,
+) {
+  switch (workflowStatus) {
+    case "trainer-accepted":
+      return "zaakceptowany przez trenera";
+    case "trainer-rejected":
+      return "odrzucony przez trenera";
+    case "withdrawn":
+      return "wycofany";
+    case "published":
+      return "opublikowany";
+    default:
+      return "oczekuje na decyzję trenera";
+  }
+}
+
 export function getTrainingEventStatusLabel(
   status: TrainingEventStatus | undefined | null,
 ) {
@@ -388,6 +466,26 @@ export function resolveMinimumParticipants(event: Pick<TrainingEvent, "minimumPa
   return Math.max(1, Math.min(event.capacity, minimumParticipants || event.capacity));
 }
 
+export function isOrganizerTrainingDraftEditable(
+  event: Pick<TrainingEvent, "archivedAt" | "organizerId" | "withdrawnAt" | "workflowStatus">,
+  actor: Pick<AppUser, "organizerProfileId" | "role">,
+) {
+  return (
+    actor.role === "organizer" &&
+    actor.organizerProfileId === event.organizerId &&
+    !isTrainingEventArchived(event) &&
+    !event.withdrawnAt &&
+    resolveTrainingEventWorkflowStatus(event) === "draft-requested"
+  );
+}
+
+export function isOrganizerTrainingDraftWithdrawable(
+  event: Pick<TrainingEvent, "archivedAt" | "organizerId" | "withdrawnAt" | "workflowStatus">,
+  actor: Pick<AppUser, "organizerProfileId" | "role">,
+) {
+  return isOrganizerTrainingDraftEditable(event, actor);
+}
+
 export function getRoleLabel(role: AppRole) {
   switch (role) {
     case "admin":
@@ -403,24 +501,36 @@ export function getRoleLabel(role: AppRole) {
   }
 }
 
-export function isEnrollmentPhotoRequiredForEvent(
-  event: Pick<TrainingEvent, "enrollmentPhotoRequirement" | "organizerId">,
-  trainer: Pick<TrainerProfile, "defaultEnrollmentPhotoRequired"> | undefined,
-  organizer: Pick<OrganizerProfile, "defaultEnrollmentPhotoRequired"> | undefined,
+export function resolvePhotoMode(
+  value: unknown,
+  fallback: PhotoMode = "optional",
+): PhotoMode {
+  return value === "required" || value === "optional" || value === "disabled"
+    ? value
+    : fallback;
+}
+
+export function isPhotoModeRequired(mode: PhotoMode) {
+  return mode === "required";
+}
+
+export function isPhotoModeEnabled(mode: PhotoMode) {
+  return mode !== "disabled";
+}
+
+export function resolveEnrollmentPhotoModeForEvent(
+  event: Pick<TrainingEvent, "enrollmentPhotoRequirement">,
+  appSettings: Pick<AppSettings, "enrollmentPhotoMode">,
 ) {
   if (event.enrollmentPhotoRequirement === "required") {
-    return true;
+    return "required";
   }
 
   if (event.enrollmentPhotoRequirement === "optional") {
-    return false;
+    return "optional";
   }
 
-  if (event.organizerId) {
-    return organizer?.defaultEnrollmentPhotoRequired === true;
-  }
-
-  return trainer?.defaultEnrollmentPhotoRequired === true;
+  return resolvePhotoMode(appSettings.enrollmentPhotoMode, "optional");
 }
 
 export function hasRole(
@@ -462,6 +572,43 @@ export function requireOrganizerProfileId(
   return organizerProfileId;
 }
 
+export function isTrainerSharedSlotActive(
+  slot: Pick<TrainerSharedSlot, "archivedAt" | "status">,
+) {
+  return slot.status !== "archived" && !slot.archivedAt;
+}
+
+export function doIntervalsOverlap(
+  left: Pick<TrainingEventScheduleDay, "startsAt" | "endsAt">,
+  right: Pick<TrainingEventScheduleDay, "startsAt" | "endsAt">,
+) {
+  return (
+    toTimestamp(left.startsAt) < toTimestamp(right.endsAt) &&
+    toTimestamp(left.endsAt) > toTimestamp(right.startsAt)
+  );
+}
+
+export function doesTrainingEventOverlapRange(
+  event: Pick<TrainingEvent, "scheduleDays" | "startsAt" | "endsAt">,
+  startsAt: string,
+  endsAt: string,
+) {
+  const target = { startsAt, endsAt };
+  return getTrainingEventScheduleDays(event).some((day) => doIntervalsOverlap(day, target));
+}
+
+export function buildGoogleCalendarSubscribeUrl(
+  calendarUrl: string,
+) {
+  const trimmed = calendarUrl.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  return `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(trimmed)}`;
+}
+
 function toTimestamp(value: string) {
   return new Date(value).getTime();
 }
@@ -485,6 +632,34 @@ function roundDownToHour(timestamp: number) {
   const date = new Date(timestamp);
   date.setUTCMinutes(0, 0, 0);
   return date.getTime();
+}
+
+function getUtcDayStart(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setUTCHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function getNextUtcDayStart(timestamp: number) {
+  const date = new Date(timestamp);
+  date.setUTCHours(24, 0, 0, 0);
+  return date.getTime();
+}
+
+function getTrainerFreeDaySliceBucket(spanDays: number): TrainerFreeDaySliceBucket {
+  if (spanDays <= 1) {
+    return "1-day";
+  }
+
+  if (spanDays === 2) {
+    return "2-days";
+  }
+
+  if (spanDays === 3) {
+    return "3-days";
+  }
+
+  return "4-plus-days";
 }
 
 export function mergeBusyIntervals(intervals: ExternalBusyInterval[]) {
@@ -658,5 +833,103 @@ export function buildSharedAvailabilityWindows({
     }
 
     return toTimestamp(left.startsAt) - toTimestamp(right.startsAt);
+  });
+}
+
+export function buildTrainerFreeDaySlices({
+  busyIntervals,
+  rangeStart,
+  rangeEnd,
+  minimumDurationHours = 1,
+}: {
+  busyIntervals: ExternalBusyInterval[];
+  rangeStart: string;
+  rangeEnd: string;
+  minimumDurationHours?: number;
+}) {
+  const rangeStartTimestamp = roundUpToHour(toTimestamp(rangeStart));
+  const rangeEndTimestamp = roundDownToHour(toTimestamp(rangeEnd));
+  const minimumDurationMs = Math.max(1, minimumDurationHours) * 60 * 60 * 1000;
+
+  if (rangeEndTimestamp <= rangeStartTimestamp) {
+    return [] satisfies TrainerFreeDaySlice[];
+  }
+
+  const mergedBusyIntervals = mergeBusyIntervals(
+    busyIntervals
+      .map((interval) => {
+        const startsAt = Math.max(toTimestamp(interval.startsAt), rangeStartTimestamp);
+        const endsAt = Math.min(toTimestamp(interval.endsAt), rangeEndTimestamp);
+
+        return {
+          ...interval,
+          startsAt: toIso(startsAt),
+          endsAt: toIso(endsAt),
+        };
+      })
+      .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt)),
+  );
+
+  const freeWindows: Array<{ startsAt: number; endsAt: number }> = [];
+  let cursor = rangeStartTimestamp;
+
+  mergedBusyIntervals.forEach((interval) => {
+    const intervalStart = toTimestamp(interval.startsAt);
+    const intervalEnd = toTimestamp(interval.endsAt);
+
+    if (intervalStart > cursor) {
+      freeWindows.push({
+        startsAt: cursor,
+        endsAt: intervalStart,
+      });
+    }
+
+    if (intervalEnd > cursor) {
+      cursor = intervalEnd;
+    }
+  });
+
+  if (cursor < rangeEndTimestamp) {
+    freeWindows.push({
+      startsAt: cursor,
+      endsAt: rangeEndTimestamp,
+    });
+  }
+
+  return freeWindows.flatMap((window) => {
+    if (window.endsAt - window.startsAt < minimumDurationMs) {
+      return [];
+    }
+
+    const spanDays =
+      Math.floor(
+        (getUtcDayStart(window.endsAt - 1) - getUtcDayStart(window.startsAt)) /
+          (24 * 60 * 60 * 1000),
+      ) + 1;
+    const spanBucket = getTrainerFreeDaySliceBucket(spanDays);
+    const slices: TrainerFreeDaySlice[] = [];
+    let sliceStart = window.startsAt;
+
+    while (sliceStart < window.endsAt) {
+      const sliceEnd = Math.min(window.endsAt, getNextUtcDayStart(sliceStart));
+
+      if (sliceEnd - sliceStart >= minimumDurationMs) {
+        slices.push({
+          startsAt: toIso(sliceStart),
+          endsAt: toIso(sliceEnd),
+          dayKey: toIso(getUtcDayStart(sliceStart)).slice(0, 10),
+          durationHours:
+            Math.round(((sliceEnd - sliceStart) / (60 * 60 * 1000)) * 10) / 10,
+          spanStartsAt: toIso(window.startsAt),
+          spanEndsAt: toIso(window.endsAt),
+          spanDays,
+          spanBucket,
+        });
+      }
+
+      sliceStart = sliceEnd;
+    }
+
+    return slices;
   });
 }

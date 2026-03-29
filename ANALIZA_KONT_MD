@@ -1,0 +1,694 @@
+# Analiza kont 806-02, 806-02-01, 860-02, 860-02-01
+
+## Zakres
+
+Analiza została wykonana w trybie `SELECT only` na bazie `STALBRO`.
+
+Sprawdzone źródła:
+- `dbo.pk_PlanKont`
+- `dbo.pd_RokObrotowy`
+- `dbo.dkr_Pozycja`
+- `dbo.dkr__Dokument`
+
+## Struktura kont
+
+- `806-02` to konto syntetyczne, poziom `1`, nie jest liściem, syntetyka `806`.
+- `806-02-01` to analityka, poziom `2`, jest liściem, syntetyka `806`.
+- `860-02` to konto syntetyczne, poziom `1`, nie jest liściem, syntetyka `860`.
+- `860-02-01` to analityka, poziom `2`, jest liściem, syntetyka `860`.
+
+Wspólne cechy tych czterech kont w `pk_PlanKont`:
+- `ko_Bilansowe = 1`
+- `ko_Wynikowe = 0`
+- `ko_Pozabilansowe = 0`
+- `ko_Rozrachunkowe = 0`
+- `ko_Kartotekowe = 0`
+- `ko_Walutowe = 0`
+
+## Nazwy i lata występowania
+
+### 806-02
+
+- Nazwa: `Kapitał zapasowy wynik CIT E`
+- Występuje w latach: `2024`, `2025`, `2026`
+- `ko_Id`:
+- `2024`: `90828`
+- `2025`: `94973`
+- `2026`: `106611`
+
+### 806-02-01
+
+- Nazwa: `Kapitał zapasowy wynik rok 2023 CIT E`
+- Występuje w latach: `2024`, `2025`, `2026`
+- `ko_Id`:
+- `2024`: `90829`
+- `2025`: `94974`
+- `2026`: `106612`
+
+### 860-02
+
+- Nazwa: `Wynik finansowy CIT Estoński`
+- Występuje w latach: `2023`, `2024`, `2025`, `2026`
+- `ko_Id`:
+- `2023`: `73130`
+- `2024`: `74645`
+- `2025`: `87707`
+- `2026`: `106621`
+
+### 860-02-01
+
+- Nazwa: `Wynik finansowy rok 2023`
+- Występuje w latach: `2023`, `2024`, `2025`, `2026`
+- `ko_Id`:
+- `2023`: `73131`
+- `2024`: `74646`
+- `2025`: `87708`
+- `2026`: `106622`
+
+## Powiązane konta
+
+Pod `860-02` występuje też:
+
+- `860-02-02`
+- Nazwa: `Wynik finansowy rok 2024 Cit Estoński`
+- Występuje w latach: `2024`, `2025`, `2026`
+- `ko_Id`:
+- `2024`: `90830`
+- `2025`: `94975`
+- `2026`: `106623`
+
+To ważne, bo `860-02` jest kontem nadrzędnym dla więcej niż jednej analityki.
+
+## Ruch na kontach
+
+### Konta bez bezpośrednich zapisów
+
+- `806-02` nie ma bezpośrednich zapisów w `dkr_Pozycja`.
+- `860-02` nie ma bezpośrednich zapisów w `dkr_Pozycja`.
+
+To jest spójne z tym, że są to konta nadrzędne, a księgowania idą na analityki.
+
+### 806-02-01
+
+Wykryte zapisy:
+
+- `2024-06-30`
+- rok: `2024`
+- strona: `Ma 2 629 202,71`
+- opis pozycji: `Zatwierdzenie bilansu za rok 2023`
+- dokument: `PK-135`
+- rejestr: `PK`
+- księgował: `MG`
+- dekretował: `MG`
+
+- `2025-01-01`
+- rok: `2025`
+- strona: `Ma 2 629 202,71`
+- brak powiązanego `dkr_Id`
+- to wygląda jak przeniesienie / stan otwarcia, a nie zwykły ręczny dekret
+
+Suma ruchu:
+
+- `2024`: `Wn 0,00`, `Ma 2 629 202,71`
+- `2025`: `Wn 0,00`, `Ma 2 629 202,71`
+
+### 860-02-01
+
+Wykryte zapisy:
+
+- `2023-12-31`, dokument `PK-130`, opis `Przeksięgowanie 400-860`
+- `Wn 2 939 292,31`
+
+- `2023-12-31`, dokument `PK-131`, opis `Przeksięgowanie 700-860`
+- `Ma 5 598 214,02`
+
+- `2023-12-31`, dokument `PK-133`, opis `Podatki`
+- `Wn 29 026,00`
+
+- `2023-12-31`, dokument `PK-133`, opis `Podatki`
+- `Wn 693,00`
+
+- `2024-01-01`
+- rok: `2024`
+- `Ma 2 629 202,71`
+- brak powiązanego `dkr_Id`
+- wygląda jak otwarcie roku
+
+- `2024-06-30`, dokument `PK-135`, opis `Zatwierdzenie bilansu za rok 2023`
+- `Wn 2 629 202,71`
+
+Suma ruchu:
+
+- `2023`: `Wn 2 969 011,31`, `Ma 5 598 214,02`
+- saldo netto `Ma 2 629 202,71`
+- `2024`: `Wn 2 629 202,71`, `Ma 2 629 202,71`
+- w `2024` konto zostało wyzerowane
+
+### 860-02-02
+
+Wykryte zapisy:
+
+- `2024-12-31`, dokument `PK-136`, `Przeksięgowanie 400-860`
+- `Wn 3 109 697,59`
+- `Ma 4 396,26`
+
+- `2024-12-31`, dokument `PK-137`, `Przeksięgowanie 700-860`
+- `Ma 5 744 699,85`
+
+- `2024-12-31`, dokument `PK-138`, `Przeksięgowanie 820,870-860`
+- `Wn 31 116,00`
+
+- `2024-12-31`, dokument `PK-140`, `Przeksięgowanie 700-860 po badaniu bilansu biegły`
+- `Ma 356 635,11`
+
+- `2024-12-31`, dokument `PK-142`, `Przeksięgowanie 700-860 po badaniu biegłego rewidenta`
+- `Wn 98 861,21`
+- `Ma 98 861,21`
+
+- `2024-12-31`, dokument `PK-144`, `Przeksięgowanie 820,870-860 po badaniu bilansu`
+- `Wn 19 772,00`
+
+- `2025-01-01`
+- `Ma 2 945 145,63`
+- brak powiązanego `dkr_Id`
+- wygląda jak otwarcie roku
+
+Suma ruchu:
+
+- `860-02-02`: `9` pozycji
+- `Wn 3 259 446,80`
+- `Ma 9 149 738,06`
+
+## Wniosek merytoryczny
+
+- `860-02-01` wygląda na konto wyniku za rok `2023`.
+- Na dzień `2024-06-30` wynik z `860-02-01` został przeksięgowany na `806-02-01`.
+- Nośnikiem tego przeniesienia jest dokument `PK-135` z opisem `Zatwierdzenie bilansu za rok 2023`.
+- `806-02-01` wygląda więc na konto kapitału zapasowego, na które przeniesiono zatwierdzony wynik `2023`.
+- `806-02` i `860-02` pełnią funkcję kont nadrzędnych.
+- Rzeczywisty ruch jest na analitykach.
+
+## Numeracja `ko_Id`
+
+### Obecne maksimum
+
+- Obecnie największe `ko_Id` w `dbo.pk_PlanKont` to `106631`.
+
+### Czy `ko_Id` jest per rok czy globalne
+
+W praktyce `ko_Id` zachowuje się jak numeracja globalna dla całej tabeli, a nie per rok:
+
+- lata mają różne zakresy `ko_Id`, ale te zakresy nachodzą na siebie historycznie
+- rekord z danego roku nie dostaje numeru od zera dla tego roku
+- nowe rekordy z `2026` zajmują końcówkę całej puli i dochodzą do `106631`
+
+Przykład:
+
+- `2022`: zakres `43940` - `99481`
+- `2023`: zakres `55090` - `99480`
+- `2024`: zakres `67359` - `99478`
+- `2025`: zakres `81497` - `99479`
+- `2026`: zakres `99484` - `106631`
+
+To oznacza:
+
+- `ko_Id` nie jest numeracją per rok
+- `ko_Id` wygląda na identyfikator globalny w obrębie całej tabeli `pk_PlanKont`
+- jednocześnie tabela nie ujawnia standardowej kolumny `IDENTITY` dla `ko_Id`, więc numer może być nadawany przez logikę aplikacji albo przez własny mechanizm poza `IDENTITY`
+
+## Co mamy dziś w latach 2022 i 2023
+
+### Rok 2022
+
+W obszarze `806` i `860` występują:
+
+- `806`
+- `806-01`
+- `860`
+- `860-01`
+
+Nie ma:
+
+- `806-02`
+- `806-02-01`
+- `860-02`
+- `860-02-01`
+
+### Rok 2023
+
+W obszarze `806` i `860` występują:
+
+- `806`
+- `806-01`
+- `860`
+- `860-01`
+- `860-02`
+- `860-02-01`
+
+Nie ma:
+
+- `806-02`
+- `806-02-01`
+
+To oznacza, że obecny stan bazy nie wygląda jak zwykłe przeniesienie kompletu tych czterech kont z `2022` do `2023`.
+
+## Jak można dodać te 4 konta tak, żeby wyglądały jak przeniesione na 2023
+
+Poniżej są warianty techniczne. To nie są wykonane zmiany, tylko analiza możliwości.
+
+### Wariant 1: dopisać brakujące konta do `2022`, a potem dopisać ich odpowiedniki do kolejnych lat
+
+Zakres:
+
+- dodać do `2022`:
+- `806-02`
+- `806-02-01`
+- `860-02`
+- `860-02-01`
+
+- upewnić się, że w `2023`, `2024`, `2025`, `2026` istnieją poprawne odpowiedniki
+
+Efekt:
+
+- logicznie będzie można powiedzieć, że konta zaczynają się od `2022`
+- przy kopiowaniu planu na kolejne lata będzie się to zgadzało biznesowo
+
+Problem:
+
+- istniejące `2023+` rekordy mają już swoje `ko_Id`
+- nowe rekordy dla `2022` dostałyby nowe globalne identyfikatory z końca puli
+- to nie będzie wyglądało jak historyczny wpis zrobiony naprawdę w `2022`
+- z poziomu numeracji technicznej będzie widać późne dopisanie
+
+### Wariant 2: ręcznie wstawić rekordy z kontrolą `ko_Id`, żeby pasowały historycznie
+
+Teoretycznie można próbować:
+
+- ręcznie sterować `ko_Id`
+- wstawiać rekordy do `2022` i `2023` tak, aby wyglądały na stare
+
+Ryzyka:
+
+- trzeba znać cały komplet zależności i ograniczeń aplikacji
+- trzeba sprawdzić klucze obce, indeksy, logikę kopiowania planu, ewentualne słowniki i mechanizmy wyszukiwania
+- trzeba sprawdzić, czy aplikacja nie utrzymuje dodatkowych metadanych poza `pk_PlanKont`
+- można uszkodzić spójność danych, jeśli aplikacja zakłada inny sposób generowania `ko_Id`
+
+Ten wariant jest możliwy tylko po pełnym audycie schematu i najlepiej poza produkcją.
+
+### Wariant 3: odtworzyć historię tak, jak zrobiłaby to aplikacja
+
+Najbardziej poprawny biznesowo wariant:
+
+- odtworzyć brakujące konta w najstarszym potrzebnym roku
+- uruchomić albo zasymulować mechanizm kopiowania planu kont rok po roku
+- sprawdzić, czy aplikacja tworzy zapisy otwarcia albo techniczne przeniesienia między latami
+
+Zalety:
+
+- największa zgodność z logiką systemu
+
+Wady:
+
+- wymaga prawa zapisu
+- wymaga rozpoznania mechanizmu tworzenia kolejnych planów rocznych
+- może wymagać środowiska testowego
+
+### Wariant 4: nie ruszać historii, tylko poprawić stan bieżący i dodać notę techniczną
+
+To wariant najmniej inwazyjny:
+
+- zostawić historyczne lata bez zmian
+- poprawić tylko stan, który jest potrzebny operacyjnie
+- odnotować, że te konta zostały wprowadzone później niż powinny
+
+Zalety:
+
+- najmniejsze ryzyko techniczne
+
+Wady:
+
+- nie daje efektu „wygląda jak przeniesione od 2022”
+
+## Moja ocena praktyczna
+
+Jeżeli celem jest:
+
+- zgodność biznesowa, a nie perfekcyjne ukrycie historii technicznej
+
+to najlepszy jest wariant:
+
+- dopisać brakujące konta do `2022`
+- sprawdzić spójność odpowiedników w `2023+`
+- zaakceptować, że `ko_Id` pokaże późne dopisanie
+
+Jeżeli celem jest:
+
+- żeby baza wyglądała tak, jakby to naprawdę istniało i było niesione od `2022`
+
+to bezpieczna realizacja wymaga:
+
+- środowiska testowego
+- prawa zapisu
+- pełnego rozpoznania zależności wokół `pk_PlanKont`
+- testu kopiowania planu kont i wpływu na dekrety / stany otwarcia / wyszukiwarki
+
+## Ograniczenie tej analizy
+
+Ta analiza została wykonana bez modyfikacji danych.
+Nie weryfikowałem jeszcze:
+
+- triggerów na `pk_PlanKont`
+- pełnych kluczy obcych do `pk_PlanKont`
+- procedur lub logiki aplikacyjnej, która zakłada sposób tworzenia planu kont między latami
+
+To byłby następny krok przed jakimkolwiek `INSERT`.
+
+## Plan odtworzenia ciągłości od 2022
+
+Jeżeli celem jest uzyskanie obrazu, w którym wszystkie cztery konta wyglądają jak istniejące nieprzerwanie od `2022`, to poprawna kolejność nie jest:
+
+- najpierw `2022`
+
+tylko:
+
+- najpierw uzupełnić brak w `2023`
+- dopiero potem dopisać `2022`
+
+Powód:
+
+- `860-02` i `860-02-01` już istnieją w `2023`
+- `806-02` i `806-02-01` w `2023` dziś nie istnieją
+- więc samo dodanie `2022` nie stworzy wiarygodnej ciągłości dla całej czwórki
+
+## Stan docelowy
+
+Po zmianie plan kont powinien wyglądać tak:
+
+- `2022`: `806-02`, `806-02-01`, `860-02`, `860-02-01`
+- `2023`: `806-02`, `806-02-01`, `860-02`, `860-02-01`
+- `2024`: już istnieją
+- `2025`: już istnieją
+- `2026`: już istnieją
+
+To oznacza, że realnie trzeba dopisać:
+
+- `2` rekordy do `2023`
+- `4` rekordy do `2022`
+
+Razem:
+
+- `6` rekordów
+
+## Proponowane wolne `ko_Id`
+
+### Rekordy do dodania w 2023
+
+Wolne identyfikatory:
+
+- `90621`
+- `90622`
+
+Proponowane przypisanie:
+
+- `90621` -> `806-02` w roku `2023`
+- `90622` -> `806-02-01` w roku `2023`
+
+Uzasadnienie:
+
+- są wolne
+- są mniejsze niż obecne ID tych kont z `2024`
+- mieszczą się w historycznym zakresie niższym niż rekordy `2024`
+
+### Rekordy do dodania w 2022
+
+Wolne identyfikatory:
+
+- `73017`
+- `73018`
+- `73019`
+- `73020`
+
+Proponowane przypisanie:
+
+- `73017` -> `806-02` w roku `2022`
+- `73018` -> `806-02-01` w roku `2022`
+- `73019` -> `860-02` w roku `2022`
+- `73020` -> `860-02-01` w roku `2022`
+
+Uzasadnienie:
+
+- są wolne
+- są mniejsze niż obecne ID:
+- `860-02` z `2023` (`73130`)
+- `860-02-01` z `2023` (`73131`)
+- `806-02` z `2024` (`90828`)
+- `806-02-01` z `2024` (`90829`)
+
+## Źródła do skopiowania danych
+
+### Etap 1: uzupełnienie 2023
+
+Do `2023` należy utworzyć:
+
+- `806-02`
+- `806-02-01`
+
+Najbezpieczniej skopiować definicje z `2024`:
+
+- `806-02` z rekordu `ko_Id = 90828`
+- `806-02-01` z rekordu `ko_Id = 90829`
+
+Zmienić tylko:
+
+- `ko_Id`
+- `ko_IdRokuObrotowego = 17` (`2023`)
+
+Pozostałe pola przepisać `1:1`, o ile test na kopii bazy nie pokaże dodatkowych wymagań triggera.
+
+### Etap 2: uzupełnienie 2022
+
+Do `2022` należy utworzyć:
+
+- `806-02`
+- `806-02-01`
+- `860-02`
+- `860-02-01`
+
+Źródła:
+
+- `860-02` skopiować z istniejącego `2023` (`ko_Id = 73130`)
+- `860-02-01` skopiować z istniejącego `2023` (`ko_Id = 73131`)
+- `806-02` skopiować z nowo dodanego `2023`
+- `806-02-01` skopiować z nowo dodanego `2023`
+
+Zmienić tylko:
+
+- `ko_Id`
+- `ko_IdRokuObrotowego = 16` (`2022`)
+
+## Kolejność wykonania
+
+### Krok 1: backup i punkt wyjścia
+
+Przed jakimkolwiek zapisem:
+
+- zrobić backup bazy albo przynajmniej eksport tabel:
+- `pk_PlanKont`
+- `pk_KontoZnaczniki`
+- `xpk_Ewid`
+
+- dodatkowo zapisać wynik kontrolny dla:
+- `SELECT ... WHERE ko_Nr IN ('806-02','806-02-01','860-02','860-02-01')`
+
+### Krok 2: potwierdzenie wolnych ID
+
+Bezpośrednio przed insertem trzeba jeszcze raz sprawdzić, czy nadal wolne są:
+
+- `90621`
+- `90622`
+- `73017`
+- `73018`
+- `73019`
+- `73020`
+
+### Krok 3: dodać brakujące rekordy do 2023
+
+Wstawić:
+
+- `806-02` / `2023` / `ko_Id = 90621`
+- `806-02-01` / `2023` / `ko_Id = 90622`
+
+### Krok 4: weryfikacja po 2023
+
+Po dodaniu `2023` sprawdzić:
+
+- rekordy istnieją
+- nie ma konfliktu unikalności `(ko_IdRokuObrotowego, ko_Nr)`
+- trigger nie zgłosił błędu
+- `xpk_Ewid` ma wpisy dla nowych `ko_Id`
+- plan kont dla `2023` otwiera się poprawnie w aplikacji
+
+### Krok 5: dodać rekordy do 2022
+
+Wstawić:
+
+- `806-02` / `2022` / `ko_Id = 73017`
+- `806-02-01` / `2022` / `ko_Id = 73018`
+- `860-02` / `2022` / `ko_Id = 73019`
+- `860-02-01` / `2022` / `ko_Id = 73020`
+
+### Krok 6: weryfikacja ciągłości
+
+Sprawdzić ciągłość:
+
+- `2022 -> 2023 -> 2024 -> 2025 -> 2026`
+
+W szczególności potwierdzić:
+
+- ten sam `ko_Nr` istnieje rok po roku
+- parametry kont są spójne
+- `ko_Id` są „historycznie starsze” od późniejszych odpowiedników
+
+### Krok 7: weryfikacja aplikacyjna
+
+Sprawdzić w programie:
+
+- widoczność planu kont dla `2022`
+- widoczność planu kont dla `2023`
+- działanie wyszukiwania tych kont
+- brak błędów przy otwieraniu planu i przełączaniu lat
+
+## Co trzeba uważać
+
+- Na `pk_PlanKont` są aktywne triggery:
+- `tr_PkPlanKont_Inserting`
+- `tr_PkPlanKont_Updating`
+- `tr_PkPlanKont_Deleting`
+
+- Definicje triggerów nie są dostępne wprost, więc część logiki może być ukryta.
+- `ins_Slad` nie prowadzi audytu dla `Konto księgowe`, więc ten zabieg prawdopodobnie nie zostawi czytelnego śladu audytowego.
+- Dla tych kont nie ma dziś powiązań w `pk_KontoZnaczniki`, co upraszcza operację.
+
+## Ważna uwaga biznesowa
+
+Nawet jeśli technicznie uzyskamy ciągłość od `2022`, to nazwy:
+
+- `806-02-01` = `Kapitał zapasowy wynik rok 2023 CIT E`
+- `860-02-01` = `Wynik finansowy rok 2023`
+
+w planie roku `2022` będą wyglądały trochę nienaturalnie.
+
+To nie łamie spójności technicznej, ale jest słabsze merytorycznie i może być zauważalne przez księgowość.
+
+## Ocena końcowa tego wariantu
+
+Wariant jest technicznie możliwy, ale żeby efekt był wiarygodny dla wszystkich czterech kont, trzeba:
+
+- najpierw dopisać `2` rekordy w `2023`
+- potem dopisać `4` rekordy w `2022`
+
+Czyli pełna operacja wymaga nie `4`, tylko `6` nowych rekordów.
+
+## Tabela robocza do wykonania zmiany
+
+To nie jest tabela do bazy danych.
+To jest robocza mapa operacyjna, która pozwala wykonać zmianę bez pomylenia:
+
+- roku docelowego
+- numeru konta
+- nowego `ko_Id`
+- rekordu źródłowego, z którego kopiowana jest definicja
+
+| Rok docelowy | ko_Nr      | Proponowane nowe ko_Id | Źródło kopiowania | Uwagi |
+|--------------|------------|------------------------|-------------------|-------|
+| 2023         | 806-02     | 90621                  | 2024 / `ko_Id=90828` | brak tego konta w `2023`, trzeba dodać jako pierwszy etap |
+| 2023         | 806-02-01  | 90622                  | 2024 / `ko_Id=90829` | brak tego konta w `2023`, trzeba dodać jako pierwszy etap |
+| 2022         | 806-02     | 73017                  | 2023 / nowy rekord `806-02` | dodawać dopiero po uzupełnieniu `2023` |
+| 2022         | 806-02-01  | 73018                  | 2023 / nowy rekord `806-02-01` | dodawać dopiero po uzupełnieniu `2023` |
+| 2022         | 860-02     | 73019                  | 2023 / `ko_Id=73130` | rekord źródłowy już istnieje |
+| 2022         | 860-02-01  | 73020                  | 2023 / `ko_Id=73131` | rekord źródłowy już istnieje |
+
+## Jak używać tej tabeli roboczej
+
+Przed zmianą:
+
+- potwierdzić, że wszystkie podane `ko_Id` są nadal wolne
+- potwierdzić, że rekordy źródłowe nadal istnieją i mają te same parametry
+
+W trakcie:
+
+- wykonywać insert dokładnie w kolejności z tabeli
+- po każdym etapie porównać rekord wynikowy z rekordem źródłowym
+
+Po zmianie:
+
+- odpalić kontrolny `SELECT` dla wszystkich lat `2022-2026`
+- sprawdzić ciągłość numerów kont i poprawność parametrów
+
+## Wyliczenie porównawcze CIT 19% vs 9%
+
+Poniższe wyliczenie jest uproszczonym porównaniem wykonanym na podstawie kwot wyniku widocznych na kontach estońskiego CIT:
+
+- `860-02-01` / `806-02-01` dla wyniku `2023`
+- `860-02-02` dla wyniku `2024`
+
+Nie jest to pełne wyliczenie podatku według całych reguł podatkowych.
+To jest porównanie księgowe na podstawie kwot wyniku, które widać w bazie.
+
+### Podstawa przyjęta do wyliczenia
+
+- wynik `2023`: `2 629 202,71`
+- wynik `2024`: `2 945 145,63`
+
+Łącznie:
+
+- `5 574 348,34`
+
+### Porównanie stawek
+
+- podatek przy `19%`: `1 059 126,18`
+- podatek przy `9%`: `501 691,35`
+- różnica `19% - 9%`: `557 434,83`
+
+### Rozbicie rok po roku
+
+#### Rok 2023
+
+- podstawa: `2 629 202,71`
+- podatek `19%`: `499 548,51`
+- podatek `9%`: `236 628,24`
+- różnica: `262 920,27`
+
+#### Rok 2024
+
+- podstawa: `2 945 145,63`
+- podatek `19%`: `559 577,67`
+- podatek `9%`: `265 063,11`
+- różnica: `294 514,56`
+
+## Dane z ksiąg dla porównania
+
+Na podstawie zaksięgowanych ruchów na kontach estońskiego CIT:
+
+- faktycznie zaksięgowany estoński CIT na `870-02`:
+- `2023`: `29 026,00`
+- `2024`: `50 888,00`
+- razem: `79 914,00`
+
+- widoczne zapłaty na `220-09`:
+- od `2023-02-22` do `2025-09-20`
+- razem: `97 228,95`
+
+## Wniosek z porównania
+
+Jeżeli patrzeć wyłącznie na wynik z tych kont:
+
+- łączny podatek przy `19%` dałby `1 059 126,18`
+- łączny podatek przy `9%` dałby `501 691,35`
+- różnica między tymi wariantami to `557 434,83`
+
+Jednocześnie w samej bazie jako estoński CIT widać:
+
+- zaksięgowanie: `79 914,00`
+- zapłaty: `97 228,95`

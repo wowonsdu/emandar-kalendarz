@@ -1533,63 +1533,6 @@ async function rebuildTrainerExternalBusyMonths(trainer) {
   await batch.commit();
 }
 
-async function buildTrainerCalendarLivePreview(trainer) {
-  const { rangeStart, rangeEnd } = getAvailabilitySyncRange();
-  const feedsSnapshot = await db
-    .collection(collections.trainerCalendarFeeds)
-    .where("trainerId", "==", trainer.id)
-    .get();
-
-  const enabledFeeds = feedsSnapshot.docs
-    .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
-    .filter((feed) => feed.enabled);
-  const successfulIntervals = [];
-  let successfulFeedCount = 0;
-
-  for (const feed of enabledFeeds) {
-    try {
-      const fetchedIntervals = await fetchIcalBusyIntervals({
-        provider: feed.provider,
-        sourceLabel: feed.id,
-        url: feed.url,
-        rangeStart,
-        rangeEnd,
-      });
-
-      successfulIntervals.push(...fetchedIntervals);
-      successfulFeedCount += 1;
-      await db.collection(collections.trainerCalendarFeeds).doc(feed.id).set(
-        {
-          lastSyncedAt: nowIso(),
-          lastSyncStatus: "success",
-          lastSyncError: FieldValue.delete(),
-          updatedAt: nowIso(),
-        },
-        { merge: true },
-      );
-    } catch (error) {
-      await db.collection(collections.trainerCalendarFeeds).doc(feed.id).set(
-        {
-          lastSyncedAt: nowIso(),
-          lastSyncStatus: "error",
-          lastSyncError: error instanceof Error ? error.message : "Nie udało się pobrać feedu iCal.",
-          updatedAt: nowIso(),
-        },
-        { merge: true },
-      );
-    }
-  }
-
-  return {
-    busyIntervals: mergeBusyIntervals(successfulIntervals),
-    enabledFeedCount: enabledFeeds.length,
-    successfulFeedCount,
-    fetchedAt: nowIso(),
-    rangeStart: rangeStart.toISOString(),
-    rangeEnd: rangeEnd.toISOString(),
-  };
-}
-
 function callableOptions() {
   return {
     region: FUNCTION_REGION,
@@ -3069,34 +3012,6 @@ export const archiveTrainingEvent = onCall(callableOptions(), async (request) =>
   );
 
   return { ok: true };
-});
-
-export const getOwnTrainerCalendarPreview = onCall(callableOptions(), async (request) => {
-  const { user } = await requireCurrentUser(request);
-  if (!user || user.role !== "trainer" || !user.trainerProfileId) {
-    throw new HttpsError("permission-denied", "Tylko trener może odczytać podgląd iCal.");
-  }
-
-  const trainer = await requireTrainerProfile(user.trainerProfileId);
-  if (isCommunityBrandStatus(trainer.brandStatus)) {
-    throw new HttpsError(
-      "failed-precondition",
-      "Panel wspólnych terminów jest dostępny tylko dla oficjalnych trenerów.",
-    );
-  }
-
-  try {
-    return await buildTrainerCalendarLivePreview(trainer);
-  } catch (error) {
-    console.error("getOwnTrainerCalendarPreview failed", {
-      trainerId: trainer.id,
-      error: error instanceof Error ? error.message : error,
-    });
-    throw new HttpsError(
-      "internal",
-      "Nie udało się odczytać aktywnych feedów iCal. Spróbuj ponownie za chwilę.",
-    );
-  }
 });
 
 function getTrainerCalendarFeedSyncSignature(feed) {

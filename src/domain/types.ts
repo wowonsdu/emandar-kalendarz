@@ -213,6 +213,15 @@ export interface TrainerExternalBusyMonth {
   updatedAt: string;
 }
 
+export interface TrainerCalendarLivePreview {
+  busyIntervals: ExternalBusyInterval[];
+  enabledFeedCount: number;
+  successfulFeedCount: number;
+  fetchedAt: string;
+  rangeStart: string;
+  rangeEnd: string;
+}
+
 export interface SharedAvailabilityWindow {
   startsAt: string;
   endsAt: string;

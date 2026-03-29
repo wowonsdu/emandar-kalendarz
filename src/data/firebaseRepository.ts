@@ -61,6 +61,7 @@ import type {
   TrainerAccountApproval,
   TrainerCalendarFeed,
   TrainerCalendarFeedInput,
+  TrainerCalendarLivePreview,
   TrainerExternalBusyMonth,
   TrainerBrandStatusUpdateInput,
   TrainerOrganizerRelation,
@@ -1821,29 +1822,15 @@ export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
     throw new Error("Tylko trener moze synchronizowac feedy iCal.");
   }
 
-  const { db } = assertReady();
   const trainer = await getTrainerProfile(actor.trainerProfileId);
 
   if (isCommunityBrandStatus(trainer.brandStatus)) {
     throw new Error("Panel wspolnych terminow jest dostepny tylko dla oficjalnych trenerow.");
   }
 
-  const feeds = await mapQuery<TrainerCalendarFeed>(
-    query(
-      collection(db, collections.trainerCalendarFeeds),
-      where("trainerId", "==", trainer.id),
-    ),
+  return callFirebaseFunction<undefined, TrainerCalendarLivePreview>(
+    "getOwnTrainerCalendarPreview",
   );
-  const targetFeed = feeds.find((feed) => feed.enabled) ?? feeds[0];
-
-  if (!targetFeed) {
-    throw new Error("Najpierw dodaj feed iCal.");
-  }
-
-  await updateDoc(doc(db, collections.trainerCalendarFeeds, targetFeed.id), {
-    syncRequestedAt: nowIso(),
-    updatedAt: nowIso(),
-  });
 }
 
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {

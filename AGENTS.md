@@ -45,6 +45,7 @@
 - The frontend already connects to Firebase emulators when `VITE_USE_FIREBASE_EMULATORS=true`.
 - Tests use a separate temporary Firebase emulator config and different ports, so do not change them casually.
 - If `firebase` is not available globally, always use the npm scripts above or `npx firebase`.
+- `trainerExternalBusyMonths` is a legacy intermediate cache of trainer busy intervals. For the trainer iCal preview, do not treat it as the source of truth; the current direction is a live 1:1 read from imported `.ics` feeds. Keep the old cache code for now, but plan a later cleanup/removal pass once the live path is stable.
 
 ## Firebase Functions Deploy Rule
 

@@ -89,12 +89,14 @@ import {
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
+  mergeBusyIntervals,
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
   resolveTrainingEventStatus,
 } from "@/domain/utils";
+import { fetchIcalBusyIntervals } from "@/lib/ical";
 
 type StorePatch = Partial<DemoStore>;
 
@@ -163,6 +165,13 @@ async function callFirebaseFunction<TInput extends Record<string, unknown> | und
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function getTrainerCalendarPreviewRange() {
+  const rangeStart = new Date();
+  const rangeEnd = new Date(rangeStart);
+  rangeEnd.setUTCFullYear(rangeEnd.getUTCFullYear() + 3);
+  return { rangeStart, rangeEnd };
 }
 
 async function hashTrainerAuthorizationCode(code: string) {
@@ -1818,6 +1827,8 @@ export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) 
 }
 
 export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
+  const { db } = assertReady();
+
   if (actor.role !== "trainer" || !actor.trainerProfileId) {
     throw new Error("Tylko trener moze synchronizowac feedy iCal.");
   }
@@ -1828,9 +1839,46 @@ export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
     throw new Error("Panel wspolnych terminow jest dostepny tylko dla oficjalnych trenerow.");
   }
 
-  return callFirebaseFunction<undefined, TrainerCalendarLivePreview>(
-    "getOwnTrainerCalendarPreview",
+  const feeds = await mapQuery<TrainerCalendarFeed>(
+    query(
+      collection(db, collections.trainerCalendarFeeds),
+      where("trainerId", "==", trainer.id),
+    ),
   );
+  const enabledFeeds = feeds.filter((feed) => feed.enabled);
+  const { rangeStart, rangeEnd } = getTrainerCalendarPreviewRange();
+  const settledIntervals = await Promise.all(
+    enabledFeeds.map(async (feed) => {
+      try {
+        return {
+          ok: true,
+          intervals: await fetchIcalBusyIntervals({
+            provider: feed.provider,
+            sourceLabel: feed.id,
+            url: feed.url,
+            rangeStart,
+            rangeEnd,
+          }),
+        };
+      } catch {
+        return {
+          ok: false,
+          intervals: [] as TrainerCalendarLivePreview["busyIntervals"],
+        };
+      }
+    }),
+  );
+
+  return {
+    busyIntervals: mergeBusyIntervals(
+      settledIntervals.flatMap((result) => result.intervals),
+    ),
+    enabledFeedCount: enabledFeeds.length,
+    successfulFeedCount: settledIntervals.filter((result) => result.ok).length,
+    fetchedAt: nowIso(),
+    rangeStart: rangeStart.toISOString(),
+    rangeEnd: rangeEnd.toISOString(),
+  } satisfies TrainerCalendarLivePreview;
 }
 
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {

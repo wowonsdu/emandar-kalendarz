@@ -73,7 +73,7 @@ END:VCALENDAR`;
   it("round-trips the demo calendar through parser and exporter without changing busy intervals", () => {
     const rawCalendar = readFileSync(DEMO_ICAL_PATH, "utf8");
     const rangeStart = new Date("2026-03-29T00:00:00.000Z");
-    const rangeEnd = new Date("2027-01-01T00:00:00.000Z");
+    const rangeEnd = new Date("2028-01-01T00:00:00.000Z");
     const parsed = parseIcalBusyIntervals({
       provider: "ical",
       sourceLabel: "demo-feed",
@@ -108,19 +108,19 @@ END:VCALENDAR`;
     );
   });
 
-  it("keeps only the planned 1-, 2- and 3-day free windows in the demo calendar", () => {
+  it("keeps only the planned 1-7 day and >7 day free windows in the demo calendar", () => {
     const rawCalendar = readFileSync(DEMO_ICAL_PATH, "utf8");
     const intervals = parseIcalBusyIntervals({
       provider: "ical",
       sourceLabel: "demo-feed",
       rawCalendar,
       rangeStart: new Date("2026-03-29T00:00:00.000Z"),
-      rangeEnd: new Date("2027-01-01T00:00:00.000Z"),
+      rangeEnd: new Date("2028-01-01T00:00:00.000Z"),
     });
     const slices = buildTrainerFreeDaySlices({
       busyIntervals: intervals,
       rangeStart: "2026-03-29T00:00:00.000Z",
-      rangeEnd: "2027-01-01T00:00:00.000Z",
+      rangeEnd: "2028-01-01T00:00:00.000Z",
       minimumDurationHours: 1,
     });
 
@@ -137,15 +137,37 @@ END:VCALENDAR`;
       { dayKey: "2026-06-27", spanBucket: "3-days", durationHours: 24 },
       { dayKey: "2026-06-28", spanBucket: "3-days", durationHours: 24 },
       { dayKey: "2026-06-29", spanBucket: "3-days", durationHours: 24 },
-      { dayKey: "2026-07-22", spanBucket: "1-day", durationHours: 24 },
-      { dayKey: "2026-08-16", spanBucket: "2-days", durationHours: 24 },
-      { dayKey: "2026-08-17", spanBucket: "2-days", durationHours: 24 },
-      { dayKey: "2026-10-03", spanBucket: "3-days", durationHours: 24 },
-      { dayKey: "2026-10-04", spanBucket: "3-days", durationHours: 24 },
-      { dayKey: "2026-10-05", spanBucket: "3-days", durationHours: 24 },
-      { dayKey: "2026-11-05", spanBucket: "1-day", durationHours: 24 },
-      { dayKey: "2026-12-10", spanBucket: "2-days", durationHours: 24 },
-      { dayKey: "2026-12-11", spanBucket: "2-days", durationHours: 24 },
+      { dayKey: "2026-08-01", spanBucket: "4-days", durationHours: 24 },
+      { dayKey: "2026-08-02", spanBucket: "4-days", durationHours: 24 },
+      { dayKey: "2026-08-03", spanBucket: "4-days", durationHours: 24 },
+      { dayKey: "2026-08-04", spanBucket: "4-days", durationHours: 24 },
+      { dayKey: "2026-09-10", spanBucket: "5-days", durationHours: 24 },
+      { dayKey: "2026-09-11", spanBucket: "5-days", durationHours: 24 },
+      { dayKey: "2026-09-12", spanBucket: "5-days", durationHours: 24 },
+      { dayKey: "2026-09-13", spanBucket: "5-days", durationHours: 24 },
+      { dayKey: "2026-09-14", spanBucket: "5-days", durationHours: 24 },
+      { dayKey: "2026-10-20", spanBucket: "6-days", durationHours: 24 },
+      { dayKey: "2026-10-21", spanBucket: "6-days", durationHours: 24 },
+      { dayKey: "2026-10-22", spanBucket: "6-days", durationHours: 24 },
+      { dayKey: "2026-10-23", spanBucket: "6-days", durationHours: 24 },
+      { dayKey: "2026-10-24", spanBucket: "6-days", durationHours: 24 },
+      { dayKey: "2026-10-25", spanBucket: "6-days", durationHours: 24 },
+      { dayKey: "2026-12-01", spanBucket: "7-days", durationHours: 24 },
+      { dayKey: "2026-12-02", spanBucket: "7-days", durationHours: 24 },
+      { dayKey: "2026-12-03", spanBucket: "7-days", durationHours: 24 },
+      { dayKey: "2026-12-04", spanBucket: "7-days", durationHours: 24 },
+      { dayKey: "2026-12-05", spanBucket: "7-days", durationHours: 24 },
+      { dayKey: "2026-12-06", spanBucket: "7-days", durationHours: 24 },
+      { dayKey: "2026-12-07", spanBucket: "7-days", durationHours: 24 },
+      { dayKey: "2027-03-01", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-02", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-03", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-04", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-05", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-06", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-07", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-08", spanBucket: "more-than-7-days", durationHours: 24 },
+      { dayKey: "2027-03-09", spanBucket: "more-than-7-days", durationHours: 24 },
     ]);
   });
 });

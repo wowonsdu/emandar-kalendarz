@@ -14,7 +14,9 @@ import type {
   SharedAvailabilityWindow,
   TrainerFreeDaySlice,
   TrainerFreeDaySliceBucket,
+  TrainerSharedSlot,
   TrainingEventScheduleDay,
+  TrainingEventWorkflowStatus,
   TrainerOrganizerRelation,
   TrainingEventStatus,
   TrainingEvent,
@@ -398,6 +400,54 @@ export function resolveTrainingEventStatus(
   return "active";
 }
 
+export function resolveTrainingEventWorkflowStatus(
+  event: Pick<
+    TrainingEvent,
+    | "archivedAt"
+    | "isPublished"
+    | "trainerDecisionReason"
+    | "withdrawnAt"
+    | "workflowStatus"
+  >,
+): TrainingEventWorkflowStatus {
+  if (
+    event.workflowStatus === "draft-requested" ||
+    event.workflowStatus === "trainer-accepted" ||
+    event.workflowStatus === "trainer-rejected" ||
+    event.workflowStatus === "withdrawn" ||
+    event.workflowStatus === "published"
+  ) {
+    return event.workflowStatus;
+  }
+
+  if (event.withdrawnAt) {
+    return "withdrawn";
+  }
+
+  if (event.isPublished) {
+    return "published";
+  }
+
+  return event.trainerDecisionReason ? "trainer-rejected" : "trainer-accepted";
+}
+
+export function getTrainingEventWorkflowStatusLabel(
+  workflowStatus: TrainingEventWorkflowStatus | undefined | null,
+) {
+  switch (workflowStatus) {
+    case "trainer-accepted":
+      return "zaakceptowany przez trenera";
+    case "trainer-rejected":
+      return "odrzucony przez trenera";
+    case "withdrawn":
+      return "wycofany";
+    case "published":
+      return "opublikowany";
+    default:
+      return "oczekuje na decyzję trenera";
+  }
+}
+
 export function getTrainingEventStatusLabel(
   status: TrainingEventStatus | undefined | null,
 ) {
@@ -414,6 +464,26 @@ export function getTrainingEventStatusLabel(
 export function resolveMinimumParticipants(event: Pick<TrainingEvent, "minimumParticipants" | "capacity">) {
   const minimumParticipants = event.minimumParticipants ?? 0;
   return Math.max(1, Math.min(event.capacity, minimumParticipants || event.capacity));
+}
+
+export function isOrganizerTrainingDraftEditable(
+  event: Pick<TrainingEvent, "archivedAt" | "organizerId" | "withdrawnAt" | "workflowStatus">,
+  actor: Pick<AppUser, "organizerProfileId" | "role">,
+) {
+  return (
+    actor.role === "organizer" &&
+    actor.organizerProfileId === event.organizerId &&
+    !isTrainingEventArchived(event) &&
+    !event.withdrawnAt &&
+    resolveTrainingEventWorkflowStatus(event) === "draft-requested"
+  );
+}
+
+export function isOrganizerTrainingDraftWithdrawable(
+  event: Pick<TrainingEvent, "archivedAt" | "organizerId" | "withdrawnAt" | "workflowStatus">,
+  actor: Pick<AppUser, "organizerProfileId" | "role">,
+) {
+  return isOrganizerTrainingDraftEditable(event, actor);
 }
 
 export function getRoleLabel(role: AppRole) {
@@ -500,6 +570,43 @@ export function requireOrganizerProfileId(
   }
 
   return organizerProfileId;
+}
+
+export function isTrainerSharedSlotActive(
+  slot: Pick<TrainerSharedSlot, "archivedAt" | "status">,
+) {
+  return slot.status !== "archived" && !slot.archivedAt;
+}
+
+export function doIntervalsOverlap(
+  left: Pick<TrainingEventScheduleDay, "startsAt" | "endsAt">,
+  right: Pick<TrainingEventScheduleDay, "startsAt" | "endsAt">,
+) {
+  return (
+    toTimestamp(left.startsAt) < toTimestamp(right.endsAt) &&
+    toTimestamp(left.endsAt) > toTimestamp(right.startsAt)
+  );
+}
+
+export function doesTrainingEventOverlapRange(
+  event: Pick<TrainingEvent, "scheduleDays" | "startsAt" | "endsAt">,
+  startsAt: string,
+  endsAt: string,
+) {
+  const target = { startsAt, endsAt };
+  return getTrainingEventScheduleDays(event).some((day) => doIntervalsOverlap(day, target));
+}
+
+export function buildGoogleCalendarSubscribeUrl(
+  calendarUrl: string,
+) {
+  const trimmed = calendarUrl.trim();
+
+  if (!trimmed) {
+    return "";
+  }
+
+  return `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(trimmed)}`;
 }
 
 function toTimestamp(value: string) {

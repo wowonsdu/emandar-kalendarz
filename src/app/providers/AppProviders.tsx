@@ -12,24 +12,32 @@ import { mapAppError } from "@/domain/errors";
 import { sortTrainerProfiles } from "@/domain/utils";
 import {
   addAvailabilitySlot as addAvailabilitySlotAction,
+  addOrganizerCalendarFeed as addOrganizerCalendarFeedAction,
   addTrainerCalendarFeed as addTrainerCalendarFeedAction,
+  addTrainerSharedSlot as addTrainerSharedSlotAction,
   archiveTrainingEvent as archiveTrainingEventAction,
+  archiveTrainerSharedSlot as archiveTrainerSharedSlotAction,
   completeParticipantOnboarding as completeParticipantOnboardingAction,
   connectOrganizerToTrainerWithCode as connectOrganizerToTrainerWithCodeAction,
   confirmEnrollmentAttendance as confirmEnrollmentAttendanceAction,
   createEmptyStore,
+  createOrganizerTrainingDraft as createOrganizerTrainingDraftAction,
   createUnifiedTrainingEvent as createTrainingEventAction,
   decideAccountRequest as decideAccountRequestAction,
   decideEnrollment as decideEnrollmentAction,
+  decideOrganizerTrainingDraft as decideOrganizerTrainingDraftAction,
   decideTrainerAccountApproval as decideTrainerAccountApprovalAction,
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   detachRelation as detachRelationAction,
   ensurePhoneParticipantProfileForFlow as ensurePhoneParticipantProfileForFlowAction,
   getCommunityEventReview as getCommunityEventReviewAction,
+  getTrainerOrganizerGoogleCalendarSubscribeUrl as getTrainerOrganizerGoogleCalendarSubscribeUrlAction,
   manageOwnEnrollment as manageOwnEnrollmentAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
   decideRelation as decideRelationAction,
+  removeOrganizerCalendarFeed as removeOrganizerCalendarFeedAction,
   requestRelation as requestRelationAction,
+  resetTrainerOrganizerCalendarFeedToken as resetTrainerOrganizerCalendarFeedTokenAction,
   resolveEnrollmentPhoto,
   reviewCommunityEvent as reviewCommunityEventAction,
   signIn as signInAction,
@@ -39,12 +47,16 @@ import {
   subscribePrivateStore,
   subscribePublicStore,
   subscribeUserProfile,
+  syncOwnOrganizerCalendarFeeds as syncOwnOrganizerCalendarFeedsAction,
   syncOwnTrainerCalendarFeeds as syncOwnTrainerCalendarFeedsAction,
   removeTrainerCalendarFeed as removeTrainerCalendarFeedAction,
   updateTrainingEventBrandStatus as updateTrainingEventBrandStatusAction,
   updateAppSettings as updateAppSettingsAction,
+  updateOrganizerCalendarFeedEnabled as updateOrganizerCalendarFeedEnabledAction,
+  updateOrganizerTrainingDraft as updateOrganizerTrainingDraftAction,
   updateTrainerCalendarFeedEnabled as updateTrainerCalendarFeedEnabledAction,
   updateActiveRole as updateActiveRoleAction,
+  updateTrainerSharedSlot as updateTrainerSharedSlotAction,
   updateTrainingEventManagement as updateTrainingEventManagementAction,
   updateOrganizerProfile as updateOrganizerProfileAction,
   updateParticipantProfile as updateParticipantProfileAction,
@@ -53,6 +65,7 @@ import {
   updateTrainerNotificationSettings as updateTrainerNotificationSettingsAction,
   updateTrainerProfile as updateTrainerProfileAction,
   uploadCommunityEventImages as uploadCommunityEventImagesAction,
+  withdrawOrganizerTrainingDraft as withdrawOrganizerTrainingDraftAction,
 } from "@/data/firebaseRepository";
 import type {
   AccountRequestInput,
@@ -64,12 +77,18 @@ import type {
   DemoStore,
   EmandarBrandStatus,
   EnrollmentFormInput,
+  OrganizerCalendarFeedInput,
+  OrganizerTrainingDraftDecisionInput,
+  OrganizerTrainingDraftInput,
+  OrganizerTrainingDraftUpdateInput,
   ParticipantEnrollmentManagementInput,
   ParticipantOnboardingInput,
   ParticipantProfileUpdateInput,
   NotificationSettingsUpdateInput,
   OrganizerProfileUpdateInput,
   TrainerCalendarFeedInput,
+  TrainerSharedSlotInput,
+  TrainerSharedSlotUpdateInput,
   TrainingEventImage,
   TrainingEvent,
   TrainingEventScheduleDay,
@@ -128,11 +147,20 @@ interface AppStateContextValue {
     archiveLinkedEvents?: boolean,
   ) => Promise<void>;
   createTrainingEvent: (input: TrainingEventInput) => Promise<void>;
+  createOrganizerTrainingDraft: (input: OrganizerTrainingDraftInput) => Promise<void>;
+  updateOrganizerTrainingDraft: (input: OrganizerTrainingDraftUpdateInput) => Promise<void>;
+  withdrawOrganizerTrainingDraft: (eventId: string) => Promise<void>;
+  decideOrganizerTrainingDraft: (
+    input: OrganizerTrainingDraftDecisionInput,
+  ) => Promise<void>;
   archiveTrainingEvent: (eventId: string) => Promise<void>;
   decideTrainingEventCollaboration: (
     eventId: string,
     status: "accepted" | "rejected",
   ) => Promise<void>;
+  addTrainerSharedSlot: (input: TrainerSharedSlotInput) => Promise<void>;
+  updateTrainerSharedSlot: (input: TrainerSharedSlotUpdateInput) => Promise<void>;
+  archiveTrainerSharedSlot: (slotId: string) => Promise<void>;
   addAvailabilitySlot: (
     input: Omit<AvailabilityInput, "trainerId"> & { trainerId?: string },
   ) => Promise<void>;
@@ -140,6 +168,14 @@ interface AppStateContextValue {
   updateTrainerCalendarFeedEnabled: (feedId: string, enabled: boolean) => Promise<void>;
   removeTrainerCalendarFeed: (feedId: string) => Promise<void>;
   syncOwnTrainerCalendarFeeds: () => Promise<void>;
+  addOrganizerCalendarFeed: (input: OrganizerCalendarFeedInput) => Promise<void>;
+  updateOrganizerCalendarFeedEnabled: (feedId: string, enabled: boolean) => Promise<void>;
+  removeOrganizerCalendarFeed: (feedId: string) => Promise<void>;
+  syncOwnOrganizerCalendarFeeds: () => Promise<void>;
+  resetTrainerOrganizerCalendarFeedToken: (relationId: string) => Promise<void>;
+  getTrainerOrganizerGoogleCalendarSubscribeUrl: (
+    relationId: string,
+  ) => Promise<string>;
   updateTrainerProfile: (input: TrainerProfileUpdateInput) => Promise<void>;
   updateOrganizerProfile: (input: OrganizerProfileUpdateInput) => Promise<void>;
   updateParticipantProfile: (input: ParticipantProfileUpdateInput) => Promise<void>;
@@ -222,8 +258,13 @@ function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStor
     trainingEvents: privateStore.trainingEvents ?? publicStore.trainingEvents,
     publicTrainingEvents: privateStore.publicTrainingEvents ?? publicStore.publicTrainingEvents,
     availabilitySlots: privateStore.availabilitySlots ?? publicStore.availabilitySlots,
+    trainerSharedSlots: privateStore.trainerSharedSlots ?? publicStore.trainerSharedSlots,
     trainerCalendarFeeds:
       privateStore.trainerCalendarFeeds ?? publicStore.trainerCalendarFeeds,
+    organizerCalendarFeeds:
+      privateStore.organizerCalendarFeeds ?? publicStore.organizerCalendarFeeds,
+    trainerOrganizerCalendarFeeds:
+      privateStore.trainerOrganizerCalendarFeeds ?? publicStore.trainerOrganizerCalendarFeeds,
     trainerExternalBusyMonths:
       privateStore.trainerExternalBusyMonths ?? publicStore.trainerExternalBusyMonths,
     enrollmentRequests:
@@ -464,6 +505,36 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
         await withFriendlyErrors(() => createTrainingEventAction(input, currentUser));
       },
+      async createOrganizerTrainingDraft(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => createOrganizerTrainingDraftAction(input, currentUser));
+      },
+      async updateOrganizerTrainingDraft(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => updateOrganizerTrainingDraftAction(input, currentUser));
+      },
+      async withdrawOrganizerTrainingDraft(eventId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          withdrawOrganizerTrainingDraftAction(eventId, currentUser),
+        );
+      },
+      async decideOrganizerTrainingDraft(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => decideOrganizerTrainingDraftAction(input, currentUser));
+      },
       async archiveTrainingEvent(eventId) {
         if (!currentUser) {
           throw new Error("Musisz byc zalogowany.");
@@ -487,6 +558,27 @@ export function AppProviders({ children }: { children: ReactNode }) {
             currentUser,
           ),
         );
+      },
+      async addTrainerSharedSlot(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => addTrainerSharedSlotAction(input, currentUser));
+      },
+      async updateTrainerSharedSlot(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => updateTrainerSharedSlotAction(input, currentUser));
+      },
+      async archiveTrainerSharedSlot(slotId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => archiveTrainerSharedSlotAction(slotId, currentUser));
       },
       async addAvailabilitySlot(input) {
         if (!currentUser) {
@@ -542,6 +634,58 @@ export function AppProviders({ children }: { children: ReactNode }) {
         }
 
         await withFriendlyErrors(() => syncOwnTrainerCalendarFeedsAction(currentUser));
+      },
+      async addOrganizerCalendarFeed(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => addOrganizerCalendarFeedAction(input, currentUser));
+      },
+      async updateOrganizerCalendarFeedEnabled(feedId, enabled) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateOrganizerCalendarFeedEnabledAction(feedId, enabled, currentUser),
+        );
+      },
+      async removeOrganizerCalendarFeed(feedId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          removeOrganizerCalendarFeedAction(feedId, currentUser),
+        );
+      },
+      async syncOwnOrganizerCalendarFeeds() {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => syncOwnOrganizerCalendarFeedsAction(currentUser));
+      },
+      async resetTrainerOrganizerCalendarFeedToken(relationId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          resetTrainerOrganizerCalendarFeedTokenAction(relationId, currentUser),
+        );
+      },
+      async getTrainerOrganizerGoogleCalendarSubscribeUrl(relationId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        const result = await withFriendlyErrors(() =>
+          getTrainerOrganizerGoogleCalendarSubscribeUrlAction(relationId, currentUser),
+        );
+
+        return result.subscribeUrl;
       },
       async updateTrainerProfile(input) {
         if (!currentUser) {

@@ -57,11 +57,14 @@ import type {
   NotificationSettingsUpdateInput,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
+  OrganizerCalendarFeedInput,
   ParticipantProfileUpdateInput,
   PhotoMode,
   TrainerAccountApproval,
   TrainerCalendarFeed,
   TrainerCalendarFeedInput,
+  TrainerSharedSlotInput,
+  TrainerSharedSlotUpdateInput,
   TrainerExternalBusyMonth,
   TrainerBrandStatusUpdateInput,
   TrainerOrganizerRelation,
@@ -75,6 +78,9 @@ import type {
   TrainingEventScheduleDay,
   TrainingEventStatus,
   TrainingEvent,
+  OrganizerTrainingDraftDecisionInput,
+  OrganizerTrainingDraftInput,
+  OrganizerTrainingDraftUpdateInput,
 } from "@/domain/types";
 import { normalizeNotificationSettings } from "@/domain/notifications";
 import {
@@ -87,6 +93,7 @@ import {
   isParticipantEnrollmentActive,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
+  isTrainerSharedSlotActive,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
   mergeBusyIntervals,
@@ -108,7 +115,11 @@ const collections = {
   enrollmentRequests: "enrollmentRequests",
   relations: "trainerOrganizerRelations",
   availabilitySlots: "availabilitySlots",
+  trainerSharedSlots: "trainerSharedSlots",
   trainerCalendarFeeds: "trainerCalendarFeeds",
+  organizerCalendarFeeds: "organizerCalendarFeeds",
+  organizerExternalBusyMonths: "organizerExternalBusyMonths",
+  trainerOrganizerCalendarFeeds: "trainerOrganizerCalendarFeeds",
   trainerExternalBusyMonths: "trainerExternalBusyMonths",
   notifications: "notifications",
   accountRequests: "accountRequests",
@@ -125,7 +136,11 @@ export function createEmptyStore(): DemoStore {
     trainingEvents: [],
     publicTrainingEvents: [],
     availabilitySlots: [],
+    trainerSharedSlots: [],
     trainerCalendarFeeds: [],
+    organizerCalendarFeeds: [],
+    organizerExternalBusyMonths: [],
+    trainerOrganizerCalendarFeeds: [],
     trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
@@ -724,6 +739,28 @@ export function subscribePrivateStore(
       ),
     );
     unsubs.push(
+      subscribeArray<TrainerSharedSlot>(
+        query(
+          collection(db, collections.trainerSharedSlots),
+          where("trainerId", "==", trainerProfileId),
+        ),
+        (trainerSharedSlots) => {
+          onPatch({ trainerSharedSlots });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerOrganizerCalendarFeed>(
+        query(
+          collection(db, collections.trainerOrganizerCalendarFeeds),
+          where("trainerId", "==", trainerProfileId),
+        ),
+        (trainerOrganizerCalendarFeeds) => {
+          onPatch({ trainerOrganizerCalendarFeeds });
+        },
+      ),
+    );
+    unsubs.push(
       subscribeArray<TrainerExternalBusyMonth>(
         query(
           collection(db, collections.trainerExternalBusyMonths),
@@ -735,7 +772,11 @@ export function subscribePrivateStore(
       ),
     );
   } else {
-    onPatch({ trainerCalendarFeeds: [], trainerExternalBusyMonths: [] });
+    onPatch({
+      trainerCalendarFeeds: [],
+      trainerExternalBusyMonths: [],
+      trainerSharedSlots: currentUser.role === "organizer" ? undefined : [],
+    });
   }
 
   if (currentUser.role === "admin") {
@@ -767,6 +808,38 @@ export function subscribePrivateStore(
         collection(db, collections.availabilitySlots),
         (availabilitySlots) => {
           onPatch({ availabilitySlots });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerSharedSlot>(
+        collection(db, collections.trainerSharedSlots),
+        (trainerSharedSlots) => {
+          onPatch({ trainerSharedSlots });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<OrganizerCalendarFeed>(
+        collection(db, collections.organizerCalendarFeeds),
+        (organizerCalendarFeeds) => {
+          onPatch({ organizerCalendarFeeds });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<OrganizerExternalBusyMonth>(
+        collection(db, collections.organizerExternalBusyMonths),
+        (organizerExternalBusyMonths) => {
+          onPatch({ organizerExternalBusyMonths });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<TrainerOrganizerCalendarFeed>(
+        collection(db, collections.trainerOrganizerCalendarFeeds),
+        (trainerOrganizerCalendarFeeds) => {
+          onPatch({ trainerOrganizerCalendarFeeds });
         },
       ),
     );
@@ -890,6 +963,14 @@ export function subscribePrivateStore(
   if (currentUser.role === "organizer") {
     if (organizerProfileId) {
       unsubs.push(
+        subscribeArray<TrainerSharedSlot>(
+          collection(db, collections.trainerSharedSlots),
+          (trainerSharedSlots) => {
+            onPatch({ trainerSharedSlots });
+          },
+        ),
+      );
+      unsubs.push(
         subscribeArray<AvailabilitySlot>(
           query(
             collection(db, collections.availabilitySlots),
@@ -900,8 +981,47 @@ export function subscribePrivateStore(
           },
         ),
       );
+      unsubs.push(
+        subscribeArray<OrganizerCalendarFeed>(
+          query(
+            collection(db, collections.organizerCalendarFeeds),
+            where("organizerId", "==", organizerProfileId),
+          ),
+          (organizerCalendarFeeds) => {
+            onPatch({ organizerCalendarFeeds });
+          },
+        ),
+      );
+      unsubs.push(
+        subscribeArray<OrganizerExternalBusyMonth>(
+          query(
+            collection(db, collections.organizerExternalBusyMonths),
+            where("organizerId", "==", organizerProfileId),
+          ),
+          (organizerExternalBusyMonths) => {
+            onPatch({ organizerExternalBusyMonths });
+          },
+        ),
+      );
+      unsubs.push(
+        subscribeArray<TrainerOrganizerCalendarFeed>(
+          query(
+            collection(db, collections.trainerOrganizerCalendarFeeds),
+            where("organizerId", "==", organizerProfileId),
+          ),
+          (trainerOrganizerCalendarFeeds) => {
+            onPatch({ trainerOrganizerCalendarFeeds });
+          },
+        ),
+      );
     } else {
-      onPatch({ availabilitySlots: [] });
+      onPatch({
+        availabilitySlots: [],
+        trainerSharedSlots: [],
+        organizerCalendarFeeds: [],
+        organizerExternalBusyMonths: [],
+        trainerOrganizerCalendarFeeds: [],
+      });
     }
 
     const organizerRequestsQuery = buildRoleQuery(
@@ -918,6 +1038,11 @@ export function subscribePrivateStore(
     } else {
       onPatch({ enrollmentRequests: [] });
     }
+  } else {
+    onPatch({
+      organizerCalendarFeeds: [],
+      organizerExternalBusyMonths: [],
+    });
   }
 
   if (currentUser.role === "participant") {
@@ -961,7 +1086,11 @@ export function subscribePrivateStore(
     onPatch({
       relations: [],
       availabilitySlots: [],
+      trainerSharedSlots: [],
       trainerCalendarFeeds: [],
+      organizerCalendarFeeds: [],
+      organizerExternalBusyMonths: [],
+      trainerOrganizerCalendarFeeds: [],
       trainerExternalBusyMonths: [],
     });
   }
@@ -1962,6 +2091,138 @@ export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
   }
 
   await rebuildTrainerExternalBusyMonths(trainer);
+}
+
+export async function addTrainerSharedSlot(
+  input: TrainerSharedSlotInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    TrainerSharedSlotInput,
+    { ok: true; slotId: string }
+  >("addTrainerSharedSlot", input);
+}
+
+export async function updateTrainerSharedSlot(
+  input: TrainerSharedSlotUpdateInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    TrainerSharedSlotUpdateInput,
+    { ok: true }
+  >("updateTrainerSharedSlot", input);
+}
+
+export async function archiveTrainerSharedSlot(slotId: string, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<{ slotId: string }, { ok: true }>(
+    "archiveTrainerSharedSlot",
+    { slotId },
+  );
+}
+
+export async function addOrganizerCalendarFeed(
+  input: OrganizerCalendarFeedInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerCalendarFeedInput,
+    { ok: true; feedId: string }
+  >("addOrganizerCalendarFeed", input);
+}
+
+export async function updateOrganizerCalendarFeedEnabled(
+  feedId: string,
+  enabled: boolean,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    { feedId: string; enabled: boolean },
+    { ok: true }
+  >("updateOrganizerCalendarFeedEnabled", { feedId, enabled });
+}
+
+export async function removeOrganizerCalendarFeed(feedId: string, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<{ feedId: string }, { ok: true }>(
+    "removeOrganizerCalendarFeed",
+    { feedId },
+  );
+}
+
+export async function syncOwnOrganizerCalendarFeeds(actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<undefined, { ok: true }>("syncOwnOrganizerCalendarFeeds");
+}
+
+export async function createOrganizerTrainingDraft(
+  input: OrganizerTrainingDraftInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerTrainingDraftInput,
+    { ok: true; eventId: string }
+  >("createOrganizerTrainingDraft", input);
+}
+
+export async function updateOrganizerTrainingDraft(
+  input: OrganizerTrainingDraftUpdateInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerTrainingDraftUpdateInput,
+    { ok: true }
+  >("updateOrganizerTrainingDraft", input);
+}
+
+export async function withdrawOrganizerTrainingDraft(
+  eventId: string,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<{ eventId: string }, { ok: true }>(
+    "withdrawOrganizerTrainingDraft",
+    { eventId },
+  );
+}
+
+export async function decideOrganizerTrainingDraft(
+  input: OrganizerTrainingDraftDecisionInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerTrainingDraftDecisionInput,
+    { ok: true }
+  >("decideOrganizerTrainingDraft", input);
+}
+
+export async function resetTrainerOrganizerCalendarFeedToken(
+  feedId: string,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    { feedId: string },
+    { ok: true; subscribeUrl: string }
+  >("resetTrainerOrganizerCalendarFeedToken", { feedId });
+}
+
+export async function getTrainerOrganizerGoogleCalendarSubscribeUrl(
+  feedId: string,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    { feedId: string },
+    { ok: true; subscribeUrl: string }
+  >("getTrainerOrganizerGoogleCalendarSubscribeUrl", { feedId });
 }
 
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {

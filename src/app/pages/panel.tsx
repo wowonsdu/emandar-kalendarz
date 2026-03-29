@@ -32,6 +32,17 @@ import {
 import { Link, Navigate, useLocation, useParams } from "react-router";
 import { toast } from "sonner";
 import { useAppState } from "../providers/AppProviders";
+import {
+  OrganizerCalendarFeedsPanel,
+  OrganizerGoogleCalendarExportPanel,
+  OrganizerMatchedSlotsPanel,
+  OrganizerTrainingDraftEditorPanel,
+  OrganizerTrainingDraftListPanel,
+  type OrganizerMatchedSlotView,
+  type OrganizerTrainingDraftFormValues,
+  type OrganizerTrainingDraftListItem,
+  TrainerAvailabilityWorkspace,
+} from "@/app/components/panel";
 import { resolveAttendanceConfirmationStatusLabel } from "@/domain/notifications";
 import {
   aggregateEventCapacityStats,
@@ -54,6 +65,7 @@ import {
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
+  resolveTrainingEventWorkflowStatus,
   resolveTrainingEventStatus,
   sortEventsByDate,
   sortEventsByFillRate,
@@ -132,6 +144,98 @@ function getAvailabilityHorizonEnd() {
   end.setUTCMinutes(0, 0, 0);
   end.setUTCFullYear(end.getUTCFullYear() + 3);
   return end.toISOString();
+}
+
+function createOrganizerDraftFormValuesFromSlot(
+  slot: OrganizerMatchedSlotView,
+): OrganizerTrainingDraftFormValues {
+  return {
+    sharedSlotId: slot.id,
+    title: `${slot.trainerName} · ${slot.location}`,
+    summary: "",
+    description: "",
+    type: "Warsztat stacjonarny",
+    location: slot.location,
+    capacity: 20,
+    minimumParticipants: 10,
+    status: "active",
+    publishAutomaticallyAfterTrainerApproval: false,
+    tagsText: "",
+    scheduleDays: [
+      {
+        startsAt: slot.startsAt,
+        endsAt: slot.endsAt,
+      },
+    ],
+  };
+}
+
+function createOrganizerDraftFormValuesFromEvent(
+  event: TrainingEvent,
+): OrganizerTrainingDraftFormValues {
+  return {
+    sharedSlotId: event.sharedSlotId ?? "",
+    title: event.title,
+    summary: event.summary,
+    description: event.description,
+    type: event.type,
+    location: event.location,
+    capacity: event.capacity,
+    minimumParticipants: resolveMinimumParticipants(event),
+    status: resolveTrainingEventStatus(event.status),
+    publishAutomaticallyAfterTrainerApproval:
+      event.publishAutomaticallyAfterTrainerApproval === true,
+    tagsText: (event.tags ?? []).join(", "),
+    scheduleDays: getTrainingEventScheduleDays(event),
+  };
+}
+
+function buildTrainerTravelWarningForSlot(
+  slot: OrganizerMatchedSlotView,
+  events: TrainingEvent[],
+) {
+  const relevantEvents = events
+    .filter(
+      (event) =>
+        event.trainerId === slot.trainerId &&
+        !isTrainingEventArchived(event) &&
+        resolveTrainingEventWorkflowStatus(event) !== "draft-requested",
+    )
+    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+  const previousEvent = [...relevantEvents]
+    .filter((event) => new Date(event.endsAt).getTime() <= new Date(slot.startsAt).getTime())
+    .sort((left, right) => new Date(right.endsAt).getTime() - new Date(left.endsAt).getTime())[0];
+  const nextEvent = relevantEvents
+    .filter((event) => new Date(event.startsAt).getTime() >= new Date(slot.endsAt).getTime())
+    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime())[0];
+
+  const warnings: string[] = [];
+
+  if (previousEvent) {
+    const gapHours =
+      Math.round(
+        ((new Date(slot.startsAt).getTime() - new Date(previousEvent.endsAt).getTime()) /
+          (1000 * 60 * 60)) *
+          10,
+      ) / 10;
+    warnings.push(
+      `Poprzednie szkolenie: ${previousEvent.location} do ${formatDateTime(previousEvent.endsAt)}. Przerwa: ${gapHours} h.`,
+    );
+  }
+
+  if (nextEvent) {
+    const gapHours =
+      Math.round(
+        ((new Date(nextEvent.startsAt).getTime() - new Date(slot.endsAt).getTime()) /
+          (1000 * 60 * 60)) *
+          10,
+      ) / 10;
+    warnings.push(
+      `Następne szkolenie: ${nextEvent.location} od ${formatDateTime(nextEvent.startsAt)}. Przerwa: ${gapHours} h.`,
+    );
+  }
+
+  return warnings.join(" ");
 }
 
 function resolveBrandStatus(
@@ -3058,29 +3162,40 @@ export function RelationsPage() {
 
 export function AvailabilityPage() {
   const {
-    addAvailabilitySlot,
+    addOrganizerCalendarFeed,
     addTrainerCalendarFeed,
+    addTrainerSharedSlot,
+    createOrganizerTrainingDraft,
     currentUser,
+    decideOrganizerTrainingDraft,
+    removeOrganizerCalendarFeed,
     removeTrainerCalendarFeed,
     store,
+    syncOwnOrganizerCalendarFeeds,
     syncOwnTrainerCalendarFeeds,
+    updateOrganizerCalendarFeedEnabled,
+    updateOrganizerTrainingDraft,
     updateTrainerCalendarFeedEnabled,
+    updateTrainerSharedSlot,
+    archiveTrainerSharedSlot,
+    withdrawOrganizerTrainingDraft,
   } = useAppState();
-  const [form, setForm] = useState({
-    trainerId: store.trainers[0]?.id ?? "",
-    startsAt: "2026-05-05T17:00",
-    endsAt: "2026-05-05T20:00",
-    location: "Warszawa / online",
-    notes: "Nowy termin",
-  });
-  const [feedForm, setFeedForm] = useState({
+  const [organizerFeedForm, setOrganizerFeedForm] = useState({
     provider: "google" as TrainerCalendarFeedProvider,
     url: "",
   });
-  const [syncingFeeds, setSyncingFeeds] = useState(false);
+  const [syncingTrainerFeeds, setSyncingTrainerFeeds] = useState(false);
+  const [syncingOrganizerFeeds, setSyncingOrganizerFeeds] = useState(false);
   const [activeFreeSliceBucket, setActiveFreeSliceBucket] = useState<
     "all" | TrainerFreeDaySliceBucket
   >("all");
+  const [draftEditorMode, setDraftEditorMode] = useState<"create" | "edit" | null>(null);
+  const [draftFormValues, setDraftFormValues] = useState<OrganizerTrainingDraftFormValues | null>(
+    null,
+  );
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [withdrawingDraftId, setWithdrawingDraftId] = useState<string | null>(null);
 
   if (!currentUser) {
     return null;
@@ -3096,24 +3211,55 @@ export function AvailabilityPage() {
     return <Navigate to="/panel/szkolenia" replace />;
   }
 
-  const slots =
-    currentUser.role === "organizer" && organizerProfile
-      ? store.availabilitySlots.filter((slot) =>
-          slot.visibleToOrganizerIds?.includes(organizerProfile.id),
-        )
-      : currentUser.role === "trainer"
-        ? store.availabilitySlots.filter((slot) => slot.trainerId === trainerProfile?.id)
-        : store.availabilitySlots;
   const ownCalendarFeeds = useMemo(
     () =>
       (trainerProfile
-        ? store.trainerCalendarFeeds.filter((feed) => feed.trainerId === trainerProfile.id)
+        ? (store.trainerCalendarFeeds ?? []).filter((feed) => feed.trainerId === trainerProfile.id)
         : []
       ).sort(
         (left, right) =>
           new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
       ),
     [store.trainerCalendarFeeds, trainerProfile],
+  );
+  const ownSharedSlots = useMemo(
+    () =>
+      (trainerProfile
+        ? (store.trainerSharedSlots ?? []).filter((slot) => slot.trainerId === trainerProfile.id)
+        : []
+      ).sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()),
+    [store.trainerSharedSlots, trainerProfile],
+  );
+  const trainerDrafts = useMemo(
+    () =>
+      sortEventsByDate(
+        (store.trainingEvents ?? []).filter(
+          (event) =>
+            event.trainerId === trainerProfile?.id &&
+            resolveTrainingEventWorkflowStatus(event) === "draft-requested",
+        ),
+      ),
+    [store.trainingEvents, trainerProfile?.id],
+  );
+  const organizerFeeds = useMemo(
+    () =>
+      (organizerProfile
+        ? (store.organizerCalendarFeeds ?? []).filter(
+            (feed) => feed.organizerId === organizerProfile.id,
+          )
+        : []
+      ).sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+    [organizerProfile, store.organizerCalendarFeeds],
+  );
+  const organizerRelationFeeds = useMemo(
+    () =>
+      (organizerProfile
+        ? (store.trainerOrganizerCalendarFeeds ?? []).filter(
+            (feed) => feed.organizerId === organizerProfile.id && feed.enabled,
+          )
+        : []
+      ).sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
+    [organizerProfile, store.trainerOrganizerCalendarFeeds],
   );
 
   useEffect(() => {
@@ -3123,6 +3269,13 @@ export function AvailabilityPage() {
 
     void syncOwnTrainerCalendarFeeds().catch(() => {});
   }, [currentUser.role, isCommunityTrainer, syncOwnTrainerCalendarFeeds, trainerProfile?.id]);
+  useEffect(() => {
+    if (!organizerProfile || currentUser.role !== "organizer") {
+      return;
+    }
+
+    void syncOwnOrganizerCalendarFeeds().catch(() => {});
+  }, [currentUser.role, organizerProfile?.id, syncOwnOrganizerCalendarFeeds]);
 
   const ownBusyIntervals = useMemo(() => {
     if (!trainerProfile) {
@@ -3135,6 +3288,9 @@ export function AvailabilityPage() {
           (event) =>
             event.trainerId === trainerProfile.id &&
             !isTrainingEventArchived(event) &&
+            !["draft-requested", "trainer-rejected", "withdrawn"].includes(
+              resolveTrainingEventWorkflowStatus(event),
+            ) &&
             resolveTrainingEventStatus(event.status) !== "cancelled",
         )
         .flatMap((event) =>
@@ -3144,7 +3300,7 @@ export function AvailabilityPage() {
             source: "emandar" as const,
           })),
         ),
-      ...store.trainerExternalBusyMonths
+      ...(store.trainerExternalBusyMonths ?? [])
         .filter((month) => month.trainerId === trainerProfile.id)
         .flatMap((month) => month.intervals),
     ];
@@ -3182,6 +3338,68 @@ export function AvailabilityPage() {
     [freeDaySlices],
   );
   const enabledFeedCount = ownCalendarFeeds.filter((feed) => feed.enabled).length;
+  const approvedRelationsById = useMemo(
+    () =>
+      new Map(
+        (store.relations ?? [])
+          .filter((relation) => relation.status === "approved")
+          .map((relation) => [relation.id, relation]),
+      ),
+    [store.relations],
+  );
+  const trainerById = useMemo(
+    () => new Map((store.trainers ?? []).map((trainer) => [trainer.id, trainer])),
+    [store.trainers],
+  );
+  const organizerMatchedSlots = useMemo(() => {
+    const sharedSlotsById = new Map((store.trainerSharedSlots ?? []).map((slot) => [slot.id, slot]));
+
+    return organizerRelationFeeds
+      .flatMap((feed) =>
+        (feed.matchedSharedSlotIds ?? []).map((slotId) => {
+          const slot = sharedSlotsById.get(slotId);
+
+          if (!slot || slot.status === "archived" || slot.archivedAt) {
+            return null;
+          }
+
+          const trainer = trainerById.get(slot.trainerId);
+          const relation = approvedRelationsById.get(feed.relationId);
+          const baseSlot = {
+            ...slot,
+            trainerName: trainer?.displayName ?? "Przekazujący Wiedzę",
+            relation,
+            googleFeedUrl: feed.publicFeedUrl,
+          } satisfies OrganizerMatchedSlotView;
+
+          return {
+            ...baseSlot,
+            travelWarning: buildTrainerTravelWarningForSlot(baseSlot, store.trainingEvents ?? []),
+          } satisfies OrganizerMatchedSlotView;
+        }),
+      )
+      .filter((slot): slot is OrganizerMatchedSlotView => Boolean(slot))
+      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+  }, [
+    approvedRelationsById,
+    organizerRelationFeeds,
+    store.trainerSharedSlots,
+    store.trainingEvents,
+    trainerById,
+  ]);
+  const organizerDrafts = useMemo(() => {
+    const matchedSlotsById = new Map(organizerMatchedSlots.map((slot) => [slot.id, slot]));
+
+    return sortEventsByDate(
+      (store.trainingEvents ?? [])
+        .filter((event) => event.organizerId === organizerProfile?.id && Boolean(event.sharedSlotId))
+        .map((event) => ({
+          ...event,
+          trainerName: trainerById.get(event.trainerId ?? "")?.displayName,
+          slot: event.sharedSlotId ? matchedSlotsById.get(event.sharedSlotId) ?? null : null,
+        })),
+    ) as OrganizerTrainingDraftListItem[];
+  }, [organizerMatchedSlots, organizerProfile?.id, store.trainingEvents, trainerById]);
   const visibleFreeSliceBuckets = useMemo(() => {
     if (activeFreeSliceBucket !== "all") {
       return [activeFreeSliceBucket];
@@ -3192,9 +3410,9 @@ export function AvailabilityPage() {
     );
   }, [activeFreeSliceBucket, freeDaySlicesByBucket]);
 
-  async function handleSyncFeeds() {
+  async function handleSyncTrainerFeeds() {
     try {
-      setSyncingFeeds(true);
+      setSyncingTrainerFeeds(true);
       await syncOwnTrainerCalendarFeeds();
       toast.success("Feedy iCal zostaly zsynchronizowane.");
     } catch (error) {
@@ -3202,22 +3420,138 @@ export function AvailabilityPage() {
         error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac kalendarzy.",
       );
     } finally {
-      setSyncingFeeds(false);
+      setSyncingTrainerFeeds(false);
     }
   }
 
-  async function handleAddFeed(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSyncOrganizerFeeds() {
+    try {
+      setSyncingOrganizerFeeds(true);
+      await syncOwnOrganizerCalendarFeeds();
+      toast.success("Feedy organizatora zostaly zsynchronizowane.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac feedow organizatora.",
+      );
+    } finally {
+      setSyncingOrganizerFeeds(false);
+    }
+  }
+
+  async function handleCopyLink(value: string, label = "Skopiowano link.") {
+    if (!value) {
+      return;
+    }
 
     try {
-      await addTrainerCalendarFeed(feedForm);
-      setFeedForm((current) => ({
-        ...current,
-        url: "",
-      }));
+      await navigator.clipboard.writeText(value);
+      toast.success(label);
+    } catch {
+      toast.error("Nie udało się skopiować linku.");
+    }
+  }
+
+  async function handleAddTrainerFeed(
+    input: { provider: TrainerCalendarFeedProvider; url: string },
+  ) {
+    try {
+      await addTrainerCalendarFeed(input);
       toast.success("Dodano feed iCal.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu iCal.");
+    }
+  }
+
+  async function handleAddOrganizerFeed(
+    input: { provider: TrainerCalendarFeedProvider; url: string },
+  ) {
+    try {
+      await addOrganizerCalendarFeed(input);
+      setOrganizerFeedForm((current) => ({
+        ...current,
+        url: "",
+      }));
+      toast.success("Dodano feed organizatora.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu.");
+    }
+  }
+
+  async function handleCreateDraft(values: OrganizerTrainingDraftFormValues) {
+    try {
+      setSavingDraft(true);
+      await createOrganizerTrainingDraft({
+        sharedSlotId: values.sharedSlotId,
+        title: values.title,
+        summary: values.summary,
+        description: values.description,
+        type: values.type,
+        location: values.location,
+        capacity: values.capacity,
+        minimumParticipants: values.minimumParticipants,
+        status: values.status,
+        publishAutomaticallyAfterTrainerApproval: values.publishAutomaticallyAfterTrainerApproval,
+        tags: parseEventTags(values.tagsText),
+        scheduleDays: values.scheduleDays,
+      });
+      toast.success("Utworzono draft szkolenia.");
+      setDraftEditorMode(null);
+      setDraftFormValues(null);
+      setEditingDraftId(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udalo sie utworzyc draftu.");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  async function handleUpdateDraft(values: OrganizerTrainingDraftFormValues) {
+    if (!editingDraftId) {
+      return;
+    }
+
+    try {
+      setSavingDraft(true);
+      await updateOrganizerTrainingDraft({
+        eventId: editingDraftId,
+        sharedSlotId: values.sharedSlotId,
+        title: values.title,
+        summary: values.summary,
+        description: values.description,
+        type: values.type,
+        location: values.location,
+        capacity: values.capacity,
+        minimumParticipants: values.minimumParticipants,
+        status: values.status,
+        publishAutomaticallyAfterTrainerApproval: values.publishAutomaticallyAfterTrainerApproval,
+        tags: parseEventTags(values.tagsText),
+        scheduleDays: values.scheduleDays,
+      });
+      toast.success("Zapisano draft szkolenia.");
+      setDraftEditorMode(null);
+      setDraftFormValues(null);
+      setEditingDraftId(null);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udalo sie zapisac draftu.");
+    } finally {
+      setSavingDraft(false);
+    }
+  }
+
+  async function handleWithdrawDraft(eventId: string) {
+    try {
+      setWithdrawingDraftId(eventId);
+      await withdrawOrganizerTrainingDraft(eventId);
+      toast.success("Wycofano draft szkolenia.");
+      if (editingDraftId === eventId) {
+        setDraftEditorMode(null);
+        setDraftFormValues(null);
+        setEditingDraftId(null);
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udalo sie wycofac draftu.");
+    } finally {
+      setWithdrawingDraftId(null);
     }
   }
 
@@ -3226,148 +3560,56 @@ export function AvailabilityPage() {
       eyebrow="Terminy"
       title={
         currentUser.role === "organizer"
-          ? "Terminy zatwierdzonych Przekazujacych Wiedze"
-          : "Dostepnosc, sloty i wolne okna"
+          ? "Dopasowane terminy trenerow"
+          : currentUser.role === "trainer"
+            ? "Udostepniane sloty i drafty organizatorow"
+            : "Terminy i feedy"
       }
-      description="Organizator widzi tylko reczne sloty trenerow z zatwierdzona relacja. Trener dodatkowo moze podpiac iCal i przegladac tylko przyszle wolne przedzialy bez podgladu swoich eventow."
+      description={
+        currentUser.role === "organizer"
+          ? "Organizer podpina wlasny iCal, widzi tylko zmatchowane sloty zaakceptowanych trenerow i tworzy z nich drafty szkolen do decyzji trenera."
+          : currentUser.role === "trainer"
+            ? "Trener podpina prywatny iCal, publikuje konkretne sloty i podejmuje decyzje o draftach szkolen skladanych przez organizatorow."
+            : "Widok techniczny nowego flow slotow, feedow i draftow."
+      }
     >
       {currentUser.role === "trainer" && trainerProfile && !isCommunityTrainer && (
-        <div className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <SectionBlockHeading
-              title="Feedy iCal"
-              description="Podpinamy publiczny kalendarz tylko po to, by policzyc przyszle wolne przedzialy. Szczegoly wydarzen pozostaja ukryte."
-            />
-
-            <div className="mt-6 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => void handleSyncFeeds()}
-                disabled={enabledFeedCount === 0 || syncingFeeds}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <RefreshCcw size={16} />
-                {syncingFeeds ? "Synchronizowanie..." : "Synchronizuj feedy"}
-              </button>
-              <p className="text-sm text-brand-muted">
-                Aktywne feedy: {enabledFeedCount} / {ownCalendarFeeds.length}
-              </p>
-            </div>
-
-            <form
-              onSubmit={(event) => void handleAddFeed(event)}
-              className="mt-6 grid gap-4 xl:grid-cols-[160px_minmax(0,1fr)_auto]"
-            >
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Provider</span>
-                <select
-                  value={feedForm.provider}
-                  onChange={(event) =>
-                    setFeedForm((current) => ({
-                      ...current,
-                      provider: event.target.value as TrainerCalendarFeedProvider,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                >
-                  <option value="google">Google</option>
-                  <option value="apple">Apple</option>
-                  <option value="ical">iCal</option>
-                </select>
-              </label>
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">URL feedu</span>
-                <input
-                  value={feedForm.url}
-                  onChange={(event) =>
-                    setFeedForm((current) => ({
-                      ...current,
-                      url: event.target.value,
-                    }))
-                  }
-                  placeholder="https://.../basic.ics"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                />
-              </label>
-              <div className="flex items-end">
-                <button
-                  type="submit"
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-sky px-5 py-3 text-sm font-semibold text-brand-navy"
-                >
-                  <Link2 size={16} />
-                  Dodaj feed
-                </button>
-              </div>
-            </form>
-
-            <div className="mt-6 space-y-3">
-              {ownCalendarFeeds.length === 0 ? (
-                <EmptyPanelState
-                  title="Brak feedow iCal"
-                  description="Dodaj feed, aby wyliczyc tylko przyszle wolne przedzialy dzienne."
-                />
-              ) : (
-                ownCalendarFeeds.map((feed) => (
-                  <article
-                    key={feed.id}
-                    className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                          {feed.provider}
-                        </p>
-                        <p className="mt-1 text-sm font-semibold text-brand-navy">
-                          Status:{" "}
-                          {feed.lastSyncStatus === "error"
-                            ? "blad"
-                            : feed.lastSyncStatus === "success"
-                              ? "zsynchronizowano"
-                              : "oczekuje"}
-                        </p>
-                        <p className="mt-2 break-all text-sm text-brand-muted">{feed.url}</p>
-                        {feed.lastSyncedAt && (
-                          <p className="mt-2 text-xs text-brand-muted">
-                            Ostatnia synchronizacja: {formatDateTime(feed.lastSyncedAt)}
-                          </p>
-                        )}
-                        {feed.lastSyncError && (
-                          <p className="mt-2 text-sm text-red-600">{feed.lastSyncError}</p>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void updateTrainerCalendarFeedEnabled(feed.id, !feed.enabled)
-                          }
-                          className="inline-flex items-center gap-2 rounded-full border border-brand-line px-4 py-2 text-sm font-semibold text-brand-navy"
-                        >
-                          {feed.enabled ? <Check size={14} /> : <X size={14} />}
-                          {feed.enabled ? "Wylacz" : "Wlacz"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void removeTrainerCalendarFeed(feed.id)}
-                          className="inline-flex items-center gap-2 rounded-full border border-brand-line px-4 py-2 text-sm font-semibold text-brand-navy"
-                        >
-                          <Trash2 size={14} />
-                          Usun
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
-          </article>
+        <div className="space-y-6">
+          <TrainerAvailabilityWorkspace
+            currentUserRole={currentUser.role}
+            feeds={ownCalendarFeeds}
+            sharedSlots={ownSharedSlots}
+            drafts={trainerDrafts}
+            syncingFeeds={syncingTrainerFeeds}
+            onSyncFeeds={() => void handleSyncTrainerFeeds()}
+            onAddFeed={(input) => handleAddTrainerFeed(input)}
+            onToggleFeedEnabled={(feedId, enabled) =>
+              updateTrainerCalendarFeedEnabled(feedId, enabled)
+            }
+            onRemoveFeed={(feedId) => removeTrainerCalendarFeed(feedId)}
+            onCreateSlot={(input) => addTrainerSharedSlot(input)}
+            onUpdateSlot={(input) => updateTrainerSharedSlot(input)}
+            onArchiveSlot={(slotId) => archiveTrainerSharedSlot(slotId)}
+            onAcceptDraft={(draft) =>
+              decideOrganizerTrainingDraft({
+                eventId: draft.id,
+                decision: "accepted",
+              }).then(() => toast.success("Zaakceptowano draft szkolenia."))
+            }
+            onRejectDraft={(draft, reason) =>
+              decideOrganizerTrainingDraft({
+                eventId: draft.id,
+                decision: "rejected",
+                message: reason,
+              }).then(() => toast.success("Odrzucono draft szkolenia."))
+            }
+          />
 
           <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
-              title="Wolne terminy z kalendarza"
-              description="Pokazujemy tylko przyszle wolne przedzialy dzienne. Zrodlowe eventy kalendarza nie sa nigdzie wyswietlane."
+              title="Wolne przedzialy z prywatnego kalendarza"
+              description="To warstwa pomocnicza dla trenera. Zrodlowe wydarzenia iCal pozostaja ukryte, a tutaj widac tylko przyszle wolne okna do publikacji jako sloty."
             />
-
             <div className="mt-6 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -3400,7 +3642,7 @@ export function AvailabilityPage() {
               <div className="mt-6">
                 <EmptyPanelState
                   title="Brak aktywnego feedu"
-                  description="Aktywuj przynajmniej jeden feed iCal, aby zobaczyc przyszle wolne przedzialy."
+                  description="Aktywuj przynajmniej jeden prywatny feed iCal, aby zobaczyc przyszle wolne przedzialy."
                 />
               </div>
             ) : freeDaySlices.length === 0 ? (
@@ -3455,149 +3697,139 @@ export function AvailabilityPage() {
         </div>
       )}
 
-      {(currentUser.role === "trainer" || currentUser.role === "admin") && (
-        <form
-          onSubmit={async (event) => {
-            event.preventDefault();
-            try {
-              await addAvailabilitySlot({
-                ...form,
-                trainerId: currentUser.role === "admin" ? form.trainerId : undefined,
-                startsAt: new Date(form.startsAt).toISOString(),
-                endsAt: new Date(form.endsAt).toISOString(),
-              });
-              toast.success("Dodano nowy termin.");
-            } catch (error) {
-              toast.error(error instanceof Error ? error.message : "Nie udało się dodać terminu.");
-            }
-          }}
-          className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-        >
-          <div className="grid gap-4 xl:grid-cols-2">
-            {currentUser.role === "admin" && (
-              <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Przekazujący Wiedzę</span>
-                <select
-                  value={form.trainerId}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      trainerId: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                >
-                  {store.trainers.map((trainer) => (
-                    <option key={trainer.id} value={trainer.id}>
-                      {trainer.displayName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Start</span>
-              <input
-                type="datetime-local"
-                value={form.startsAt}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    startsAt: event.target.value,
-                  }))
+      {currentUser.role === "organizer" && organizerProfile && (
+        <div className="space-y-6">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+            <OrganizerCalendarFeedsPanel
+              feeds={organizerFeeds}
+              draft={organizerFeedForm}
+              onDraftChange={setOrganizerFeedForm}
+              onCreateFeed={(input) => void handleAddOrganizerFeed(input)}
+              onToggleEnabled={(feedId, enabled) =>
+                updateOrganizerCalendarFeedEnabled(feedId, enabled)
+              }
+              onRemoveFeed={(feedId) => removeOrganizerCalendarFeed(feedId)}
+              onSync={() => void handleSyncOrganizerFeeds()}
+              syncing={syncingOrganizerFeeds}
+            />
+            <OrganizerMatchedSlotsPanel
+              slots={organizerMatchedSlots}
+              onCreateDraft={(slotId) => {
+                const slot = organizerMatchedSlots.find((item) => item.id === slotId);
+                if (!slot) {
+                  return;
                 }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Koniec</span>
-              <input
-                type="datetime-local"
-                value={form.endsAt}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    endsAt: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Miejsce</span>
-              <input
-                value={form.location}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    location: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-              />
-            </label>
-            <label className="grid gap-2 xl:col-span-2">
-              <span className="text-sm font-semibold text-brand-navy">Notatka</span>
-              <textarea
-                rows={3}
-                value={form.notes}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, notes: event.target.value }))
-                }
-                className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-              />
-            </label>
-          </div>
 
-          <button
-            type="submit"
-            className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-          >
-            <CalendarDays size={16} />
-            Dodaj termin
-          </button>
-        </form>
-      )}
-
-      <div className="mt-6">
-        <SectionBlockHeading
-          title="Reczne sloty"
-          description="Ta lista pokazuje tylko sloty dodane recznie w panelu. Nie zawiera wydarzen z iCal ani ich szczegolow."
-        />
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        {slots.length === 0 && (
-          <div className="lg:col-span-2">
-            <EmptyPanelState
-              title="Brak terminów"
-              description="Reczne terminy Przekazujacych Wiedzy widoczne dla tej roli pojawia sie tutaj."
+                setDraftEditorMode("create");
+                setEditingDraftId(null);
+                setDraftFormValues(createOrganizerDraftFormValuesFromSlot(slot));
+              }}
+              onCopyFeedLink={(feedUrl) => void handleCopyLink(feedUrl, "Skopiowano adres feedu.")}
             />
           </div>
-        )}
-        {slots.map((slot) => {
-          const trainer = store.trainers.find((item) => item.id === slot.trainerId);
 
-          return (
-            <article
-              key={slot.id}
-              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-            >
-              <h3 className="text-2xl font-semibold text-brand-navy">
-                {trainer?.displayName}
-              </h3>
-              <div className="mt-4 space-y-2 text-brand-muted">
-                <p>{formatDate(slot.startsAt)}</p>
-                <p>
-                  {formatShortTime(slot.startsAt)} - {formatShortTime(slot.endsAt)}
-                </p>
-                <p>{slot.location}</p>
-                <p>{slot.notes}</p>
-              </div>
-            </article>
-          );
-        })}
-      </div>
+          {draftFormValues && (
+            <OrganizerTrainingDraftEditorPanel
+              mode={draftEditorMode ?? "create"}
+              values={draftFormValues}
+              availableSlots={organizerMatchedSlots}
+              onChange={setDraftFormValues}
+              onSubmit={(values) =>
+                draftEditorMode === "edit"
+                  ? void handleUpdateDraft(values)
+                  : void handleCreateDraft(values)
+              }
+              onCancel={() => {
+                setDraftEditorMode(null);
+                setDraftFormValues(null);
+                setEditingDraftId(null);
+              }}
+              onWithdraw={
+                draftEditorMode === "edit" && editingDraftId
+                  ? (_values) => void handleWithdrawDraft(editingDraftId)
+                  : undefined
+              }
+              submitting={savingDraft}
+              withdrawing={Boolean(editingDraftId && withdrawingDraftId === editingDraftId)}
+            />
+          )}
+
+          <OrganizerTrainingDraftListPanel
+            drafts={organizerDrafts}
+            onEdit={(draft) => {
+              if (resolveTrainingEventWorkflowStatus(draft) !== "draft-requested") {
+                toast.error("Edytować można tylko draft oczekujący na decyzję trenera.");
+                return;
+              }
+
+              setDraftEditorMode("edit");
+              setEditingDraftId(draft.id);
+              setDraftFormValues(createOrganizerDraftFormValuesFromEvent(draft));
+            }}
+            onWithdraw={(draft) => void handleWithdrawDraft(draft.id)}
+          />
+
+          {organizerRelationFeeds.length > 0 && (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {organizerRelationFeeds.map((feed) => {
+                const trainerName =
+                  trainerById.get(feed.trainerId)?.displayName ?? "Przekazujący Wiedzę";
+
+                return (
+                  <OrganizerGoogleCalendarExportPanel
+                    key={feed.id}
+                    title={`Google Calendar · ${trainerName}`}
+                    description="Subskrybuj dopasowany feed tej relacji, aby widzieć tylko sloty zgodne z Twoim kalendarzem."
+                    feedUrl={feed.publicFeedUrl ?? ""}
+                    onCopyLink={(subscribeUrl) =>
+                      void handleCopyLink(subscribeUrl, "Skopiowano link do Google Calendar.")
+                    }
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {currentUser.role === "admin" && (
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <SectionBlockHeading
+            title="Nowy model terminow"
+            description="Admin widzi tu stan techniczny wdrozenia nowego flow slotow, feedow i draftow."
+          />
+          <div className="mt-6 grid gap-4 md:grid-cols-4">
+            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
+              <p className="text-sm text-brand-muted">Sloty trenerow</p>
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+                {store.trainerSharedSlots?.length ?? 0}
+              </p>
+            </div>
+            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
+              <p className="text-sm text-brand-muted">Feedy organizatorow</p>
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+                {store.organizerCalendarFeeds?.length ?? 0}
+              </p>
+            </div>
+            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
+              <p className="text-sm text-brand-muted">Feedy relacji</p>
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+                {store.trainerOrganizerCalendarFeeds?.length ?? 0}
+              </p>
+            </div>
+            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
+              <p className="text-sm text-brand-muted">Drafty szkoleń</p>
+              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+                {
+                  (store.trainingEvents ?? []).filter(
+                    (event) => Boolean(event.sharedSlotId),
+                  ).length
+                }
+              </p>
+            </div>
+          </div>
+        </article>
+      )}
     </PanelSection>
   );
 }
@@ -3841,6 +4073,10 @@ export function EventsPage() {
     return <Navigate to="/panel/szkolenia" replace />;
   }
 
+  if (isOfficialCreatorView && currentUser.role === "organizer") {
+    return <Navigate to="/panel/terminy" replace />;
+  }
+
   if (isCommunityCreatorView && !canCreateCommunityEvent) {
     return <Navigate to="/panel/wydarzenia-spolecznosci" replace />;
   }
@@ -3876,6 +4112,14 @@ export function EventsPage() {
             <Link2 size={16} />
             Połącz się z trenerem
           </button>
+        ) : !isCreatorView && !isCommunitySection && currentUser.role === "organizer" ? (
+          <Link
+            to="/panel/terminy"
+            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+          >
+            <CalendarDays size={16} />
+            Przejdz do slotow
+          </Link>
         ) : !isCreatorView && !isCommunitySection && canCreateOfficialTraining ? (
           <Link
             to="/panel/szkolenia/utworz"

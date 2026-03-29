@@ -15,6 +15,12 @@ export type AccountRequestStatus = "pending" | "approved" | "rejected";
 export type PublicationApprovalStatus = "pending" | "accepted" | "rejected";
 export type EmandarBrandStatus = "official" | "supported";
 export type TrainingEventStatus = "active" | "confirmed" | "cancelled";
+export type TrainingEventWorkflowStatus =
+  | "draft-requested"
+  | "trainer-accepted"
+  | "trainer-rejected"
+  | "withdrawn"
+  | "published";
 export type EnrollmentAttendanceConfirmationStatus =
   | "not-required"
   | "pending"
@@ -27,6 +33,8 @@ export type EventCollaborationStatus =
   | "not-required";
 export type EnrollmentPhotoRequirement = "default" | "required" | "optional";
 export type PhotoMode = "required" | "optional" | "disabled";
+export type TrainerSharedSlotSource = "manual" | "ical-derived";
+export type TrainerSharedSlotStatus = "active" | "archived";
 
 export interface NotificationSettings {
   reminderLeadDays: number;
@@ -151,6 +159,9 @@ export interface TrainingEvent {
   imageHint: string;
   brandStatus: EmandarBrandStatus;
   status?: TrainingEventStatus;
+  workflowStatus?: TrainingEventWorkflowStatus;
+  sharedSlotId?: string | null;
+  publishAutomaticallyAfterTrainerApproval?: boolean;
   minimumParticipants?: number;
   requiresOrganizerApproval?: boolean;
   trainerCollaborationStatus?: EventCollaborationStatus;
@@ -162,6 +173,11 @@ export interface TrainingEvent {
   publicationReviewedAt?: string;
   publicationReviewedByUserId?: string;
   publicationReviewMessage?: string;
+  trainerDecidedAt?: string;
+  trainerDecidedByUserId?: string;
+  trainerDecisionReason?: string;
+  withdrawnAt?: string;
+  withdrawnByUserId?: string;
   archivedAt?: string;
   archivedByRole?: AppRole;
   archivedReason?: "relation-detached" | "manual";
@@ -181,6 +197,23 @@ export interface AvailabilitySlot {
   visibleToOrganizerIds?: string[];
 }
 
+export interface TrainerSharedSlot {
+  id: string;
+  trainerId: string;
+  trainerUserId?: string;
+  startsAt: string;
+  endsAt: string;
+  location: string;
+  notes: string;
+  visibility: "approved-organizers";
+  source: TrainerSharedSlotSource;
+  status: TrainerSharedSlotStatus;
+  createdAt: string;
+  updatedAt?: string;
+  archivedAt?: string;
+  archivedReason?: "manual" | "conflict" | "relation-detached";
+}
+
 export type TrainerCalendarFeedProvider = "google" | "apple" | "ical";
 export type TrainerCalendarFeedSyncStatus = "idle" | "success" | "error";
 
@@ -196,6 +229,46 @@ export interface TrainerCalendarFeed {
   lastSyncError?: string;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface OrganizerExternalBusyMonth {
+  id: string;
+  organizerId: string;
+  monthKey: string;
+  intervals: ExternalBusyInterval[];
+  updatedAt: string;
+}
+
+export interface OrganizerCalendarFeed {
+  id: string;
+  organizerId: string;
+  organizerUserId?: string;
+  provider: TrainerCalendarFeedProvider;
+  url: string;
+  enabled: boolean;
+  lastSyncedAt?: string;
+  lastSyncStatus?: TrainerCalendarFeedSyncStatus;
+  lastSyncError?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface TrainerOrganizerCalendarFeed {
+  id: string;
+  relationId: string;
+  trainerId: string;
+  organizerId: string;
+  trainerUserId?: string;
+  organizerUserId?: string;
+  tokenVersion: number;
+  token?: string;
+  tokenHash: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt?: string;
+  tokenRotatedAt?: string;
+  publicFeedUrl?: string;
+  matchedSharedSlotIds?: string[];
 }
 
 export interface ExternalBusyInterval {
@@ -337,8 +410,12 @@ export interface DemoStore {
   trainingEvents: TrainingEvent[];
   publicTrainingEvents: TrainingEvent[];
   availabilitySlots: AvailabilitySlot[];
-  trainerCalendarFeeds: TrainerCalendarFeed[];
-  trainerExternalBusyMonths: TrainerExternalBusyMonth[];
+  trainerSharedSlots?: TrainerSharedSlot[];
+  trainerCalendarFeeds?: TrainerCalendarFeed[];
+  organizerCalendarFeeds?: OrganizerCalendarFeed[];
+  trainerOrganizerCalendarFeeds?: TrainerOrganizerCalendarFeed[];
+  trainerExternalBusyMonths?: TrainerExternalBusyMonth[];
+  organizerExternalBusyMonths?: OrganizerExternalBusyMonth[];
   enrollmentRequests: EnrollmentRequest[];
   notifications: NotificationRecord[];
   accountRequests: AccountRequest[];
@@ -394,6 +471,70 @@ export interface AvailabilityInput {
 export interface TrainerCalendarFeedInput {
   provider: TrainerCalendarFeedProvider;
   url: string;
+}
+
+export interface OrganizerCalendarFeedInput {
+  provider: TrainerCalendarFeedProvider;
+  url: string;
+}
+
+export interface TrainerSharedSlotInput {
+  startsAt: string;
+  endsAt: string;
+  location: string;
+  notes: string;
+  source?: TrainerSharedSlotSource;
+}
+
+export interface TrainerSharedSlotUpdateInput {
+  slotId: string;
+  startsAt: string;
+  endsAt: string;
+  location: string;
+  notes: string;
+}
+
+export interface OrganizerTrainingDraftInput {
+  sharedSlotId: string;
+  trainerId?: string;
+  title?: string;
+  eventImages?: TrainingEventImage[];
+  useEventImageAsCover?: boolean;
+  summary: string;
+  description: string;
+  type: string;
+  scheduleDays: TrainingEventScheduleDay[];
+  location: string;
+  tags?: string[];
+  capacity: number;
+  brandStatus?: EmandarBrandStatus;
+  status?: TrainingEventStatus;
+  minimumParticipants?: number;
+  publishAutomaticallyAfterTrainerApproval?: boolean;
+}
+
+export interface OrganizerTrainingDraftUpdateInput {
+  eventId: string;
+  sharedSlotId: string;
+  title?: string;
+  eventImages?: TrainingEventImage[];
+  useEventImageAsCover?: boolean;
+  summary: string;
+  description: string;
+  type: string;
+  scheduleDays: TrainingEventScheduleDay[];
+  location: string;
+  tags?: string[];
+  capacity: number;
+  status?: TrainingEventStatus;
+  minimumParticipants?: number;
+  publishAutomaticallyAfterTrainerApproval?: boolean;
+}
+
+export interface OrganizerTrainingDraftDecisionInput {
+  eventId: string;
+  decision: "accepted" | "rejected";
+  message?: string;
 }
 
 export interface TrainingEventInput {

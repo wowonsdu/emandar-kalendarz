@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateEventCapacityStats,
+  buildGoogleCalendarSubscribeUrl,
   buildSharedAvailabilityWindows,
   buildTrainerFreeDaySlices,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
   canOrganizerAccessTrainer,
+  doesTrainingEventOverlapRange,
+  doIntervalsOverlap,
   deriveEnrollmentFinalStatus,
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
@@ -13,9 +16,13 @@ import {
   getParticipantEnrollmentStatusLabel,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
+  getTrainingEventWorkflowStatusLabel,
   isPhotoModeEnabled,
   isPhotoModeRequired,
   isParticipantEnrollmentActive,
+  isOrganizerTrainingDraftEditable,
+  isOrganizerTrainingDraftWithdrawable,
+  isTrainerSharedSlotActive,
   isTrainingEventArchived,
   isTrainingEventCollaborationAccepted,
   isTrainingEventPubliclyVisible,
@@ -23,6 +30,7 @@ import {
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveParticipantEnrollmentStatus,
+  resolveTrainingEventWorkflowStatus,
   sortEventsByFillRate,
   sortEventsByDate,
 } from "./utils";
@@ -574,5 +582,105 @@ describe("permissions and sorting", () => {
       spanBucket: "3-days",
     });
     expect(slices.some((slice) => slice.spanBucket === "4-plus-days")).toBe(true);
+  });
+});
+
+describe("draft workflow helpers", () => {
+  it("resolves workflow fallback from published and rejected states", () => {
+    expect(
+      resolveTrainingEventWorkflowStatus({
+        isPublished: true,
+      }),
+    ).toBe("published");
+
+    expect(
+      resolveTrainingEventWorkflowStatus({
+        isPublished: false,
+        trainerDecisionReason: "conflict",
+      }),
+    ).toBe("trainer-rejected");
+  });
+
+  it("allows organizer to edit and withdraw only pending own draft", () => {
+    const event = {
+      organizerId: "organizer-1",
+      workflowStatus: "draft-requested" as const,
+    };
+
+    expect(
+      isOrganizerTrainingDraftEditable(event, {
+        role: "organizer",
+        organizerProfileId: "organizer-1",
+      }),
+    ).toBe(true);
+
+    expect(
+      isOrganizerTrainingDraftWithdrawable(event, {
+        role: "organizer",
+        organizerProfileId: "organizer-1",
+      }),
+    ).toBe(true);
+
+    expect(getTrainingEventWorkflowStatusLabel("trainer-accepted")).toBe(
+      "zaakceptowany przez trenera",
+    );
+  });
+});
+
+describe("slot and overlap helpers", () => {
+  it("marks archived shared slot as inactive", () => {
+    expect(
+      isTrainerSharedSlotActive({
+        status: "active",
+      }),
+    ).toBe(true);
+
+    expect(
+      isTrainerSharedSlotActive({
+        status: "archived",
+      }),
+    ).toBe(false);
+  });
+
+  it("detects overlap for interval and event schedule ranges", () => {
+    expect(
+      doIntervalsOverlap(
+        {
+          startsAt: "2026-06-01T08:00:00.000Z",
+          endsAt: "2026-06-01T12:00:00.000Z",
+        },
+        {
+          startsAt: "2026-06-01T11:00:00.000Z",
+          endsAt: "2026-06-01T14:00:00.000Z",
+        },
+      ),
+    ).toBe(true);
+
+    expect(
+      doesTrainingEventOverlapRange(
+        {
+          startsAt: "2026-06-01T08:00:00.000Z",
+          endsAt: "2026-06-02T14:00:00.000Z",
+          scheduleDays: [
+            {
+              startsAt: "2026-06-01T08:00:00.000Z",
+              endsAt: "2026-06-01T12:00:00.000Z",
+            },
+            {
+              startsAt: "2026-06-02T09:00:00.000Z",
+              endsAt: "2026-06-02T14:00:00.000Z",
+            },
+          ],
+        },
+        "2026-06-02T10:00:00.000Z",
+        "2026-06-02T11:00:00.000Z",
+      ),
+    ).toBe(true);
+  });
+
+  it("builds a Google Calendar subscribe URL", () => {
+    expect(
+      buildGoogleCalendarSubscribeUrl("https://panel.ceo/emandar/feed.ics"),
+    ).toContain(encodeURIComponent("https://panel.ceo/emandar/feed.ics"));
   });
 });

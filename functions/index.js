@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp } from "firebase-admin/app";
@@ -21,7 +21,11 @@ const collections = {
   relations: "trainerOrganizerRelations",
   trainingEvents: "trainingEvents",
   availabilitySlots: "availabilitySlots",
+  trainerSharedSlots: "trainerSharedSlots",
   trainerCalendarFeeds: "trainerCalendarFeeds",
+  organizerCalendarFeeds: "organizerCalendarFeeds",
+  organizerExternalBusyMonths: "organizerExternalBusyMonths",
+  trainerOrganizerCalendarFeeds: "trainerOrganizerCalendarFeeds",
   trainerExternalBusyMonths: "trainerExternalBusyMonths",
   enrollmentRequests: "enrollmentRequests",
   notifications: "notifications",
@@ -40,6 +44,9 @@ const PUBLIC_APP_BASE_URL =
   (process.env.FUNCTIONS_EMULATOR === "true"
     ? "http://127.0.0.1:5173"
     : "https://panel.ceo/emandar");
+const PUBLIC_ICAL_BASE_URL =
+  asString(process.env.EMANDAR_ICAL_BASE_URL) ||
+  `${PUBLIC_APP_BASE_URL.replace(/\/$/, "")}/api/ical`;
 
 function nowIso() {
   return new Date().toISOString();
@@ -485,6 +492,10 @@ function hashReviewToken(token) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function hashIcalToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 function hashTrainerAuthorizationCode(code) {
   return createHash("sha256").update(requiredString(code, "Podaj kod trenera.")).digest("hex");
 }
@@ -520,6 +531,56 @@ function buildAttendanceDecisionUrl(token, decision) {
 
 function buildCommunityEventReviewUrl(token) {
   return `${PUBLIC_APP_BASE_URL.replace(/\/$/, "")}/moderacja-wydarzenia/${token}`;
+}
+
+function buildTrainerOrganizerIcalUrl(token) {
+  return `${PUBLIC_ICAL_BASE_URL.replace(/\/$/, "")}/trainer-organizer?token=${encodeURIComponent(token)}`;
+}
+
+function buildGoogleCalendarSubscribeUrl(calendarUrl) {
+  return `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(calendarUrl)}`;
+}
+
+function escapeIcalText(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\r?\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function formatIcalDateTime(value) {
+  const date = new Date(value);
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function buildTrainerOrganizerIcalContent(feed, slots) {
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Emandar Kalendarz//Trainer Organizer Feed//PL",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+  ];
+
+  slots.forEach((slot) => {
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${escapeIcalText(`${feed.id}:${slot.id}`)}`,
+      `DTSTAMP:${formatIcalDateTime(feed.updatedAt || feed.createdAt || nowIso())}`,
+      `DTSTART:${formatIcalDateTime(slot.startsAt)}`,
+      `DTEND:${formatIcalDateTime(slot.endsAt)}`,
+      `SUMMARY:${escapeIcalText(slot.location || "Dostepny termin szkolenia")}`,
+      `DESCRIPTION:${escapeIcalText(slot.notes || "Udostepniony termin szkolenia")}`,
+      `LOCATION:${escapeIcalText(slot.location || "")}`,
+      "STATUS:CONFIRMED",
+      "TRANSP:OPAQUE",
+      "END:VEVENT",
+    );
+  });
+
+  lines.push("END:VCALENDAR");
+  return `${lines.join("\r\n")}\r\n`;
 }
 
 function formatEventDateForSms(event) {
@@ -653,6 +714,285 @@ async function findAppUser(userId) {
 
 async function requireAppUser(userId) {
   return requireDocument(collections.users, userId, "Nie znaleziono konta użytkownika.");
+}
+
+async function findApprovedRelationByPair(trainerId, organizerId) {
+  const snapshot = await db
+    .collection(collections.relations)
+    .doc(buildRelationId(trainerId, organizerId))
+    .get();
+
+  if (!snapshot.exists) {
+    return null;
+  }
+
+  const relation = {
+    id: snapshot.id,
+    ...snapshot.data(),
+  };
+
+  return relation.status === "approved" ? relation : null;
+}
+
+async function requireApprovedRelationByIds(trainerId, organizerId) {
+  const relation = await findApprovedRelationByPair(trainerId, organizerId);
+
+  if (!relation) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Najpierw potrzebujesz zatwierdzonej relacji między trenerem i organizatorem.",
+    );
+  }
+
+  return relation;
+}
+
+async function findTrainerSharedSlot(slotId) {
+  return findDocument(collections.trainerSharedSlots, slotId);
+}
+
+async function findOrganizerCalendarFeed(feedId) {
+  return findDocument(collections.organizerCalendarFeeds, feedId);
+}
+
+async function findTrainerOrganizerCalendarFeedByRelationId(relationId) {
+  const snapshot = await db
+    .collection(collections.trainerOrganizerCalendarFeeds)
+    .doc(relationId)
+    .get();
+
+  if (!snapshot.exists) {
+    return null;
+  }
+
+  return {
+    id: snapshot.id,
+    ...snapshot.data(),
+  };
+}
+
+async function findTrainerOrganizerCalendarFeedByTokenHash(tokenHash) {
+  const snapshot = await db
+    .collection(collections.trainerOrganizerCalendarFeeds)
+    .where("tokenHash", "==", tokenHash)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const docSnapshot = snapshot.docs[0];
+  return {
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  };
+}
+
+function isTrainerOrganizerCalendarFeedEnabled(feed) {
+  return Boolean(feed?.enabled) && typeof feed?.tokenHash === "string";
+}
+
+function slotIntersectsIntervals(slot, intervals) {
+  return intervals.some((interval) =>
+    new Date(slot.startsAt).getTime() < new Date(interval.endsAt).getTime() &&
+    new Date(slot.endsAt).getTime() > new Date(interval.startsAt).getTime(),
+  );
+}
+
+async function rebuildOrganizerExternalBusyMonths(organizer) {
+  const { rangeStart, rangeEnd } = getAvailabilitySyncRange();
+  const feedSnapshots = await db
+    .collection(collections.organizerCalendarFeeds)
+    .where("organizerId", "==", organizer.id)
+    .get();
+  const enabledFeeds = feedSnapshots.docs
+    .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+    .filter((feed) => feed.enabled);
+
+  const successfulIntervals = [];
+  let successfulFeedCount = 0;
+
+  for (const feed of enabledFeeds) {
+    try {
+      const fetchedIntervals = await fetchIcalBusyIntervals({
+        provider: feed.provider,
+        sourceLabel: feed.id,
+        url: feed.url,
+        rangeStart,
+        rangeEnd,
+      });
+
+      successfulIntervals.push(...fetchedIntervals);
+      successfulFeedCount += 1;
+      await db.collection(collections.organizerCalendarFeeds).doc(feed.id).set(
+        {
+          lastSyncedAt: nowIso(),
+          lastSyncStatus: "success",
+          lastSyncError: FieldValue.delete(),
+          updatedAt: nowIso(),
+        },
+        { merge: true },
+      );
+    } catch (error) {
+      await db.collection(collections.organizerCalendarFeeds).doc(feed.id).set(
+        {
+          lastSyncedAt: nowIso(),
+          lastSyncStatus: "error",
+          lastSyncError:
+            error instanceof Error ? error.message : "Nie udało się pobrać feedu iCal.",
+          updatedAt: nowIso(),
+        },
+        { merge: true },
+      );
+    }
+  }
+
+  if (enabledFeeds.length > 0 && successfulFeedCount === 0) {
+    return;
+  }
+
+  const groupedIntervals = splitIntervalsByMonth(mergeBusyIntervals(successfulIntervals));
+  const existingMonthDocs = await db
+    .collection(collections.organizerExternalBusyMonths)
+    .where("organizerId", "==", organizer.id)
+    .get();
+  const batch = db.batch();
+
+  existingMonthDocs.docs.forEach((docSnapshot) => {
+    batch.delete(docSnapshot.ref);
+  });
+
+  groupedIntervals.forEach((intervals, monthKey) => {
+    const monthDocId = `${organizer.id}__${monthKey}`;
+    batch.set(db.collection(collections.organizerExternalBusyMonths).doc(monthDocId), {
+      organizerId: organizer.id,
+      monthKey,
+      intervals,
+      updatedAt: nowIso(),
+    });
+  });
+
+  await batch.commit();
+}
+
+async function getOrganizerBusyIntervals(organizerId) {
+  const monthsSnapshot = await db
+    .collection(collections.organizerExternalBusyMonths)
+    .where("organizerId", "==", organizerId)
+    .get();
+
+  return monthsSnapshot.docs.flatMap((docSnapshot) => {
+    const data = docSnapshot.data();
+    return Array.isArray(data.intervals) ? data.intervals : [];
+  });
+}
+
+async function rebuildTrainerOrganizerCalendarFeed(relation) {
+  const [trainer, organizer, sharedSlots, organizerBusyIntervals] = await Promise.all([
+    findTrainerProfile(relation.trainerId),
+    findOrganizerProfile(relation.organizerId),
+    db
+      .collection(collections.trainerSharedSlots)
+      .where("trainerId", "==", relation.trainerId)
+      .get()
+      .then((snapshot) =>
+        snapshot.docs
+          .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+          .filter((slot) => slot.status !== "archived" && !slot.archivedAt),
+      ),
+    getOrganizerBusyIntervals(relation.organizerId),
+  ]);
+
+  if (!trainer || !organizer) {
+    return null;
+  }
+
+  const matchedSlots = sharedSlots.filter((slot) => !slotIntersectsIntervals(slot, organizerBusyIntervals));
+  const feedRef = db.collection(collections.trainerOrganizerCalendarFeeds).doc(relation.id);
+  const existing = await feedRef.get();
+  const current = existing.exists
+    ? existing.data()
+    : null;
+  const tokenVersion = typeof current?.tokenVersion === "number" ? current.tokenVersion : 1;
+  const token = asString(current?.token) || randomUUID();
+  const tokenHash = asString(current?.tokenHash) || hashIcalToken(token);
+  const publicFeedUrl = buildTrainerOrganizerIcalUrl(token);
+
+  await feedRef.set(
+    {
+      relationId: relation.id,
+      trainerId: relation.trainerId,
+      organizerId: relation.organizerId,
+      trainerUserId: relation.trainerUserId ?? trainer.userId,
+      organizerUserId: relation.organizerUserId ?? organizer.userId,
+      tokenVersion,
+      token,
+      tokenHash,
+      enabled: relation.status === "approved",
+      publicFeedUrl,
+      matchedSharedSlotIds: matchedSlots.map((slot) => slot.id),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return {
+    id: relation.id,
+    relationId: relation.id,
+    publicFeedUrl,
+    matchedSharedSlotIds: matchedSlots.map((slot) => slot.id),
+  };
+}
+
+async function rebuildTrainerOrganizerCalendarFeedsForTrainer(trainerId) {
+  const relationsSnapshot = await db
+    .collection(collections.relations)
+    .where("trainerId", "==", trainerId)
+    .where("status", "==", "approved")
+    .get();
+
+  const results = [];
+
+  for (const docSnapshot of relationsSnapshot.docs) {
+    const relation = {
+      id: docSnapshot.id,
+      ...docSnapshot.data(),
+    };
+    const result = await rebuildTrainerOrganizerCalendarFeed(relation);
+    if (result) {
+      results.push(result);
+    }
+  }
+
+  return results;
+}
+
+async function rebuildTrainerOrganizerCalendarFeedsForOrganizer(organizerId) {
+  const relationsSnapshot = await db
+    .collection(collections.relations)
+    .where("organizerId", "==", organizerId)
+    .where("status", "==", "approved")
+    .get();
+
+  const results = [];
+
+  for (const docSnapshot of relationsSnapshot.docs) {
+    const relation = {
+      id: docSnapshot.id,
+      ...docSnapshot.data(),
+    };
+    const result = await rebuildTrainerOrganizerCalendarFeed(relation);
+    if (result) {
+      results.push(result);
+    }
+  }
+
+  return results;
+}
+
+function getTrainerOrganizerFeedTokenUrl(token) {
+  return buildTrainerOrganizerIcalUrl(token);
 }
 
 async function syncUserAccountApprovalState(userId) {
@@ -3015,6 +3355,705 @@ export const syncOwnTrainerCalendarFeeds = onCall(callableOptions(), async (requ
   return { ok: true };
 });
 
+async function rejectDraftEventsForSharedSlot(sharedSlotId, reason, decidedByUserId = null) {
+  const snapshot = await db
+    .collection(collections.trainingEvents)
+    .where("sharedSlotId", "==", sharedSlotId)
+    .get();
+
+  const batch = db.batch();
+  let affected = 0;
+
+  snapshot.docs.forEach((docSnapshot) => {
+    const event = docSnapshot.data();
+    if (event.workflowStatus !== "draft-requested") {
+      return;
+    }
+
+    affected += 1;
+    batch.set(
+      docSnapshot.ref,
+      {
+        workflowStatus: "trainer-rejected",
+        trainerDecisionReason: reason,
+        trainerDecidedAt: nowIso(),
+        trainerDecidedByUserId: decidedByUserId,
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  });
+
+  if (affected > 0) {
+    await batch.commit();
+  }
+
+  return affected;
+}
+
+async function rejectDraftEventsForRelation(relation, reason, decidedByUserId = null) {
+  const snapshot = await db
+    .collection(collections.trainingEvents)
+    .where("trainerId", "==", relation.trainerId)
+    .where("organizerId", "==", relation.organizerId)
+    .get();
+
+  const batch = db.batch();
+  let affected = 0;
+
+  snapshot.docs.forEach((docSnapshot) => {
+    const event = docSnapshot.data();
+    if (event.workflowStatus !== "draft-requested") {
+      return;
+    }
+
+    affected += 1;
+    batch.set(
+      docSnapshot.ref,
+      {
+        workflowStatus: "trainer-rejected",
+        trainerDecisionReason: reason,
+        trainerDecidedAt: nowIso(),
+        trainerDecidedByUserId: decidedByUserId,
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  });
+
+  if (affected > 0) {
+    await batch.commit();
+  }
+
+  return affected;
+}
+
+async function rejectConflictingDraftEvents(acceptedEvent, decidedByUserId = null) {
+  const snapshot = await db
+    .collection(collections.trainingEvents)
+    .where("trainerId", "==", acceptedEvent.trainerId)
+    .get();
+
+  const batch = db.batch();
+  let affected = 0;
+
+  snapshot.docs.forEach((docSnapshot) => {
+    if (docSnapshot.id === acceptedEvent.id) {
+      return;
+    }
+
+    const event = {
+      id: docSnapshot.id,
+      ...docSnapshot.data(),
+    };
+
+    if (event.workflowStatus !== "draft-requested") {
+      return;
+    }
+
+    const overlaps = getTrainingEventScheduleDays(event).some((candidateDay) =>
+      getTrainingEventScheduleDays(acceptedEvent).some((acceptedDay) =>
+        new Date(candidateDay.startsAt).getTime() < new Date(acceptedDay.endsAt).getTime() &&
+        new Date(candidateDay.endsAt).getTime() > new Date(acceptedDay.startsAt).getTime(),
+      ),
+    );
+
+    if (!overlaps) {
+      return;
+    }
+
+    affected += 1;
+    batch.set(
+      docSnapshot.ref,
+      {
+        workflowStatus: "trainer-rejected",
+        trainerDecisionReason: "Ten termin został już zaakceptowany dla innego szkolenia.",
+        trainerDecidedAt: nowIso(),
+        trainerDecidedByUserId: decidedByUserId,
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  });
+
+  if (affected > 0) {
+    await batch.commit();
+  }
+
+  return affected;
+}
+
+async function rebuildFeedsAfterTrainerMutations(trainerId) {
+  await rebuildTrainerOrganizerCalendarFeedsForTrainer(trainerId);
+}
+
+async function rebuildFeedsAfterOrganizerMutations(organizerId) {
+  await rebuildTrainerOrganizerCalendarFeedsForOrganizer(organizerId);
+}
+
+async function ensureTrainerSharedSlotBelongsToTrainer(slotId, trainerId) {
+  const slot = await findTrainerSharedSlot(slotId);
+  if (!slot || slot.trainerId !== trainerId) {
+    throw new HttpsError("permission-denied", "Możesz zarządzać tylko własnym slotem.");
+  }
+
+  return slot;
+}
+
+async function ensureOrganizerCalendarFeedBelongsToOrganizer(feedId, organizerId) {
+  const feed = await findOrganizerCalendarFeed(feedId);
+  if (!feed || feed.organizerId !== organizerId) {
+    throw new HttpsError("permission-denied", "Możesz zarządzać tylko własnym feedem iCal.");
+  }
+
+  return feed;
+}
+
+async function ensureTrainerOrganizerFeedBelongsToTrainer(feedId, trainerId) {
+  const feed = await findTrainerOrganizerCalendarFeedByRelationId(feedId);
+  if (!feed || feed.trainerId !== trainerId) {
+    throw new HttpsError("permission-denied", "Nie możesz zarządzać tym feedem.");
+  }
+
+  return feed;
+}
+
+async function rebuildRelationFeedOrThrow(relation) {
+  const result = await rebuildTrainerOrganizerCalendarFeed(relation);
+  if (!result) {
+    throw new HttpsError("not-found", "Nie udało się odtworzyć feedu.");
+  }
+
+  return result;
+}
+
+export const createTrainerSharedSlot = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko trener może tworzyć sloty.");
+  }
+
+  const trainer = await requireTrainerProfile(user.trainerProfileId);
+  const startsAt = requiredString(request.data?.startsAt, "Podaj datę startu.");
+  const endsAt = requiredString(request.data?.endsAt, "Podaj datę końca.");
+  const startDate = new Date(startsAt);
+  const endDate = new Date(endsAt);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny przedział czasowy.");
+  }
+
+  const slotId = createId("trainer-shared-slot");
+  await db.collection(collections.trainerSharedSlots).doc(slotId).set({
+    trainerId: trainer.id,
+    trainerUserId: trainer.userId,
+    startsAt: startDate.toISOString(),
+    endsAt: endDate.toISOString(),
+    location: requiredString(request.data?.location, "Podaj lokalizację."),
+    notes: asString(request.data?.notes),
+    visibility: "approved-organizers",
+    source: request.data?.source === "ical-derived" ? "ical-derived" : "manual",
+    status: "active",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+
+  await rebuildFeedsAfterTrainerMutations(trainer.id);
+
+  return { ok: true, slotId };
+});
+
+export const addTrainerSharedSlot = createTrainerSharedSlot;
+
+export const updateTrainerSharedSlot = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko trener może zmieniać sloty.");
+  }
+
+  const trainer = await requireTrainerProfile(user.trainerProfileId);
+  const slotId = requiredString(request.data?.slotId, "Brak identyfikatora slotu.");
+  const slot = await ensureTrainerSharedSlotBelongsToTrainer(slotId, trainer.id);
+  const startsAt = requiredString(request.data?.startsAt, "Podaj datę startu.");
+  const endsAt = requiredString(request.data?.endsAt, "Podaj datę końca.");
+  const startDate = new Date(startsAt);
+  const endDate = new Date(endsAt);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny przedział czasowy.");
+  }
+
+  await db.collection(collections.trainerSharedSlots).doc(slotId).set(
+    {
+      trainerId: trainer.id,
+      trainerUserId: trainer.userId,
+      startsAt: startDate.toISOString(),
+      endsAt: endDate.toISOString(),
+      location: requiredString(request.data?.location, "Podaj lokalizację."),
+      notes: asString(request.data?.notes),
+      visibility: "approved-organizers",
+      source: slot.source,
+      status: "active",
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await rejectDraftEventsForSharedSlot(slotId, "Slot został zmieniony.", user.id);
+  await rebuildFeedsAfterTrainerMutations(trainer.id);
+
+  return { ok: true };
+});
+
+export const archiveTrainerSharedSlot = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko trener może archiwizować sloty.");
+  }
+
+  const trainer = await requireTrainerProfile(user.trainerProfileId);
+  const slotId = requiredString(request.data?.slotId, "Brak identyfikatora slotu.");
+  await ensureTrainerSharedSlotBelongsToTrainer(slotId, trainer.id);
+
+  await db.collection(collections.trainerSharedSlots).doc(slotId).set(
+    {
+      status: "archived",
+      archivedAt: nowIso(),
+      archivedReason: "manual",
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await rejectDraftEventsForSharedSlot(slotId, "Slot został wycofany.", user.id);
+  await rebuildFeedsAfterTrainerMutations(trainer.id);
+
+  return { ok: true };
+});
+
+export const createOrganizerCalendarFeed = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może podpiąć feed.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const feedId = createId("organizer-calendar-feed");
+  const createdAt = nowIso();
+
+  await db.collection(collections.organizerCalendarFeeds).doc(feedId).set({
+    organizerId: organizer.id,
+    organizerUserId: organizer.userId,
+    provider: asString(request.data?.provider) === "apple" ? "apple" : asString(request.data?.provider) === "ical" ? "ical" : "google",
+    url: requiredString(request.data?.url, "Podaj URL feedu."),
+    enabled: true,
+    lastSyncStatus: "idle",
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+
+  return { ok: true, feedId };
+});
+
+export const addOrganizerCalendarFeed = createOrganizerCalendarFeed;
+
+export const updateOrganizerCalendarFeedEnabled = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zmieniać feed.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+  const enabled = Boolean(request.data?.enabled);
+  const feed = await ensureOrganizerCalendarFeedBelongsToOrganizer(feedId, organizer.id);
+
+  await db.collection(collections.organizerCalendarFeeds).doc(feed.id).set(
+    {
+      enabled,
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+  return { ok: true };
+});
+
+export const removeOrganizerCalendarFeed = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może usuwać feed.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+  const feed = await ensureOrganizerCalendarFeedBelongsToOrganizer(feedId, organizer.id);
+
+  await db.collection(collections.organizerCalendarFeeds).doc(feed.id).delete();
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+  return { ok: true };
+});
+
+export const syncOwnOrganizerCalendarFeeds = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może synchronizować feedy.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+  return { ok: true };
+});
+
+export const createOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może tworzyć draft.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const sharedSlotId = requiredString(request.data?.sharedSlotId, "Brak identyfikatora slotu.");
+  const sharedSlot = await findTrainerSharedSlot(sharedSlotId);
+
+  if (!sharedSlot || !isTrainerSharedSlotActive(sharedSlot)) {
+    throw new HttpsError("failed-precondition", "Slot nie jest już dostępny.");
+  }
+
+  const relation = await requireApprovedRelationByIds(sharedSlot.trainerId, organizer.id);
+  const organizerBusyIntervals = await getOrganizerBusyIntervals(organizer.id);
+  if (slotIntersectsIntervals(sharedSlot, organizerBusyIntervals)) {
+    throw new HttpsError("failed-precondition", "Ten termin koliduje z Twoim kalendarzem.");
+  }
+
+  const normalizedScheduleDays = getTrainingEventScheduleDays({
+    startsAt: requiredString(request.data?.scheduleDays?.[0]?.startsAt, "Podaj start."),
+    endsAt: requiredString(request.data?.scheduleDays?.[0]?.endsAt, "Podaj koniec."),
+    scheduleDays: normalizeScheduleDays(request.data?.scheduleDays),
+  });
+  const startsAt = normalizedScheduleDays[0].startsAt;
+  const endsAt = normalizedScheduleDays[normalizedScheduleDays.length - 1].endsAt;
+
+  if (startsAt !== sharedSlot.startsAt || endsAt !== sharedSlot.endsAt) {
+    throw new HttpsError("failed-precondition", "Draft musi być ustawiony dokładnie na wybranym slocie.");
+  }
+
+  const eventId = createId("training-event");
+  const createdAt = nowIso();
+  const baseTitle = asString(request.data?.title) || sharedSlot.location || "Szkolenie";
+
+  await db.collection(collections.trainingEvents).doc(eventId).set({
+    trainerId: sharedSlot.trainerId,
+    organizerId: organizer.id,
+    trainerUserId: relation.trainerUserId ?? null,
+    organizerUserId: relation.organizerUserId ?? null,
+    creatorUserId: user.id,
+    creatorDisplayName: user.displayName,
+    title: baseTitle,
+    summary: requiredString(request.data?.summary, "Podaj krótki opis."),
+    description: requiredString(request.data?.description, "Podaj pełny opis."),
+    type: requiredString(request.data?.type, "Podaj typ szkolenia."),
+    startsAt,
+    endsAt,
+    scheduleDays: normalizedScheduleDays,
+    location: requiredString(request.data?.location, "Podaj lokalizację."),
+    tags: normalizeEventTags(request.data?.tags),
+    capacity: Math.max(1, asNumber(request.data?.capacity, 1)),
+    enrolledCount: 0,
+    isPublished: false,
+    imageHint: baseTitle.split(/\s+/)[0]?.toLowerCase() || "event",
+    brandStatus: resolveBrandStatus(request.data?.brandStatus ?? trainer.brandStatus),
+    status: resolveTrainingEventStatus(request.data?.status),
+    minimumParticipants: Math.max(
+      1,
+      Math.min(
+        Math.max(1, asNumber(request.data?.capacity, 1)),
+        asNumber(request.data?.minimumParticipants, Math.max(1, asNumber(request.data?.capacity, 1))),
+      ),
+    ),
+    requiresOrganizerApproval: true,
+    trainerCollaborationStatus: "pending",
+    organizerCollaborationStatus: "accepted",
+    selfManagedByTrainer: false,
+    createdByRole: "organizer",
+    workflowStatus: "draft-requested",
+    sharedSlotId,
+    publishAutomaticallyAfterTrainerApproval: Boolean(
+      request.data?.publishAutomaticallyAfterTrainerApproval,
+    ),
+    publicationApprovalStatus: null,
+    publicationReviewMessage: null,
+    createdAt,
+  });
+
+  await createNotifications(
+    [relation.trainerUserId, relation.organizerUserId],
+    "Nowy draft szkolenia",
+    `${user.displayName} utworzył draft szkolenia dla slotu ${sharedSlot.location}.`,
+    "event",
+  );
+
+  return { ok: true, eventId };
+});
+
+export const updateOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zmieniać draft.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora szkolenia.");
+  const event = await requireEvent(eventId);
+
+  if (event.organizerId !== organizer.id || event.workflowStatus !== "draft-requested") {
+    throw new HttpsError("failed-precondition", "To szkolenie nie jest Twoim oczekującym draftem.");
+  }
+
+  const sharedSlotId = requiredString(request.data?.sharedSlotId, "Brak identyfikatora slotu.");
+  const sharedSlot = await findTrainerSharedSlot(sharedSlotId);
+  if (!sharedSlot || !isTrainerSharedSlotActive(sharedSlot)) {
+    throw new HttpsError("failed-precondition", "Slot nie jest już dostępny.");
+  }
+
+  if (sharedSlot.trainerId !== event.trainerId) {
+    throw new HttpsError("failed-precondition", "Wybierz slot tego samego trenera.");
+  }
+
+  const normalizedScheduleDays = normalizeScheduleDays(request.data?.scheduleDays);
+  const startsAt = normalizedScheduleDays[0].startsAt;
+  const endsAt = normalizedScheduleDays[normalizedScheduleDays.length - 1].endsAt;
+
+  if (startsAt !== sharedSlot.startsAt || endsAt !== sharedSlot.endsAt) {
+    throw new HttpsError("failed-precondition", "Draft musi pozostać w obrębie wybranego slotu.");
+  }
+
+  await db.collection(collections.trainingEvents).doc(eventId).set(
+    {
+      title: asString(request.data?.title) || event.title,
+      summary: requiredString(request.data?.summary, "Podaj krótki opis."),
+      description: requiredString(request.data?.description, "Podaj pełny opis."),
+      type: requiredString(request.data?.type, "Podaj typ szkolenia."),
+      scheduleDays: normalizedScheduleDays,
+      location: requiredString(request.data?.location, "Podaj lokalizację."),
+      tags: normalizeEventTags(request.data?.tags),
+      capacity: Math.max(1, asNumber(request.data?.capacity, event.capacity)),
+      minimumParticipants: Math.max(
+        1,
+        Math.min(
+          Math.max(1, asNumber(request.data?.capacity, event.capacity)),
+          asNumber(request.data?.minimumParticipants, event.minimumParticipants ?? event.capacity),
+        ),
+      ),
+      sharedSlotId,
+      publishAutomaticallyAfterTrainerApproval: Boolean(
+        request.data?.publishAutomaticallyAfterTrainerApproval,
+      ),
+      status: resolveTrainingEventStatus(request.data?.status ?? event.status),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return { ok: true };
+});
+
+export const withdrawOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może wycofać draft.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora szkolenia.");
+  const event = await requireEvent(eventId);
+
+  if (event.organizerId !== organizer.id || event.workflowStatus !== "draft-requested") {
+    throw new HttpsError("failed-precondition", "To szkolenie nie jest Twoim oczekującym draftem.");
+  }
+
+  await db.collection(collections.trainingEvents).doc(eventId).set(
+    {
+      workflowStatus: "withdrawn",
+      withdrawnAt: nowIso(),
+      withdrawnByUserId: user.id,
+      isPublished: false,
+    },
+    { merge: true },
+  );
+
+  return { ok: true };
+});
+
+export const decideOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || (!user.trainerProfileId && user.role !== "admin")) {
+    throw new HttpsError("permission-denied", "Tylko trener może decydować o draftach.");
+  }
+
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora szkolenia.");
+  const decision = request.data?.decision === "accepted" ? "accepted" : "rejected";
+  const message = asString(request.data?.message);
+  const event = await requireEvent(eventId);
+
+  if (user.role !== "admin" && event.trainerId !== user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Możesz decydować tylko o swoich draftach.");
+  }
+
+  if (event.workflowStatus !== "draft-requested") {
+    throw new HttpsError("failed-precondition", "To szkolenie nie czeka już na decyzję.");
+  }
+
+  const acceptedFields = {
+    trainerDecidedAt: nowIso(),
+    trainerDecidedByUserId: user.id,
+    trainerDecisionReason: message || null,
+  };
+
+  if (decision === "accepted") {
+    await db.collection(collections.trainingEvents).doc(event.id).set(
+      {
+        ...acceptedFields,
+        trainerCollaborationStatus: "accepted",
+        workflowStatus: event.publishAutomaticallyAfterTrainerApproval ? "published" : "trainer-accepted",
+        isPublished: event.publishAutomaticallyAfterTrainerApproval === true,
+        publicationApprovalStatus: null,
+      },
+      { merge: true },
+    );
+
+    await rejectConflictingDraftEvents(event, user.id);
+
+    if (event.publishAutomaticallyAfterTrainerApproval !== true) {
+      const organizer = await findOrganizerProfile(event.organizerId);
+      if (organizer) {
+        await createNotification(
+          organizer.userId,
+          "Draft szkolenia zaakceptowany",
+          `Trener zaakceptował draft szkolenia ${event.title}.`,
+          "event",
+        );
+      }
+    }
+  } else {
+    await db.collection(collections.trainingEvents).doc(event.id).set(
+      {
+        ...acceptedFields,
+        trainerCollaborationStatus: "rejected",
+        workflowStatus: "trainer-rejected",
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  }
+
+  return { ok: true };
+});
+
+export const resetTrainerOrganizerCalendarFeedToken = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+  const feed = await findTrainerOrganizerCalendarFeedByRelationId(feedId);
+
+  if (!feed) {
+    throw new HttpsError("not-found", "Nie znaleziono feedu.");
+  }
+
+  if (user && user.role !== "admin" && user.trainerProfileId !== feed.trainerId) {
+    throw new HttpsError("permission-denied", "Nie możesz resetować tego feedu.");
+  }
+
+  const token = randomUUID();
+  const tokenHash = hashIcalToken(token);
+  const publicFeedUrl = buildTrainerOrganizerIcalUrl(token);
+
+  await db.collection(collections.trainerOrganizerCalendarFeeds).doc(feed.id).set(
+    {
+      token,
+      tokenHash,
+      tokenVersion: (feed.tokenVersion ?? 1) + 1,
+      tokenRotatedAt: nowIso(),
+      publicFeedUrl,
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return {
+    ok: true,
+    subscribeUrl: buildGoogleCalendarSubscribeUrl(publicFeedUrl),
+    feedUrl: publicFeedUrl,
+  };
+});
+
+export const getTrainerOrganizerGoogleCalendarSubscribeUrl = onCall(
+  callableOptions(),
+  async (request) => {
+    const { user } = await requireCurrentUser(request);
+    const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+    const feed = await findTrainerOrganizerCalendarFeedByRelationId(feedId);
+
+    if (!feed) {
+      throw new HttpsError("not-found", "Nie znaleziono feedu.");
+    }
+
+    if (user && user.role !== "admin" && user.trainerProfileId !== feed.trainerId) {
+      throw new HttpsError("permission-denied", "Nie możesz pobrać tego URL.");
+    }
+
+    const publicFeedUrl = asString(feed.publicFeedUrl) || buildTrainerOrganizerIcalUrl(feed.token);
+
+    return {
+      ok: true,
+      subscribeUrl: buildGoogleCalendarSubscribeUrl(publicFeedUrl),
+      feedUrl: publicFeedUrl,
+    };
+  },
+);
+
+export const trainerOrganizerIcalFeed = onRequest(
+  {
+    region: FUNCTION_REGION,
+    cors: false,
+  },
+  async (req, res) => {
+    const token = asString(req.query.token);
+
+    if (!token) {
+      res.status(400).send("Missing token.");
+      return;
+    }
+
+    const feed = await findTrainerOrganizerCalendarFeedByTokenHash(hashIcalToken(token));
+
+    if (!feed || feed.enabled !== true) {
+      res.status(404).send("Feed not found.");
+      return;
+    }
+
+    const slotIds = Array.isArray(feed.matchedSharedSlotIds) ? feed.matchedSharedSlotIds : [];
+    const slotDocs = await Promise.all(
+      slotIds.map((slotId) => db.collection(collections.trainerSharedSlots).doc(slotId).get()),
+    );
+    const slots = slotDocs
+      .filter((docSnapshot) => docSnapshot.exists)
+      .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+      .filter((slot) => slot.status !== "archived" && !slot.archivedAt)
+      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+
+    const content = buildTrainerOrganizerIcalContent(feed, slots);
+    res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).send(content);
+  },
+);
+
 async function resolveNotificationContextForEvent(event) {
   const [trainer, organizer] = await Promise.all([
     event.trainerId ? findTrainerProfile(event.trainerId) : Promise.resolve(null),
@@ -3244,6 +4283,7 @@ export const onRelationWrite = onDocumentWritten(
           ),
         ),
       );
+      await rebuildTrainerOrganizerCalendarFeed(relation);
 
       const trainer = await findTrainerProfile(relation.trainerId);
       const organizer = await findOrganizerProfile(relation.organizerId);
@@ -3300,6 +4340,14 @@ export const onRelationWrite = onDocumentWritten(
           ),
         ),
       );
+      await db.collection(collections.trainerOrganizerCalendarFeeds).doc(relation.id).set(
+        {
+          enabled: false,
+          updatedAt: nowIso(),
+        },
+        { merge: true },
+      );
+      await rejectDraftEventsForRelation(relation, "Relacja została odpięta.", null);
 
       const trainer = await findTrainerProfile(relation.trainerId);
       const organizer = await findOrganizerProfile(relation.organizerId);
@@ -3338,6 +4386,7 @@ export const onRelationWrite = onDocumentWritten(
         await batch.commit();
       }
 
+      await rebuildTrainerOrganizerCalendarFeed(relation);
       await createNotifications(
         [trainer.userId, organizer.userId],
         "Odpięto relację",

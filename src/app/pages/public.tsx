@@ -24,6 +24,7 @@ import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type {
   AppUser,
+  DemoStore,
   EmandarBrandStatus,
   TrainingEvent,
   TrainingEventImage,
@@ -139,6 +140,7 @@ const demoLoginSections = [
     title: "Organizatorzy",
     description: "Konta organizatorów do testowania relacji, wydarzeń i zgłoszeń.",
     accounts: [
+      { label: "Anita", email: "anita@emandar.pl", accent: "Organizator", role: "organizer" },
       { label: "Karolina", email: "karolina@emandar.pl", accent: "Organizator", role: "organizer" },
       { label: "Marek", email: "marek@emandar.pl", accent: "Organizator", role: "organizer" },
       { label: "Organizator Demo", email: "organizator-demo@emandar.pl", accent: "Organizator", role: "organizer" },
@@ -227,6 +229,10 @@ function isOfficialTrainerProfile(
   status: EmandarBrandStatus | undefined,
 ) {
   return resolveBrandStatus(status) === "official";
+}
+
+function getPublicEventCollection(store: Pick<DemoStore, "publicTrainingEvents" | "trainingEvents">) {
+  return store.publicTrainingEvents.length > 0 ? store.publicTrainingEvents : store.trainingEvents;
 }
 
 function EmptyState({
@@ -489,7 +495,8 @@ function EventCard({
   showTrainerImage?: boolean;
 }) {
   const { currentUser, store } = useAppState();
-  const event = store.trainingEvents.find((item) => item.id === eventId);
+  const publicEvents = getPublicEventCollection(store);
+  const event = publicEvents.find((item) => item.id === eventId);
 
   if (!event) {
     return null;
@@ -891,16 +898,17 @@ export function LandingPage() {
 
 export function CalendarPage() {
   const { store } = useAppState();
+  const publicEvents = getPublicEventCollection(store);
   const events = useMemo(
     () =>
       sortEventsByDate(
-        store.trainingEvents.filter(
+        publicEvents.filter(
           (item) =>
             resolveBrandStatus(item.brandStatus) === "official" &&
             isTrainingEventPubliclyVisible(item),
         ),
       ),
-    [store.trainingEvents],
+    [publicEvents],
   );
 
   return (
@@ -917,16 +925,17 @@ export function CalendarPage() {
 
 export function CommunityEventsPage() {
   const { store } = useAppState();
+  const publicEvents = getPublicEventCollection(store);
   const events = useMemo(
     () =>
       sortEventsByDate(
-        store.trainingEvents.filter(
+        publicEvents.filter(
           (item) =>
             resolveBrandStatus(item.brandStatus) === "supported" &&
             isTrainingEventPubliclyVisible(item),
         ),
       ),
-    [store.trainingEvents],
+    [publicEvents],
   );
 
   return (
@@ -947,7 +956,8 @@ export function EventDetailsPage() {
     useAppState();
   const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
-  const event = store.trainingEvents.find((item) => item.id === eventId);
+  const publicEvents = getPublicEventCollection(store);
+  const event = publicEvents.find((item) => item.id === eventId);
   const trainer = store.trainers.find((item) => item.id === event?.trainerId);
   const organizer = store.organizers.find((item) => item.id === event?.organizerId);
   const [loading, setLoading] = useState(false);
@@ -1828,6 +1838,7 @@ export function TrainerDetailsPage() {
   const { slug } = useParams();
   const { store } = useAppState();
   const trainer = store.trainers.find((item) => item.slug === slug);
+  const publicEventsSource = getPublicEventCollection(store);
 
   if (!trainer) {
     return <Navigate to="/trenerzy" replace />;
@@ -1838,7 +1849,7 @@ export function TrainerDetailsPage() {
   }
 
   const publicEvents = sortEventsByDate(
-    store.trainingEvents.filter(
+    publicEventsSource.filter(
       (event) => event.trainerId === trainer.id && event.isPublished && !isTrainingEventArchived(event),
     ),
   );

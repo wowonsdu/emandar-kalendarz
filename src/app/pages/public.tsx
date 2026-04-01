@@ -2,6 +2,7 @@
 import {
   ArrowRight,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ImagePlus,
@@ -103,6 +104,11 @@ function getScheduleRangeLabel(event: TrainingEvent) {
   }
 
   return `od ${formatDate(bounds.startsAt)} do ${formatDate(bounds.endsAt)}`;
+}
+
+function getEventDurationDaysLabel(event: TrainingEvent) {
+  const bounds = getTrainingEventScheduleBounds(event);
+  return bounds.dayCount === 1 ? "1 dzień" : `${bounds.dayCount} dni`;
 }
 
 function firstName(value?: string) {
@@ -534,10 +540,131 @@ function EventCard({
     ? `/panel/wydarzenia-spolecznosci/${event.id}`
     : `/panel/szkolenia/${event.id}`;
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [isMobileExpanded, setIsMobileExpanded] = useState(false);
+  const compactTitle = isCommunityEvent ? event.title || event.location : event.location;
+  const compactMeta = isCommunityEvent ? event.location : leadName;
+  const durationDaysLabel = getEventDurationDaysLabel(event);
+  const mobileSummarySchedule = scheduleRows.slice(0, 2);
+
+  const mobileCard = (
+    <article className="rounded-[1.75rem] border border-brand-line bg-white p-3.5 shadow-soft md:hidden">
+      <button
+        type="button"
+        onClick={() => setIsMobileExpanded((value) => !value)}
+        className="flex w-full items-start gap-3 text-left"
+        aria-expanded={isMobileExpanded}
+      >
+        <div className="flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.4rem] bg-brand-shell">
+          {leadAvatarUrl ? (
+            <img
+              src={leadAvatarUrl}
+              alt={leadName}
+              className="h-full w-full object-cover object-top"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-2xl font-semibold text-brand-navy">
+              {leadName.slice(0, 1)}
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
+                {leadName}
+              </p>
+              <h3 className="mt-1 text-xl font-semibold leading-tight text-brand-navy">
+                {compactTitle}
+              </h3>
+            </div>
+            <span
+              className={`mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-brand-line bg-brand-shell text-brand-navy transition-transform ${
+                isMobileExpanded ? "rotate-180" : ""
+              }`}
+            >
+              <ChevronDown size={16} />
+            </span>
+          </div>
+          <div className="mt-2 grid gap-1 text-sm text-brand-muted">
+            <div className="flex items-center gap-2">
+              <MapPin size={14} className="shrink-0 text-brand-sky-deep" />
+              <span className="min-w-0 truncate">{compactMeta}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium text-brand-navy">{scheduleRangeLabel}</span>
+              <span className="rounded-full bg-brand-shell px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-muted">
+                {durationDaysLabel}
+              </span>
+            </div>
+          </div>
+          {eventTags.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {eventTags.map((tag) => (
+                <span
+                  key={`${event.id}-compact-${tag}`}
+                  className="rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </button>
+
+      {isMobileExpanded ? (
+        <div className="mt-4 border-t border-brand-line pt-4">
+          <p className="text-sm leading-6 text-brand-muted">{event.summary}</p>
+          <div className="mt-4 grid gap-2">
+            {mobileSummarySchedule.map((row) => (
+              <div
+                key={`${event.id}-mobile-${row.key}`}
+                className="rounded-2xl bg-brand-shell px-3.5 py-3 text-sm text-brand-muted"
+              >
+                <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
+                  <CalendarDays size={15} />
+                  {row.title}
+                </div>
+                <p>{row.label}</p>
+                <p>{row.range}</p>
+              </div>
+            ))}
+          </div>
+          {!(isCommunityEvent || isSelfManagedTrainingEvent(event)) && (
+            <p className="mt-4 text-sm text-brand-muted">
+              Organizator:{" "}
+              <span className="font-semibold text-brand-navy">
+                {getPublicOrganizerName(event, undefined, trainer?.displayName)}
+              </span>
+            </p>
+          )}
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            {canManage && (
+              <Link
+                to={managementPath}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+              >
+                Edytuj
+              </Link>
+            )}
+            <Link
+              to={`/kalendarz/${event.id}`}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
+            >
+              Poproś o kontakt
+              <ArrowRight size={16} />
+            </Link>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
 
   if (isCommunityEvent) {
     return (
-      <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+      <>
+        {mobileCard}
+        <article className="hidden rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft md:block">
         <div
           className={`grid gap-6 md:items-stretch ${
             showTrainerImage ? "md:grid-cols-[228px_minmax(0,1fr)]" : "grid-cols-1"
@@ -688,12 +815,15 @@ function EventCard({
             onOpenIndexChange={setLightboxIndex}
           />
         )}
-      </article>
+        </article>
+      </>
     );
   }
 
   return (
-    <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+    <>
+      {mobileCard}
+      <article className="hidden rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft md:block">
       <div
         className={`grid gap-6 md:items-stretch ${
           showTrainerImage ? "md:grid-cols-[228px_minmax(0,1fr)]" : "md:grid-cols-1"
@@ -816,7 +946,8 @@ function EventCard({
           </div>
         </div>
       </div>
-    </article>
+      </article>
+    </>
   );
 }
 

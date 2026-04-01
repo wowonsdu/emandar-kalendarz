@@ -35,6 +35,12 @@ function exactNavLinkClass(currentPath: string, targetPath: string) {
   return brandNavLinkClass({ isActive: currentPath === targetPath });
 }
 
+const publicNavItems = [
+  { to: "/kalendarz", label: "Kalendarz", icon: CalendarDays },
+  { to: "/trenerzy", label: "Przekazujacy Wiedze", icon: Users },
+  { to: "/wydarzenia-spolecznosci", label: "Społeczność", icon: Bell },
+] as const;
+
 function BrandMark() {
   return (
     <Link to="/" className="flex min-w-0 items-center gap-2.5 sm:gap-3">
@@ -55,37 +61,61 @@ export function PublicLayout() {
   const { currentUser, getRoleHomePath } = useAppState();
   const location = useLocation();
   const userHomePath = currentUser ? getRoleHomePath(currentUser.role) : "/login";
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setIsMobileMenuOpen(false);
+  }, [location.pathname, currentUser?.role]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    if (!isMobileMenuOpen) {
+      document.body.style.removeProperty("overflow");
+      return;
+    }
+
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.removeProperty("overflow");
+    };
+  }, [isMobileMenuOpen]);
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:gap-6 sm:px-6 sm:py-4 lg:px-8">
-          <BrandMark />
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:gap-6 sm:px-6 sm:py-4 lg:px-8">
+          <div className="flex items-center gap-2.5 md:hidden">
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft"
+              aria-label="Otwórz menu"
+            >
+              <Menu size={22} />
+            </button>
+            <BrandMark />
+          </div>
+          <div className="hidden md:block">
+            <BrandMark />
+          </div>
 
           <nav className="hidden items-center gap-2 md:flex">
-            <NavLink
-              to="/kalendarz"
-              className={() => exactNavLinkClass(location.pathname, "/kalendarz")}
-            >
-              Kalendarz
-            </NavLink>
-            <NavLink
-              to="/trenerzy"
-              className={() => exactNavLinkClass(location.pathname, "/trenerzy")}
-            >
-              Przekazujacy Wiedze
-            </NavLink>
-            <NavLink
-              to="/wydarzenia-spolecznosci"
-              className={() =>
-                exactNavLinkClass(location.pathname, "/wydarzenia-spolecznosci")
-              }
-            >
-              Społeczność
-            </NavLink>
+            {publicNavItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={() => exactNavLinkClass(location.pathname, item.to)}
+              >
+                {item.label}
+              </NavLink>
+            ))}
           </nav>
 
-          <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:gap-3">
+          <div className="ml-auto hidden items-center gap-3 md:flex">
             {currentUser ? (
               <Link
                 to={userHomePath}
@@ -120,6 +150,88 @@ export function PublicLayout() {
       <main>
         <Outlet />
       </main>
+
+      {isMobileMenuOpen ? (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <button
+            type="button"
+            aria-label="Zamknij menu"
+            onClick={() => setIsMobileMenuOpen(false)}
+            className="absolute inset-0 bg-brand-navy/45 backdrop-blur-sm"
+          />
+          <aside className="absolute inset-y-0 left-0 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border-r border-brand-line/80 bg-white text-brand-navy shadow-2xl">
+            <div className="flex min-h-full flex-col px-5 py-6">
+              <div className="mb-8 flex items-start justify-between gap-4">
+                <BrandMark />
+                <button
+                  type="button"
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft"
+                  aria-label="Zamknij menu"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <nav className="space-y-2">
+                {publicNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = location.pathname === item.to;
+
+                  return (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className={[
+                        "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors",
+                        isActive
+                          ? "bg-brand-navy text-white"
+                          : "bg-brand-shell/70 text-brand-navy hover:bg-brand-shell",
+                      ].join(" ")}
+                    >
+                      <Icon size={18} />
+                      {item.label}
+                    </NavLink>
+                  );
+                })}
+              </nav>
+
+              <div className="mt-8 space-y-3 rounded-[1.75rem] border border-brand-line bg-brand-shell/70 p-4">
+                {currentUser ? (
+                  <Link
+                    to={userHomePath}
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
+                  >
+                    <LayoutDashboard size={16} />
+                    Moja Przestrzen
+                  </Link>
+                ) : (
+                  <>
+                    <Link
+                      to="/login"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy"
+                    >
+                      <ShieldCheck size={16} />
+                      Logowanie
+                    </Link>
+                    <Link
+                      to="/rejestracja"
+                      onClick={() => setIsMobileMenuOpen(false)}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
+                    >
+                      <ShieldCheck size={16} />
+                      Rejestracja
+                    </Link>
+                  </>
+                )}
+              </div>
+            </div>
+          </aside>
+        </div>
+      ) : null}
 
       <footer className="border-t border-brand-line/70 bg-white/90">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-8 text-sm text-brand-muted sm:px-6 lg:px-8 md:flex-row md:items-center md:justify-between">

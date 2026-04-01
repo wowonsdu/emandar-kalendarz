@@ -8055,28 +8055,31 @@ export function ProfileSettingsPage() {
       >
         <form
           onSubmit={handleParticipantSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
         >
-          <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <div className="space-y-4">
+          <div className="grid gap-4 sm:gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+            <div className="space-y-3 sm:space-y-4">
               <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-brand-shell">
                 {currentUser.avatarUrl ? (
                   <img
                     src={currentUser.avatarUrl}
                     alt={currentUser.displayName}
-                    className="h-64 w-full object-cover object-top"
+                    className="h-52 w-full object-cover object-top sm:h-64"
                   />
                 ) : (
-                  <div className="flex h-64 items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-6xl font-semibold text-brand-navy/70">
+                  <div className="flex h-52 items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-5xl font-semibold text-brand-navy/70 sm:h-64 sm:text-6xl">
                     {currentUser.displayName.slice(0, 1)}
                   </div>
                 )}
               </div>
 
-              <label className="grid gap-2 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+              <label className="grid gap-2 rounded-[1.75rem] border border-dashed border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy sm:rounded-3xl sm:py-4">
                 <span className="inline-flex items-center gap-2 text-sm font-semibold">
                   <ImagePlus size={16} />
                   Nowe zdjęcie
+                </span>
+                <span className="inline-flex w-fit items-center justify-center rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
+                  Wybierz plik
                 </span>
                 <input
                   type="file"
@@ -8087,7 +8090,7 @@ export function ProfileSettingsPage() {
                       avatarFile: event.target.files?.[0] ?? null,
                     }))
                   }
-                  className="text-sm"
+                  className="hidden"
                 />
                 <span className="text-sm text-brand-muted">
                   {participantForm.avatarFile
@@ -8156,7 +8159,7 @@ export function ProfileSettingsPage() {
               <button
                 type="submit"
                 disabled={saving}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
               >
                 {saving ? "Zapisywanie..." : "Zapisz profil"}
               </button>
@@ -8192,7 +8195,7 @@ export function ProfileSettingsPage() {
       >
         <form
           onSubmit={handleSettingsSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
         >
           <div className="grid gap-4">
             <div className="grid gap-4 rounded-3xl border border-brand-line bg-brand-shell p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
@@ -8303,34 +8306,37 @@ export function ProfileSettingsPage() {
       >
         <form
           onSubmit={handleTrainerSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
         >
-          <div className="grid gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <div className="space-y-4">
+          <div className="grid gap-4 sm:gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+            <div className="space-y-3 sm:space-y-4">
               <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-brand-shell">
                 {trainerProfile.avatarUrl ? (
                   <img
                     src={trainerProfile.avatarUrl}
                     alt={trainerProfile.displayName}
-                    className="h-64 w-full object-cover object-top"
+                    className="h-52 w-full object-cover object-top sm:h-64"
                   />
                 ) : (
-                  <div className="flex h-64 items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-6xl font-semibold text-brand-navy/70">
+                  <div className="flex h-52 items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-5xl font-semibold text-brand-navy/70 sm:h-64 sm:text-6xl">
                     {trainerProfile.displayName.slice(0, 1)}
                   </div>
                 )}
               </div>
 
-              <label className="grid gap-2 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+              <label className="grid gap-2 rounded-[1.75rem] border border-dashed border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy sm:rounded-3xl sm:py-4">
                 <span className="inline-flex items-center gap-2 text-sm font-semibold">
                   <ImagePlus size={16} />
                   Nowe zdjęcie
+                </span>
+                <span className="inline-flex w-fit items-center justify-center rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
+                  Wybierz plik
                 </span>
                 <input
                   type="file"
                   accept="image/png,image/jpeg,image/webp"
                   onChange={handleTrainerAvatarChange}
-                  className="text-sm"
+                  className="hidden"
                 />
                 <span className="text-sm text-brand-muted">
                   {trainerForm.avatarFile
@@ -8445,7 +8451,7 @@ export function ProfileSettingsPage() {
               <button
                 type="submit"
                 disabled={saving}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
               >
                 {saving ? "Zapisywanie..." : "Zapisz profil"}
               </button>
@@ -8481,7 +8487,7 @@ export function ProfileSettingsPage() {
       >
         <form
           onSubmit={handleOrganizerSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
         >
           <div className="grid gap-4 xl:grid-cols-2">
             <label className="grid gap-2">

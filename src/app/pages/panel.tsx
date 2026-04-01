@@ -3442,21 +3442,18 @@ function DetachRelationControls({
 
 export function RelationsPage() {
   const {
+    connectOrganizerToTrainerWithCode,
     currentUser,
-    decideRelation,
-    requestRelation,
     store,
   } = useAppState();
-  const [selectedTrainer, setSelectedTrainer] = useState(
-    store.trainers[0]?.id ?? "",
-  );
+  const [trainerAuthorizationCode, setTrainerAuthorizationCode] = useState("");
+  const [connectingTrainer, setConnectingTrainer] = useState(false);
 
   if (!currentUser) {
     return null;
   }
 
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
-  const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
 
   const organizerProfile = store.organizers.find(
     (item) => item.userId === currentUser.id,
@@ -3474,20 +3471,24 @@ export function RelationsPage() {
   return (
     <PanelSection
       eyebrow="Relacje"
-      title="Współpraca Przekazujących Wiedzę z organizatorami"
-      description="Organizator prosi o dostęp do terminów Przekazującego Wiedzę, a Przekazujący Wiedzę akceptuje lub odrzuca relację. Po akceptacji organizator widzi prywatne sloty."
+      title="Relacje z trenerami"
+      description="Organizator przypina się do trenera od razu po poprawnym kodzie. Nie ma już osobnego etapu akceptacji relacji."
     >
       {currentUser.role === "organizer" && (
         <form
           onSubmit={async (event) => {
             event.preventDefault();
+            setConnectingTrainer(true);
             try {
-              await requestRelation(selectedTrainer);
-              toast.success("Wysłano prośbę o nową relację.");
+              await connectOrganizerToTrainerWithCode(trainerAuthorizationCode);
+              setTrainerAuthorizationCode("");
+              toast.success("Relacja z trenerem została aktywowana.");
             } catch (error) {
               toast.error(
-                error instanceof Error ? error.message : "Nie udało się utworzyć relacji.",
+                error instanceof Error ? error.message : "Nie udało się aktywować relacji.",
               );
+            } finally {
+              setConnectingTrainer(false);
             }
           }}
           className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
@@ -3495,26 +3496,23 @@ export function RelationsPage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
             <label className="grid flex-1 gap-2">
               <span className="text-sm font-semibold text-brand-navy">
-                Poproś o relację z Przekazującym Wiedzę
+                Kod trenera
               </span>
-              <select
-                value={selectedTrainer}
-                onChange={(event) => setSelectedTrainer(event.target.value)}
+              <input
+                required
+                value={trainerAuthorizationCode}
+                onChange={(event) => setTrainerAuthorizationCode(event.target.value)}
+                placeholder="Wpisz kod od trenera"
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-              >
-                {store.trainers.map((trainer) => (
-                  <option key={trainer.id} value={trainer.id}>
-                    {trainer.displayName}
-                  </option>
-                ))}
-              </select>
+              />
             </label>
             <button
               type="submit"
+              disabled={connectingTrainer}
               className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
             >
               <Users size={16} />
-              Wyślij prośbę
+              {connectingTrainer ? "Aktywowanie..." : "Aktywuj relację"}
             </button>
           </div>
         </form>
@@ -3524,7 +3522,7 @@ export function RelationsPage() {
         {relations.length === 0 && (
           <EmptyPanelState
             title="Brak relacji"
-            description="Aktywne i oczekujące relacje Przekazujący Wiedzę-organizator pojawią się tutaj."
+            description="Aktywne relacje trener-organizator pojawią się tutaj po wpisaniu poprawnego kodu trenera."
           />
         )}
         {relations.map((relation) => {
@@ -3532,10 +3530,6 @@ export function RelationsPage() {
           const organizer = store.organizers.find(
             (item) => item.id === relation.organizerId,
           );
-          const canDecide =
-            relation.status === "pending" &&
-            ((currentUser.role === "trainer" && trainer?.userId === currentUser.id) ||
-              currentUser.role === "admin");
 
           return (
             <article
@@ -3548,57 +3542,13 @@ export function RelationsPage() {
                     {trainer?.displayName} ↔ {organizer?.displayName}
                   </p>
                   <p className="mt-2 text-brand-muted">
-                    Prośba od: {relation.requestedBy} • utworzona{" "}
-                    {formatDate(relation.createdAt)}
+                    Połączenie utworzone {formatDate(relation.createdAt)}.
                   </p>
                 </div>
                 <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
                   {relation.status}
                 </span>
               </div>
-
-              {canDecide && (
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideRelation(relation.id, "approved");
-                        toast.success("Relacja została zaakceptowana.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zmienić relacji.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                  >
-                    <Check size={16} />
-                    Akceptuj
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideRelation(relation.id, "rejected");
-                        toast.success("Relacja została odrzucona.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zmienić relacji.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-                  >
-                    <X size={16} />
-                    Odrzuć
-                  </button>
-                </div>
-              )}
 
               {relation.status === "approved" &&
                 (currentUser.role === "organizer" || currentUser.role === "admin") && (
@@ -7883,17 +7833,10 @@ export function EventManagementPage() {
 }
 
 function PeoplePage({ kind }: { kind: "trainer" | "organizer" }) {
-  const { currentUser, decideRelation, store, updateTrainerBrandStatus } = useAppState();
+  const { currentUser, store, updateTrainerBrandStatus } = useAppState();
   const items = kind === "organizer" ? store.organizers : store.trainers;
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser?.id);
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-  const pendingOrganizerRelations =
-    kind === "organizer" && currentUser?.role === "trainer" && trainerProfile
-      ? store.relations.filter(
-          (relation) =>
-            relation.trainerId === trainerProfile.id && relation.status === "pending",
-        )
-      : [];
   const organizerRelationsById =
     kind === "organizer" && currentUser?.role === "trainer" && trainerProfile
       ? new Map(
@@ -7913,81 +7856,6 @@ function PeoplePage({ kind }: { kind: "trainer" | "organizer" }) {
       title={kind === "organizer" ? "Organizatorzy" : "Przekazujący Wiedzę"}
       description="Katalog osób i podmiotów widocznych z poziomu panelu."
     >
-      {pendingOrganizerRelations.length > 0 && (
-        <div className="space-y-4">
-          {pendingOrganizerRelations.map((relation) => {
-            const organizer = store.organizers.find(
-              (item) => item.id === relation.organizerId,
-            );
-
-            return (
-              <article
-                key={relation.id}
-                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                      Nowa prośba o współpracę
-                    </p>
-                    <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
-                      {organizer?.displayName ?? "Organizator"}
-                    </h3>
-                    <p className="mt-2 text-brand-muted">
-                      Prośba od organizatora czeka na Twoją decyzję.
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
-                    {relation.status}
-                  </span>
-                </div>
-
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideRelation(relation.id, "approved");
-                        toast.success("Relacja została zaakceptowana.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zmienić relacji.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                  >
-                    <Check size={16} />
-                    Akceptuj
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideRelation(relation.id, "rejected");
-                        toast.success("Relacja została odrzucona.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zmienić relacji.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-                  >
-                    <X size={16} />
-                    Odrzuć
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-
       <div className="grid gap-4 lg:grid-cols-2">
         {items.length === 0 && (
           <div className="lg:col-span-2">

@@ -723,7 +723,7 @@
       "organizerId": "organizer-demo",
       "trainerUserId": "user-trainer-jacek",
       "organizerUserId": "user-organizer-demo",
-      "status": "pending",
+      "status": "approved",
       "requestedBy": "organizer",
       "createdAt": "2026-03-06T08:00:00.000Z"
     }

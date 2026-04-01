@@ -39,10 +39,8 @@ import {
   manageOwnEnrollment as manageOwnEnrollmentAction,
   manageOwnGroupEventParticipation as manageOwnGroupEventParticipationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
-  decideRelation as decideRelationAction,
   removeOrganizerCalendarFeed as removeOrganizerCalendarFeedAction,
   removeGroupMember as removeGroupMemberAction,
-  requestRelation as requestRelationAction,
   resetTrainerOrganizerCalendarFeedToken as resetTrainerOrganizerCalendarFeedTokenAction,
   resolveEnrollmentPhoto,
   reviewCommunityEvent as reviewCommunityEventAction,
@@ -159,11 +157,6 @@ interface AppStateContextValue {
     eventParticipantId: string,
     action: ParticipantGroupEventManagementInput["action"],
     transferTargetEventId?: string,
-  ) => Promise<void>;
-  requestRelation: (trainerId: string) => Promise<void>;
-  decideRelation: (
-    relationId: string,
-    status: "approved" | "rejected",
   ) => Promise<void>;
   detachRelation: (
     relationId: string,
@@ -517,22 +510,6 @@ export function AppProviders({ children }: { children: ReactNode }) {
             },
             currentUser,
           ),
-        );
-      },
-      async requestRelation(trainerId) {
-        if (!currentUser) {
-          throw new Error("Musisz być zalogowany.");
-        }
-
-        await withFriendlyErrors(() => requestRelationAction(currentUser, trainerId));
-      },
-      async decideRelation(relationId, status) {
-        if (!currentUser) {
-          throw new Error("Musisz być zalogowany.");
-        }
-
-        await withFriendlyErrors(() =>
-          decideRelationAction(relationId, currentUser, status),
         );
       },
       async detachRelation(relationId, archiveLinkedEvents) {

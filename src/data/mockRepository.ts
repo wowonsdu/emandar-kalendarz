@@ -66,7 +66,7 @@ type StorePatch = Partial<DemoStore>;
 
 const authSessionStorageKey = "emandar:mock-auth-session";
 const smsSessionStorageKey = "emandar:mock-sms-session";
-const storeShadowStorageKey = "emandar:mock-store-shadow:v2";
+const storeShadowStorageKey = "emandar:mock-store-shadow:v3";
 const pollIntervalMs = 5000;
 
 let cachedStore: DemoStore | null = null;
@@ -1257,57 +1257,6 @@ export async function manageOwnGroupEventParticipation(
   });
 }
 
-export async function requestRelation(currentUser: AppUser, trainerId: string) {
-  await mutateStore((store) => {
-    const organizerId = requireOrganizerProfileId(currentUser);
-    const relationId = buildRelationId(trainerId, organizerId);
-    const existing = store.relations.find((item) => item.id === relationId);
-    if (existing) {
-      existing.status = "pending";
-      return;
-    }
-
-    store.relations.unshift({
-      id: relationId,
-      trainerId,
-      organizerId,
-      trainerUserId: findTrainer(store, trainerId)?.userId ?? undefined,
-      organizerUserId: currentUser.id,
-      status: "pending",
-      requestedBy: "organizer",
-      createdAt: nowIso(),
-    });
-  });
-}
-
-export async function decideRelation(
-  relationId: string,
-  currentUser: AppUser,
-  status: "approved" | "rejected",
-) {
-  await mutateStore((store) => {
-    const relation = store.relations.find((item) => item.id === relationId);
-    if (!relation) {
-      throw new Error("Nie znaleziono relacji.");
-    }
-
-    relation.status = status;
-    if (status === "approved") {
-      createNotification(
-        store,
-        relation.organizerUserId,
-        "Relacja została zaakceptowana",
-        "Możesz już pracować z trenerem w panelu.",
-        "relation",
-      );
-    }
-
-    if (currentUser.role === "admin") {
-      relation.requestedBy = "admin";
-    }
-  });
-}
-
 export async function detachRelation(
   relationId: string,
   currentUser: AppUser,
@@ -2356,6 +2305,12 @@ export async function updateTrainerProfile(input: TrainerProfileUpdateInput, cur
     trainer.bio = input.bio.trim();
     trainer.specialties = cloneValue(input.specialties);
     trainer.locations = cloneValue(input.locations);
+    const nextAuthorizationCode = input.authorizationCode?.trim().toUpperCase();
+    if (nextAuthorizationCode) {
+      trainer.authorizationCode = nextAuthorizationCode;
+      trainer.authorizationCodeConfigured = true;
+      trainer.authorizationCodeUpdatedAt = nowIso();
+    }
     if (avatarUrl) {
       trainer.avatarUrl = avatarUrl;
       trainer.avatarPath = avatarUrl;

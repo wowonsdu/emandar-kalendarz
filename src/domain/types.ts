@@ -100,6 +100,7 @@ export interface TrainerProfile {
   avatarPath?: string;
   avatarUploadedAt?: string;
   brandStatus: EmandarBrandStatus;
+  authorizationCode?: string;
   authorizationCodeConfigured?: boolean;
   authorizationCodeUpdatedAt?: string;
   notificationSettings?: NotificationSettings;

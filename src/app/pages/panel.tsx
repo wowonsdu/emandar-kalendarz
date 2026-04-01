@@ -8317,7 +8317,7 @@ export function ProfileSettingsPage() {
     return (
       <PanelSection
         eyebrow="Profil"
-        title="Ustawienia globalne zdjęć uczestnika"
+        title="Mój profil"
         description="Admin ustawia tutaj portalowe zasady zbierania zdjęć przy rejestracji konta i przy zapisie na szkolenie."
       >
         <form

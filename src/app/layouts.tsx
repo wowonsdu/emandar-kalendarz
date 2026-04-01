@@ -176,7 +176,7 @@ function panelItems(
       },
       {
         to: "/panel/terminy",
-        label: "Terminy Przekazujacych Wiedze",
+        label: "Terminy",
         icon: CalendarDays,
       },
       { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
@@ -198,7 +198,7 @@ function panelItems(
       },
       {
         to: "/panel/terminy",
-        label: "Dostepnosc",
+        label: "Terminy",
         icon: CalendarDays,
       },
       { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
@@ -211,7 +211,7 @@ function panelItems(
 
   return [
     ...base,
-    { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
+    { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
     { to: "/panel/grupy", label: "Grupy", icon: Users },
     { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
     { to: "/panel/trenerzy", label: "Przekazujacy Wiedze", icon: Users },

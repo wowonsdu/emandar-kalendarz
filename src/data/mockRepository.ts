@@ -91,6 +91,11 @@ function getMockApiUrl(path: string) {
   return `${basePath}/api/mock/${path}`.replace(/([^:]\/)\/+/g, "$1");
 }
 
+function getMockStaticUrl(path: string) {
+  const basePath = getBasePath().replace(/\/+$/, "");
+  return `${basePath}/mock-data/${path}`.replace(/([^:]\/)\/+/g, "$1");
+}
+
 function canUseDomStorage() {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 }
@@ -134,6 +139,18 @@ function cloneValue<T>(value: T): T {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isStoreEmpty(store: DemoStore) {
+  return (
+    store.users.length === 0 &&
+    store.trainers.length === 0 &&
+    store.organizers.length === 0 &&
+    store.participantProfiles.length === 0 &&
+    store.groups.length === 0 &&
+    store.trainingEvents.length === 0 &&
+    store.enrollmentRequests.length === 0
+  );
 }
 
 function createId(prefix: string) {
@@ -289,11 +306,42 @@ async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number 
       version: Number(payload.version ?? Date.now()),
     };
   } catch {
-    const shadowStore = readStorageJson<DemoStore | null>(storeShadowStorageKey, null);
-    return {
-      store: normalizePublicStore(shadowStore),
-      version: Date.now(),
-    };
+    const shadowStore = normalizePublicStore(
+      readStorageJson<DemoStore | null>(storeShadowStorageKey, null),
+    );
+
+    if (!isStoreEmpty(shadowStore)) {
+      return {
+        store: shadowStore,
+        version: Date.now(),
+      };
+    }
+
+    try {
+      const response = await fetch(getMockStaticUrl("seed-store.json"), {
+        method: "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        throw new Error(`mock-static-seed-${response.status}`);
+      }
+
+      const payload = (await response.json()) as Partial<DemoStore>;
+      const store = normalizePublicStore(payload);
+      writeStorageJson(storeShadowStorageKey, store);
+
+      return {
+        store,
+        version: Date.now(),
+      };
+    } catch {
+      return {
+        store: shadowStore,
+        version: Date.now(),
+      };
+    }
   }
 }
 

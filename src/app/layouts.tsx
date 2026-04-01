@@ -166,7 +166,7 @@ function panelItems(
   if (role === "organizer") {
     return [
       ...base,
-      { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
+      { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
       { to: "/panel/grupy", label: "Grupy", icon: Users },
       { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
       {
@@ -188,7 +188,7 @@ function panelItems(
   if (role === "trainer") {
     return [
       ...base,
-      { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
+      { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
       { to: "/panel/grupy", label: "Grupy", icon: Users },
       { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
       {

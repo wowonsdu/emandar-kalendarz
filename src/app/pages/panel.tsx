@@ -8428,7 +8428,7 @@ export function ProfileSettingsPage() {
     return (
       <PanelSection
         eyebrow="Profil"
-        title="Ustawienia profilu Przekazującego Wiedzę"
+        title="Mój profil"
         description="Tutaj zmienisz zdjęcie, krótkie motto, opis, tagi i lokalizacje szkoleń. Po zapisie zmiany od razu trafią na publiczny widok Przekazujących Wiedzę."
       >
         <form
@@ -8606,7 +8606,7 @@ export function ProfileSettingsPage() {
     return (
       <PanelSection
         eyebrow="Profil"
-        title="Ustawienia profilu organizatora"
+        title="Mój profil"
         description="Tutaj uzupełnisz nazwę organizatora, osobę kontaktową, lokalizację i opis."
       >
         <form

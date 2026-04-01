@@ -12,14 +12,19 @@ import { mapAppError } from "@/domain/errors";
 import { sortTrainerProfiles } from "@/domain/utils";
 import {
   addAvailabilitySlot as addAvailabilitySlotAction,
+  addEventParticipant as addEventParticipantAction,
+  addGroupMember as addGroupMemberAction,
   addOrganizerCalendarFeed as addOrganizerCalendarFeedAction,
   addTrainerCalendarFeed as addTrainerCalendarFeedAction,
   addTrainerSharedSlot as addTrainerSharedSlotAction,
+  archiveGroup as archiveGroupAction,
   archiveTrainingEvent as archiveTrainingEventAction,
   archiveTrainerSharedSlot as archiveTrainerSharedSlotAction,
   completeParticipantOnboarding as completeParticipantOnboardingAction,
   connectOrganizerToTrainerWithCode as connectOrganizerToTrainerWithCodeAction,
   confirmEnrollmentAttendance as confirmEnrollmentAttendanceAction,
+  createGroup as createGroupAction,
+  createOrUpdateOrganizerParticipantProfile as createOrUpdateOrganizerParticipantProfileAction,
   createEmptyStore,
   createOrganizerTrainingDraft as createOrganizerTrainingDraftAction,
   createUnifiedTrainingEvent as createTrainingEventAction,
@@ -30,12 +35,15 @@ import {
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   detachRelation as detachRelationAction,
   ensurePhoneParticipantProfileForFlow as ensurePhoneParticipantProfileForFlowAction,
+  finalizeEventRoster as finalizeEventRosterAction,
   getCommunityEventReview as getCommunityEventReviewAction,
   getTrainerOrganizerGoogleCalendarSubscribeUrl as getTrainerOrganizerGoogleCalendarSubscribeUrlAction,
   manageOwnEnrollment as manageOwnEnrollmentAction,
+  manageOwnGroupEventParticipation as manageOwnGroupEventParticipationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
   decideRelation as decideRelationAction,
   removeOrganizerCalendarFeed as removeOrganizerCalendarFeedAction,
+  removeGroupMember as removeGroupMemberAction,
   requestRelation as requestRelationAction,
   resetTrainerOrganizerCalendarFeedToken as resetTrainerOrganizerCalendarFeedTokenAction,
   resolveEnrollmentPhoto,
@@ -52,6 +60,9 @@ import {
   removeTrainerCalendarFeed as removeTrainerCalendarFeedAction,
   updateTrainingEventBrandStatus as updateTrainingEventBrandStatusAction,
   updateAppSettings as updateAppSettingsAction,
+  updateEventParticipantStatus as updateEventParticipantStatusAction,
+  updateGroup as updateGroupAction,
+  updateGroupMember as updateGroupMemberAction,
   updateOrganizerCalendarFeedEnabled as updateOrganizerCalendarFeedEnabledAction,
   updateOrganizerTrainingDraft as updateOrganizerTrainingDraftAction,
   updateTrainerCalendarFeedEnabled as updateTrainerCalendarFeedEnabledAction,
@@ -76,11 +87,19 @@ import type {
   DecisionStatus,
   DemoStore,
   EmandarBrandStatus,
+  EventParticipantInput,
+  EventParticipantStatusUpdateInput,
   EnrollmentFormInput,
+  GroupInput,
+  GroupMemberInput,
+  GroupMemberUpdateInput,
+  GroupUpdateInput,
   OrganizerCalendarFeedInput,
+  OrganizerParticipantProfileInput,
   OrganizerTrainingDraftDecisionInput,
   OrganizerTrainingDraftInput,
   OrganizerTrainingDraftUpdateInput,
+  ParticipantGroupEventManagementInput,
   ParticipantEnrollmentManagementInput,
   ParticipantOnboardingInput,
   ParticipantProfileUpdateInput,
@@ -137,6 +156,11 @@ interface AppStateContextValue {
     action: ParticipantEnrollmentManagementInput["action"],
     transferTargetEventId?: string,
   ) => Promise<void>;
+  manageOwnGroupEventParticipation: (
+    eventParticipantId: string,
+    action: ParticipantGroupEventManagementInput["action"],
+    transferTargetEventId?: string,
+  ) => Promise<void>;
   requestRelation: (trainerId: string) => Promise<void>;
   decideRelation: (
     relationId: string,
@@ -158,6 +182,18 @@ interface AppStateContextValue {
     eventId: string,
     status: "accepted" | "rejected",
   ) => Promise<void>;
+  createGroup: (input: GroupInput) => Promise<{ ok: true; groupId: string }>;
+  updateGroup: (input: GroupUpdateInput) => Promise<void>;
+  archiveGroup: (groupId: string) => Promise<void>;
+  createOrUpdateOrganizerParticipantProfile: (
+    input: OrganizerParticipantProfileInput,
+  ) => Promise<void>;
+  addGroupMember: (input: GroupMemberInput) => Promise<void>;
+  updateGroupMember: (input: GroupMemberUpdateInput) => Promise<void>;
+  removeGroupMember: (memberId: string) => Promise<void>;
+  addEventParticipant: (input: EventParticipantInput) => Promise<void>;
+  updateEventParticipantStatus: (input: EventParticipantStatusUpdateInput) => Promise<void>;
+  finalizeEventRoster: (eventId: string) => Promise<void>;
   addTrainerSharedSlot: (input: TrainerSharedSlotInput) => Promise<void>;
   updateTrainerSharedSlot: (input: TrainerSharedSlotUpdateInput) => Promise<void>;
   archiveTrainerSharedSlot: (slotId: string) => Promise<void>;
@@ -254,6 +290,12 @@ function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStor
     users: privateStore.users ?? publicStore.users,
     trainers,
     organizers: privateStore.organizers ?? publicStore.organizers,
+    participantProfiles:
+      privateStore.participantProfiles ?? publicStore.participantProfiles,
+    groups: privateStore.groups ?? publicStore.groups,
+    groupMembers: privateStore.groupMembers ?? publicStore.groupMembers,
+    eventParticipants:
+      privateStore.eventParticipants ?? publicStore.eventParticipants,
     relations: privateStore.relations ?? publicStore.relations,
     trainingEvents: privateStore.trainingEvents ?? publicStore.trainingEvents,
     publicTrainingEvents: privateStore.publicTrainingEvents ?? publicStore.publicTrainingEvents,
@@ -473,6 +515,22 @@ export function AppProviders({ children }: { children: ReactNode }) {
           ),
         );
       },
+      async manageOwnGroupEventParticipation(eventParticipantId, action, transferTargetEventId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          manageOwnGroupEventParticipationAction(
+            {
+              eventParticipantId,
+              action,
+              transferTargetEventId,
+            },
+            currentUser,
+          ),
+        );
+      },
       async requestRelation(trainerId) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
@@ -558,6 +616,78 @@ export function AppProviders({ children }: { children: ReactNode }) {
             currentUser,
           ),
         );
+      },
+      async createGroup(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        return withFriendlyErrors(() => createGroupAction(input, currentUser));
+      },
+      async updateGroup(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => updateGroupAction(input, currentUser));
+      },
+      async archiveGroup(groupId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => archiveGroupAction(groupId, currentUser));
+      },
+      async createOrUpdateOrganizerParticipantProfile(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          createOrUpdateOrganizerParticipantProfileAction(input, currentUser),
+        );
+      },
+      async addGroupMember(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => addGroupMemberAction(input, currentUser));
+      },
+      async updateGroupMember(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => updateGroupMemberAction(input, currentUser));
+      },
+      async removeGroupMember(memberId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => removeGroupMemberAction(memberId, currentUser));
+      },
+      async addEventParticipant(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => addEventParticipantAction(input, currentUser));
+      },
+      async updateEventParticipantStatus(input) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => updateEventParticipantStatusAction(input, currentUser));
+      },
+      async finalizeEventRoster(eventId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => finalizeEventRosterAction(eventId, currentUser));
       },
       async addTrainerSharedSlot(input) {
         if (!currentUser) {

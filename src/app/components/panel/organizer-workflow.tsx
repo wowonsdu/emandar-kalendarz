@@ -610,6 +610,7 @@ export function OrganizerMatchedSlotBrowser({
 }
 
 export interface OrganizerTrainingDraftFormValues {
+  groupId: string;
   sharedSlotId: string;
   title: string;
   summary: string;
@@ -624,12 +625,21 @@ export interface OrganizerTrainingDraftFormValues {
   scheduleDays: TrainingEventScheduleDay[];
 }
 
+export interface OrganizerDraftGroupOption {
+  id: string;
+  name: string;
+  trainerId: string;
+  trainerName?: string;
+  activeMembersCount?: number;
+}
+
 export interface OrganizerTrainingDraftEditorCardProps {
   title?: string;
   description?: string;
   mode: "create" | "edit";
   values: OrganizerTrainingDraftFormValues;
   availableSlots: OrganizerMatchedSlotView[];
+  availableGroups: OrganizerDraftGroupOption[];
   onChange: (next: OrganizerTrainingDraftFormValues) => void;
   onSubmit: (values: OrganizerTrainingDraftFormValues) => void | Promise<void>;
   onCancel?: () => void;
@@ -646,6 +656,7 @@ export function OrganizerTrainingDraftEditorCard({
   mode,
   values,
   availableSlots,
+  availableGroups,
   onChange,
   onSubmit,
   onCancel,
@@ -656,6 +667,10 @@ export function OrganizerTrainingDraftEditorCard({
   errorMessage,
 }: OrganizerTrainingDraftEditorCardProps) {
   const selectedSlot = availableSlots.find((slot) => slot.id === values.sharedSlotId);
+  const visibleGroups = selectedSlot
+    ? availableGroups.filter((group) => group.trainerId === selectedSlot.trainerId)
+    : availableGroups;
+  const selectedGroup = visibleGroups.find((group) => group.id === values.groupId);
 
   return (
     <Card className="overflow-hidden border-brand-line/80 bg-white shadow-soft">
@@ -674,10 +689,57 @@ export function OrganizerTrainingDraftEditorCard({
         ) : null}
 
         <label className="grid gap-2">
+          <FieldLabel hint="Każdy draft musi należeć do grupy">Grupa</FieldLabel>
+          <select
+            value={values.groupId}
+            onChange={(event) => onChange({ ...values, groupId: event.target.value })}
+            disabled={disabled}
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
+          >
+            <option value="">Wybierz grupę</option>
+            {visibleGroups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+                {group.activeMembersCount ? ` · ${group.activeMembersCount} osób` : ""}
+              </option>
+            ))}
+          </select>
+          {selectedGroup ? (
+            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+              <p className="font-semibold text-brand-navy">{selectedGroup.name}</p>
+              <p className="mt-1">
+                {selectedGroup.trainerName ?? selectedSlot?.trainerName ?? "Przekazujący Wiedzę"}
+              </p>
+              <p className="mt-1">
+                Aktywni członkowie: {selectedGroup.activeMembersCount ?? 0}
+              </p>
+            </div>
+          ) : null}
+        </label>
+
+        <label className="grid gap-2">
           <FieldLabel hint="Wybierz slot, z którego powstanie draft">Slot trenera</FieldLabel>
           <select
             value={values.sharedSlotId}
-            onChange={(event) => onChange({ ...values, sharedSlotId: event.target.value })}
+            onChange={(event) => {
+              const nextSharedSlotId = event.target.value;
+              const nextSlot = availableSlots.find((slot) => slot.id === nextSharedSlotId);
+              const nextGroupId =
+                values.groupId &&
+                availableGroups.some(
+                  (group) =>
+                    group.id === values.groupId &&
+                    (!nextSlot || group.trainerId === nextSlot.trainerId),
+                )
+                  ? values.groupId
+                  : "";
+
+              onChange({
+                ...values,
+                sharedSlotId: nextSharedSlotId,
+                groupId: nextGroupId,
+              });
+            }}
             disabled={disabled}
             className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
           >
@@ -929,6 +991,11 @@ export function OrganizerTrainingDraftListCard({
                     Pojemność {draft.enrolledCount}/{draft.capacity}
                     {draft.minimumParticipants ? ` · minimum ${draft.minimumParticipants}` : ""}
                   </p>
+                  {draft.groupName ? (
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                      Grupa: {draft.groupName}
+                    </p>
+                  ) : null}
                   <p className="text-xs text-brand-muted">
                     Tagi: {joinTags(draft.tags)}
                   </p>

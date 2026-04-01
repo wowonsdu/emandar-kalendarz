@@ -581,7 +581,21 @@ describe("permissions and sorting", () => {
       spanDays: 3,
       spanBucket: "3-days",
     });
-    expect(slices.some((slice) => slice.spanBucket === "4-plus-days")).toBe(true);
+    expect(slices.some((slice) => slice.spanBucket === "more-than-7-days")).toBe(false);
+    expect(
+      buildTrainerFreeDaySlices({
+        rangeStart: "2026-03-10T00:00:00.000Z",
+        rangeEnd: "2026-03-25T00:00:00.000Z",
+        minimumDurationHours: 1,
+        busyIntervals: [
+          {
+            startsAt: "2026-03-18T00:00:00.000Z",
+            endsAt: "2026-03-18T02:00:00.000Z",
+            source: "ical",
+          },
+        ],
+      }).some((slice) => slice.spanBucket === "more-than-7-days"),
+    ).toBe(true);
   });
 });
 

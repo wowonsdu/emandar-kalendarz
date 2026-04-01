@@ -46,17 +46,31 @@ import type {
   AvailabilitySlot,
   DemoStore,
   EmandarBrandStatus,
+  EventParticipant,
+  EventParticipantInput,
+  EventParticipantStatusUpdateInput,
+  ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFormInput,
+  ParticipantGroupEventManagementInput,
   ParticipantEnrollmentManagementInput,
   ParticipantOnboardingInput,
   EnrollmentRequestManagementInput,
   EnrollmentRequest,
+  Group,
+  GroupInput,
+  GroupMember,
+  GroupMemberInput,
+  GroupMemberPriority,
+  GroupMemberUpdateInput,
+  GroupUpdateInput,
   NotificationRecord,
   NotificationSettingsUpdateInput,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
   OrganizerCalendarFeedInput,
+  OrganizerParticipantProfileInput,
+  ParticipantProfile,
   ParticipantProfileUpdateInput,
   PhotoMode,
   TrainerAccountApproval,
@@ -95,12 +109,14 @@ import {
   isTrainerSharedSlotActive,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
+  mergeBusyIntervals,
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
   resolveTrainingEventStatus,
 } from "@/domain/utils";
+import { fetchIcalBusyIntervals } from "@/lib/ical";
 
 type StorePatch = Partial<DemoStore>;
 
@@ -108,6 +124,10 @@ const collections = {
   users: "users",
   trainers: "trainers",
   organizers: "organizers",
+  groups: "groups",
+  groupMembers: "groupMembers",
+  participantProfiles: "participantProfiles",
+  eventParticipants: "eventParticipants",
   trainingEvents: "trainingEvents",
   enrollmentRequests: "enrollmentRequests",
   relations: "trainerOrganizerRelations",
@@ -129,6 +149,10 @@ export function createEmptyStore(): DemoStore {
     users: [],
     trainers: [],
     organizers: [],
+    participantProfiles: [],
+    groups: [],
+    groupMembers: [],
+    eventParticipants: [],
     relations: [],
     trainingEvents: [],
     publicTrainingEvents: [],
@@ -202,6 +226,32 @@ async function hashTrainerAuthorizationCode(code: string) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatMonthKey(date: Date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function getAvailabilitySyncRange() {
+  const rangeStart = new Date();
+
+  const rangeEnd = new Date(rangeStart);
+  rangeEnd.setUTCFullYear(rangeEnd.getUTCFullYear() + 3);
+
+  return { rangeStart, rangeEnd };
+}
+
+function splitIntervalsByMonth(intervals: ExternalBusyInterval[]) {
+  const grouped = new Map<string, ExternalBusyInterval[]>();
+
+  intervals.forEach((interval) => {
+    const key = formatMonthKey(new Date(interval.startsAt));
+    const existing = grouped.get(key) ?? [];
+    existing.push(interval);
+    grouped.set(key, existing);
+  });
+
+  return grouped;
 }
 
 function resolveBrandStatus(
@@ -399,6 +449,10 @@ function normalizeAppUserRecord(userId: string, raw: unknown) {
       typeof normalized.organizerProfileId === "string"
         ? normalized.organizerProfileId
         : undefined,
+    participantProfileId:
+      typeof normalized.participantProfileId === "string"
+        ? normalized.participantProfileId
+        : undefined,
   } as AppUser;
 }
 
@@ -424,6 +478,79 @@ function getUserOrganizerProfileId(user: Pick<AppUser, "organizerProfileId">) {
 
 export function buildRelationId(trainerId: string, organizerId: string) {
   return `${trainerId}__${organizerId}`;
+}
+
+function normalizePhoneLookupKey(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) {
+    return "";
+  }
+
+  if (trimmed.startsWith("+")) {
+    return digits;
+  }
+
+  if (digits.startsWith("00")) {
+    return digits.slice(2);
+  }
+
+  if (digits.length === 9) {
+    return `48${digits}`;
+  }
+
+  return digits;
+}
+
+function buildParticipantProfileId(phone: string) {
+  const phoneLookupKey = normalizePhoneLookupKey(phone);
+  if (!phoneLookupKey) {
+    throw new Error("Podaj poprawny numer telefonu.");
+  }
+
+  return `participant-${phoneLookupKey}`;
+}
+
+function buildGroupMemberId(groupId: string, participantProfileId: string) {
+  return `${groupId}__${participantProfileId}`;
+}
+
+function buildEventParticipantId(eventId: string, participantProfileId: string) {
+  return `${eventId}__${participantProfileId}`;
+}
+
+function splitDisplayName(value: string) {
+  const normalized = value.trim();
+  const [firstName = "", ...lastNameParts] = normalized.split(/\s+/).filter(Boolean);
+
+  return {
+    displayName: normalized,
+    firstName,
+    lastName: lastNameParts.join(" ") || undefined,
+  };
+}
+
+function normalizeGroupMemberPriority(value: string | undefined): GroupMemberPriority {
+  if (value === "regularni" || value === "rezerwowi") {
+    return value;
+  }
+
+  return "stali";
+}
+
+function getGroupPriorityOrder(priority: GroupMemberPriority) {
+  switch (priority) {
+    case "regularni":
+      return 2;
+    case "rezerwowi":
+      return 3;
+    default:
+      return 1;
+  }
 }
 
 async function getRelationByPair(trainerId: string, organizerId: string) {
@@ -471,6 +598,116 @@ async function requireApprovedRelation(
   }
 
   return relation;
+}
+
+async function requireOrganizerManagedGroup(groupId: string, actor: AppUser) {
+  if (actor.role !== "organizer" || !actor.organizerProfileId) {
+    throw new Error("Tylko organizator może zarządzać grupami.");
+  }
+
+  const group = await getGroup(groupId);
+
+  if (group.organizerId !== actor.organizerProfileId) {
+    throw new Error("Możesz zarządzać tylko własnymi grupami.");
+  }
+
+  return group;
+}
+
+async function requireOrganizerManagedEvent(eventId: string, actor: AppUser) {
+  const event = await getEvent(eventId);
+
+  if (actor.role !== "organizer" || actor.organizerProfileId !== event.organizerId) {
+    throw new Error("Możesz zarządzać tylko wydarzeniami własnych grup.");
+  }
+
+  return event;
+}
+
+async function syncParticipantProfileOwnership(participantProfileId: string) {
+  const { db } = assertReady();
+  const memberSnapshots = await getDocs(
+    query(
+      collection(db, collections.groupMembers),
+      where("participantProfileId", "==", participantProfileId),
+    ),
+  );
+  const activeMembers = mapDocs<GroupMember>(memberSnapshots.docs).filter(
+    (member) => member.membershipStatus === "active",
+  );
+
+  await updateDoc(doc(db, collections.participantProfiles, participantProfileId), {
+    groupIds: Array.from(new Set(activeMembers.map((member) => member.groupId))),
+    activeGroupIds: Array.from(new Set(activeMembers.map((member) => member.groupId))),
+    managerOrganizerIds: Array.from(
+      new Set(activeMembers.map((member) => member.organizerId).filter(Boolean)),
+    ),
+    managerOrganizerUserIds: Array.from(
+      new Set(activeMembers.map((member) => member.organizerUserId).filter(Boolean)),
+    ),
+    managerTrainerIds: Array.from(
+      new Set(activeMembers.map((member) => member.trainerId).filter(Boolean)),
+    ),
+    managerTrainerUserIds: Array.from(
+      new Set(activeMembers.map((member) => member.trainerUserId).filter(Boolean)),
+    ),
+    updatedAt: nowIso(),
+  });
+}
+
+async function upsertParticipantProfileForOrganizer(
+  input: OrganizerParticipantProfileInput,
+  actor: AppUser,
+) {
+  const { db } = assertReady();
+
+  if (actor.role !== "organizer" || !actor.organizerProfileId) {
+    throw new Error("Tylko organizator może zarządzać profilami uczestników.");
+  }
+
+  const phone = input.phone.trim();
+  const participantProfileId = buildParticipantProfileId(phone);
+  const phoneLookupKey = normalizePhoneLookupKey(phone);
+  const profileRef = doc(db, collections.participantProfiles, participantProfileId);
+  const existingSnapshot = await getDoc(profileRef);
+  const existingProfile = existingSnapshot.exists()
+    ? ({
+        id: existingSnapshot.id,
+        ...(normalizeValue(existingSnapshot.data()) as Omit<ParticipantProfile, "id">),
+      } as ParticipantProfile)
+    : null;
+  const identity = splitDisplayName(input.displayName);
+
+  await setDoc(
+    profileRef,
+    {
+      displayName: identity.displayName,
+      firstName: identity.firstName || null,
+      lastName: identity.lastName ?? null,
+      phone,
+      phoneLookupKey,
+      notes: input.notes?.trim() || existingProfile?.notes || "",
+      referralSource: input.referralSource?.trim() || existingProfile?.referralSource || "",
+      confirmationStatus: existingProfile?.confirmationStatus ?? "unconfirmed",
+      status: existingProfile?.status ?? "active",
+      linkedUserId: existingProfile?.linkedUserId ?? null,
+      avatarUrl: existingProfile?.avatarUrl ?? "",
+      avatarPath: existingProfile?.avatarPath ?? null,
+      createdAt: existingProfile?.createdAt ?? nowIso(),
+      updatedAt: nowIso(),
+      createdByOrganizerId: existingProfile?.createdByOrganizerId ?? actor.organizerProfileId,
+      createdByUserId: existingProfile?.createdByUserId ?? actor.id,
+      managerOrganizerIds: existingProfile?.managerOrganizerIds ?? [actor.organizerProfileId],
+      managerOrganizerUserIds: existingProfile?.managerOrganizerUserIds ?? [actor.id],
+      managerTrainerIds: existingProfile?.managerTrainerIds ?? [],
+      managerTrainerUserIds: existingProfile?.managerTrainerUserIds ?? [],
+      groupIds: existingProfile?.groupIds ?? [],
+      activeGroupIds: existingProfile?.activeGroupIds ?? [],
+    },
+    { merge: true },
+  );
+
+  return getParticipantProfile(participantProfileId);
 }
 
 function ensureEventCanAcceptEnrollment(event: TrainingEvent) {
@@ -586,7 +823,14 @@ export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsu
     ),
   ];
 
-  onPatch({ organizers: [], trainerAccountApprovals: [] });
+  onPatch({
+    organizers: [],
+    participantProfiles: [],
+    groups: [],
+    groupMembers: [],
+    eventParticipants: [],
+    trainerAccountApprovals: [],
+  });
 
   return () => {
     unsubs.forEach((unsubscribe) => unsubscribe());
@@ -687,6 +931,116 @@ export function subscribePrivateStore(
       },
     ),
   );
+  if (currentUser.role === "admin") {
+    unsubs.push(
+      subscribeArray<Group>(collection(db, collections.groups), (groups) => {
+        onPatch({ groups: pushSorted(groups) });
+      }),
+    );
+    unsubs.push(
+      subscribeArray<GroupMember>(collection(db, collections.groupMembers), (groupMembers) => {
+        onPatch({ groupMembers: pushSorted(groupMembers) });
+      }),
+    );
+    unsubs.push(
+      subscribeArray<ParticipantProfile>(
+        collection(db, collections.participantProfiles),
+        (participantProfiles) => {
+          onPatch({ participantProfiles: pushSorted(participantProfiles) });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<EventParticipant>(
+        collection(db, collections.eventParticipants),
+        (eventParticipants) => {
+          onPatch({ eventParticipants: pushSorted(eventParticipants) });
+        },
+      ),
+    );
+  } else if (currentUser.role === "trainer" || currentUser.role === "organizer") {
+    const ownerField = currentUser.role === "trainer" ? "trainerUserId" : "organizerUserId";
+    const participantManagerField =
+      currentUser.role === "trainer" ? "managerTrainerUserIds" : "managerOrganizerUserIds";
+
+    unsubs.push(
+      subscribeArray<Group>(
+        query(collection(db, collections.groups), where(ownerField, "==", currentUser.id)),
+        (groups) => {
+          onPatch({ groups: pushSorted(groups) });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<GroupMember>(
+        query(collection(db, collections.groupMembers), where(ownerField, "==", currentUser.id)),
+        (groupMembers) => {
+          onPatch({ groupMembers: pushSorted(groupMembers) });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<ParticipantProfile>(
+        query(
+          collection(db, collections.participantProfiles),
+          where(participantManagerField, "array-contains", currentUser.id),
+        ),
+        (participantProfiles) => {
+          onPatch({ participantProfiles: pushSorted(participantProfiles) });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<EventParticipant>(
+        query(collection(db, collections.eventParticipants), where(ownerField, "==", currentUser.id)),
+        (eventParticipants) => {
+          onPatch({ eventParticipants: pushSorted(eventParticipants) });
+        },
+      ),
+    );
+  } else if (currentUser.role === "participant" && currentUser.participantProfileId) {
+    unsubs.push(
+      subscribeArray<GroupMember>(
+        query(
+          collection(db, collections.groupMembers),
+          where("participantProfileId", "==", currentUser.participantProfileId),
+        ),
+        (groupMembers) => {
+          onPatch({ groupMembers: pushSorted(groupMembers) });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<EventParticipant>(
+        query(
+          collection(db, collections.eventParticipants),
+          where("participantProfileId", "==", currentUser.participantProfileId),
+        ),
+        (eventParticipants) => {
+          onPatch({ eventParticipants: pushSorted(eventParticipants) });
+        },
+      ),
+    );
+    unsubs.push(
+      subscribeArray<ParticipantProfile>(
+        query(
+          collection(db, collections.participantProfiles),
+          where("linkedUserId", "==", currentUser.id),
+        ),
+        (participantProfiles) => {
+          onPatch({ participantProfiles });
+        },
+      ),
+    );
+    onPatch({ groups: [] });
+  } else {
+    onPatch({
+      participantProfiles: [],
+      groups: [],
+      groupMembers: [],
+      eventParticipants: [],
+    });
+  }
   unsubs.push(
     subscribeArray<NotificationRecord>(
       query(collection(db, collections.notifications), where("userId", "==", currentUser.id)),
@@ -1136,6 +1490,62 @@ async function getOrganizerProfile(organizerId: string) {
     id: snapshot.id,
     ...(normalizeValue(snapshot.data()) as Omit<OrganizerProfile, "id">),
   } as OrganizerProfile;
+}
+
+async function getGroup(groupId: string) {
+  const { db } = assertReady();
+  const snapshot = await getDoc(doc(db, collections.groups, groupId));
+
+  if (!snapshot.exists()) {
+    throw new Error("Nie znaleziono grupy.");
+  }
+
+  return {
+    id: snapshot.id,
+    ...(normalizeValue(snapshot.data()) as Omit<Group, "id">),
+  } as Group;
+}
+
+async function getParticipantProfile(participantProfileId: string) {
+  const { db } = assertReady();
+  const snapshot = await getDoc(doc(db, collections.participantProfiles, participantProfileId));
+
+  if (!snapshot.exists()) {
+    throw new Error("Nie znaleziono profilu uczestnika.");
+  }
+
+  return {
+    id: snapshot.id,
+    ...(normalizeValue(snapshot.data()) as Omit<ParticipantProfile, "id">),
+  } as ParticipantProfile;
+}
+
+async function getGroupMember(memberId: string) {
+  const { db } = assertReady();
+  const snapshot = await getDoc(doc(db, collections.groupMembers, memberId));
+
+  if (!snapshot.exists()) {
+    throw new Error("Nie znaleziono członka grupy.");
+  }
+
+  return {
+    id: snapshot.id,
+    ...(normalizeValue(snapshot.data()) as Omit<GroupMember, "id">),
+  } as GroupMember;
+}
+
+async function getEventParticipant(eventParticipantId: string) {
+  const { db } = assertReady();
+  const snapshot = await getDoc(doc(db, collections.eventParticipants, eventParticipantId));
+
+  if (!snapshot.exists()) {
+    throw new Error("Nie znaleziono uczestnika wydarzenia.");
+  }
+
+  return {
+    id: snapshot.id,
+    ...(normalizeValue(snapshot.data()) as Omit<EventParticipant, "id">),
+  } as EventParticipant;
 }
 
 async function getEvent(eventId: string) {
@@ -1711,6 +2121,21 @@ export async function manageOwnEnrollment(
   });
 }
 
+export async function manageOwnGroupEventParticipation(
+  input: ParticipantGroupEventManagementInput,
+  actor: AppUser,
+) {
+  void actor;
+  await callFirebaseFunction<
+    ParticipantGroupEventManagementInput,
+    { ok: true }
+  >("manageOwnGroupEventParticipation", {
+    eventParticipantId: input.eventParticipantId,
+    action: input.action,
+    transferTargetEventId: input.transferTargetEventId?.trim() || undefined,
+  });
+}
+
 export async function requestRelation(currentUser: AppUser, trainerId: string) {
   if (currentUser.role !== "organizer" || !currentUser.organizerProfileId) {
     throw new Error("Tylko organizator może prosić o relację.");
@@ -1842,6 +2267,78 @@ export async function detachRelation(
   }
 }
 
+export async function createGroup(input: GroupInput, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<GroupInput, { ok: true; groupId: string }>("createGroup", input);
+}
+
+export async function updateGroup(input: GroupUpdateInput, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<GroupUpdateInput, { ok: true }>("updateGroup", input);
+}
+
+export async function archiveGroup(groupId: string, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<{ groupId: string }, { ok: true }>("archiveGroup", { groupId });
+}
+
+export async function createOrUpdateOrganizerParticipantProfile(
+  input: OrganizerParticipantProfileInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<
+    OrganizerParticipantProfileInput & { trainerId?: string; groupId?: string; participantProfileId?: string },
+    { ok: true; participantProfileId: string }
+  >("upsertOrganizerParticipantProfile", input);
+}
+
+export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<GroupMemberInput, { ok: true; memberId: string; participantProfileId: string }>(
+    "addGroupMember",
+    input,
+  );
+}
+
+export async function updateGroupMember(input: GroupMemberUpdateInput, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<GroupMemberUpdateInput, { ok: true }>("updateGroupMember", input);
+}
+
+export async function removeGroupMember(memberId: string, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<{ memberId: string }, { ok: true }>("removeGroupMember", {
+    memberId,
+  });
+}
+
+export async function addEventParticipant(input: EventParticipantInput, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<EventParticipantInput, { ok: true; eventParticipantId: string }>(
+    "assignEventParticipant",
+    input,
+  );
+}
+
+export async function updateEventParticipantStatus(
+  input: EventParticipantStatusUpdateInput,
+  actor: AppUser,
+) {
+  void actor;
+  return callFirebaseFunction<EventParticipantStatusUpdateInput, { ok: true }>(
+    "updateEventParticipantStatus",
+    input,
+  );
+}
+
+export async function finalizeEventRoster(eventId: string, actor: AppUser) {
+  void actor;
+  return callFirebaseFunction<{ eventId: string }, { ok: true }>("finalizeEventRoster", {
+    eventId,
+  });
+}
+
 export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUser) {
   const { db } = assertReady();
   const trainerId =
@@ -1875,6 +2372,103 @@ export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUs
   });
 }
 
+async function rebuildTrainerExternalBusyMonths(trainer: TrainerProfile) {
+  const { db } = assertReady();
+  const { rangeStart, rangeEnd } = getAvailabilitySyncRange();
+  const feedSnapshots = await mapQuery<TrainerCalendarFeed>(
+    query(
+      collection(db, collections.trainerCalendarFeeds),
+      where("trainerId", "==", trainer.id),
+    ),
+  );
+  const enabledFeeds = feedSnapshots.filter((feed) => feed.enabled);
+  const trainerEvents = await mapQuery<TrainingEvent>(
+    query(
+      collection(db, collections.trainingEvents),
+      where("trainerId", "==", trainer.id),
+    ),
+  );
+  const emandarIntervals = trainerEvents
+    .filter(
+      (event) =>
+        !isTrainingEventArchived(event) &&
+        resolveEventStatus(event.status) !== "cancelled",
+    )
+    .flatMap((event) =>
+      getTrainingEventScheduleDays(event).map((day) => ({
+        startsAt: day.startsAt,
+        endsAt: day.endsAt,
+        source: "emandar" as const,
+        sourceLabel: event.title || event.location,
+      })),
+    );
+
+  const successfulIntervals: ExternalBusyInterval[] = [];
+  let successfulFeedCount = 0;
+
+  for (const feed of enabledFeeds) {
+    try {
+      const fetchedIntervals = await fetchIcalBusyIntervals({
+        provider: feed.provider,
+        sourceLabel: feed.id,
+        url: feed.url,
+        rangeStart,
+        rangeEnd,
+      });
+
+      successfulIntervals.push(...fetchedIntervals);
+      successfulFeedCount += 1;
+      await updateDoc(doc(db, collections.trainerCalendarFeeds, feed.id), {
+        lastSyncedAt: nowIso(),
+        lastSyncStatus: "success",
+        lastSyncError: deleteField(),
+        updatedAt: nowIso(),
+      });
+    } catch (error) {
+      await updateDoc(doc(db, collections.trainerCalendarFeeds, feed.id), {
+        lastSyncedAt: nowIso(),
+        lastSyncStatus: "error",
+        lastSyncError:
+          error instanceof Error ? error.message : "Nie udało się pobrać feedu iCal.",
+        updatedAt: nowIso(),
+      });
+    }
+  }
+
+  if (enabledFeeds.length > 0 && successfulFeedCount === 0) {
+    return;
+  }
+
+  const mergedIntervals = mergeBusyIntervals([
+    ...emandarIntervals,
+    ...successfulIntervals,
+  ]);
+  const groupedIntervals = splitIntervalsByMonth(mergedIntervals);
+  const existingMonthDocs = await mapQuery<TrainerExternalBusyMonth>(
+    query(
+      collection(db, collections.trainerExternalBusyMonths),
+      where("trainerId", "==", trainer.id),
+    ),
+  );
+  const batch = writeBatch(db);
+
+  existingMonthDocs.forEach((monthDoc) => {
+    batch.delete(doc(db, collections.trainerExternalBusyMonths, monthDoc.id));
+  });
+
+  groupedIntervals.forEach((intervals, monthKey) => {
+    const monthDocId = `${trainer.id}__${monthKey}`;
+    batch.set(doc(db, collections.trainerExternalBusyMonths, monthDocId), {
+      trainerId: trainer.id,
+      monthKey,
+      intervals,
+      updatedAt: nowIso(),
+    });
+  });
+
+  await batch.commit();
+}
+
 export async function addTrainerCalendarFeed(
   input: TrainerCalendarFeedInput,
   actor: AppUser,
@@ -1903,7 +2497,7 @@ export async function addTrainerCalendarFeed(
     updatedAt: createdAt,
   });
 
-  await syncOwnTrainerCalendarFeeds(actor);
+  await rebuildTrainerExternalBusyMonths(trainer);
 }
 
 export async function updateTrainerCalendarFeedEnabled(
@@ -1929,7 +2523,7 @@ export async function updateTrainerCalendarFeedEnabled(
     updatedAt: nowIso(),
   });
 
-  await syncOwnTrainerCalendarFeeds(actor);
+  await rebuildTrainerExternalBusyMonths(trainer);
 }
 
 export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) {
@@ -1947,15 +2541,24 @@ export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) 
   }
 
   await deleteDoc(doc(db, collections.trainerCalendarFeeds, feedId));
-  await syncOwnTrainerCalendarFeeds(actor);
+  await rebuildTrainerExternalBusyMonths(trainer);
 }
 
 export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
+  void actor;
+  await callFirebaseFunction<undefined, { ok: true }>("syncOwnTrainerCalendarFeeds");
+  return;
   if (actor.role !== "trainer" || !actor.trainerProfileId) {
-    throw new Error("Tylko trener moze synchronizowac feedy iCal.");
+    throw new Error("Tylko trener może synchronizować feedy iCal.");
   }
 
-  await callFirebaseFunction<undefined, { ok: true }>("syncOwnTrainerCalendarFeeds");
+  const trainer = await getTrainerProfile(actor.trainerProfileId);
+
+  if (isCommunityBrandStatus(trainer.brandStatus)) {
+    throw new Error("Panel wspólnych terminów jest dostępny tylko dla oficjalnych trenerów.");
+  }
+
+  await rebuildTrainerExternalBusyMonths(trainer);
 }
 
 export async function addTrainerSharedSlot(
@@ -2192,12 +2795,16 @@ export async function createUnifiedTrainingEvent(
     {
       trainerId?: string;
       organizerId?: string;
+      groupId?: string;
       title?: string;
       eventImages?: TrainingEventImage[];
       useEventImageAsCover?: boolean;
       summary: string;
       description: string;
       type: string;
+      eventTypeSystem?: "training" | "post";
+      eligibleGroupPriorities?: GroupMemberPriority[];
+      confirmationLeadTimeDays?: number;
       scheduleDays: TrainingEventScheduleDay[];
       location: string;
       tags?: string[];
@@ -2212,12 +2819,16 @@ export async function createUnifiedTrainingEvent(
   >("createUnifiedTrainingEvent", {
     trainerId: input.trainerId,
     organizerId: input.organizerId,
+    groupId: input.groupId,
     title: input.title,
     eventImages: normalizeEventImages(input.eventImages),
     useEventImageAsCover: input.useEventImageAsCover === true,
     summary: input.summary,
     description: input.description,
     type: input.type,
+    eventTypeSystem: input.eventTypeSystem,
+    eligibleGroupPriorities: input.eligibleGroupPriorities,
+    confirmationLeadTimeDays: input.confirmationLeadTimeDays,
     scheduleDays: input.scheduleDays,
     location: input.location,
     tags: input.tags,

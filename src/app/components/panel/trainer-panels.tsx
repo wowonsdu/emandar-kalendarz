@@ -612,6 +612,11 @@ export function TrainerDraftRequestsPanel({
                       )}
                     </div>
                     <p className="text-base font-semibold text-brand-navy">{draft.title}</p>
+                    {draft.groupName ? (
+                      <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                        Grupa: {draft.groupName}
+                      </p>
+                    ) : null}
                     <p className="text-sm text-brand-muted">
                       {formatDate(scheduleBounds.startsAt)} · {formatShortTime(scheduleBounds.startsAt)} -{" "}
                       {formatShortTime(scheduleBounds.endsAt)}
@@ -686,6 +691,11 @@ export function TrainerDraftDecisionsPanel({
           <div>
             <p className="text-lg font-semibold text-brand-navy">{draft.title}</p>
             <p className="text-sm text-brand-muted">{draft.type}</p>
+            {draft.groupName ? (
+              <p className="mt-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                Grupa: {draft.groupName}
+              </p>
+            ) : null}
           </div>
           <p className="text-sm text-brand-muted">{draft.summary}</p>
           <div className="grid gap-3 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted xl:grid-cols-2">

@@ -15,6 +15,17 @@ export type AccountRequestStatus = "pending" | "approved" | "rejected";
 export type PublicationApprovalStatus = "pending" | "accepted" | "rejected";
 export type EmandarBrandStatus = "official" | "supported";
 export type TrainingEventStatus = "active" | "confirmed" | "cancelled";
+export type GroupStatus = "active" | "archived";
+export type GroupMemberPriority = "stali" | "regularni" | "rezerwowi";
+export type GroupMembershipStatus = "active" | "removed";
+export type ParticipantProfileConfirmationStatus = "unconfirmed" | "confirmed";
+export type ParticipantProfileStatus = "active" | "archived";
+export type GroupEventType = "training" | "post";
+export type EventParticipantStatus =
+  | "invited"
+  | "confirmed"
+  | "declined"
+  | "removed";
 export type TrainingEventWorkflowStatus =
   | "draft-requested"
   | "trainer-accepted"
@@ -69,6 +80,7 @@ export interface AppUser {
   status: UserStatus;
   trainerProfileId?: string;
   organizerProfileId?: string;
+  participantProfileId?: string;
   createdAt?: string;
   password?: string;
 }
@@ -105,6 +117,34 @@ export interface OrganizerProfile {
   notificationSettings?: NotificationSettings;
 }
 
+export interface ParticipantProfile {
+  id: string;
+  linkedUserId?: string | null;
+  displayName: string;
+  firstName?: string;
+  lastName?: string;
+  phone: string;
+  phoneLookupKey: string;
+  email?: string | null;
+  notes?: string;
+  referralSource?: string;
+  avatarUrl?: string;
+  avatarPath?: string;
+  confirmationStatus: ParticipantProfileConfirmationStatus;
+  status: ParticipantProfileStatus;
+  managerOrganizerIds?: string[];
+  managerOrganizerUserIds?: string[];
+  managerTrainerIds?: string[];
+  managerTrainerUserIds?: string[];
+  groupIds?: string[];
+  activeGroupIds?: string[];
+  createdAt: string;
+  updatedAt?: string;
+  createdByOrganizerId?: string | null;
+  createdByUserId?: string | null;
+  confirmedAt?: string;
+}
+
 export interface TrainerOrganizerRelation {
   id: string;
   trainerId: string;
@@ -117,6 +157,44 @@ export interface TrainerOrganizerRelation {
   detachedAt?: string;
   detachedByRole?: AppRole;
   archivedLinkedEvents?: boolean;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  organizerId: string;
+  organizerUserId?: string;
+  trainerId: string;
+  trainerUserId?: string;
+  status: GroupStatus;
+  notes?: string;
+  defaultLocation?: string;
+  defaultEventType: GroupEventType;
+  defaultCapacity?: number;
+  defaultTags?: string[];
+  defaultConfirmationLeadTimeDays: number;
+  createdAt: string;
+  updatedAt?: string;
+  archivedAt?: string;
+}
+
+export interface GroupMember {
+  id: string;
+  groupId: string;
+  organizerId: string;
+  organizerUserId?: string;
+  trainerId: string;
+  trainerUserId?: string;
+  participantProfileId: string;
+  participantUserId?: string | null;
+  participantDisplayName: string;
+  participantPhone: string;
+  priority: GroupMemberPriority;
+  membershipStatus: GroupMembershipStatus;
+  notes?: string;
+  joinedAt: string;
+  removedAt?: string;
+  updatedAt?: string;
 }
 
 export interface TrainingEventScheduleDay {
@@ -136,6 +214,8 @@ export interface TrainingEvent {
   id: string;
   trainerId?: string | null;
   organizerId?: string | null;
+  groupId?: string | null;
+  groupName?: string | null;
   trainerUserId?: string | null;
   organizerUserId?: string | null;
   creatorUserId?: string | null;
@@ -148,6 +228,7 @@ export interface TrainingEvent {
   summary: string;
   description: string;
   type: string;
+  eventTypeSystem?: GroupEventType | null;
   startsAt: string;
   endsAt: string;
   scheduleDays: TrainingEventScheduleDay[];
@@ -164,6 +245,8 @@ export interface TrainingEvent {
   publishAutomaticallyAfterTrainerApproval?: boolean;
   minimumParticipants?: number;
   requiresOrganizerApproval?: boolean;
+  eligibleGroupPriorities?: GroupMemberPriority[];
+  confirmationLeadTimeDays?: number;
   trainerCollaborationStatus?: EventCollaborationStatus;
   organizerCollaborationStatus?: EventCollaborationStatus;
   selfManagedByTrainer?: boolean;
@@ -176,6 +259,8 @@ export interface TrainingEvent {
   trainerDecidedAt?: string;
   trainerDecidedByUserId?: string;
   trainerDecisionReason?: string;
+  rosterFinalizedAt?: string;
+  rosterFinalizedByUserId?: string;
   withdrawnAt?: string;
   withdrawnByUserId?: string;
   archivedAt?: string;
@@ -183,6 +268,35 @@ export interface TrainingEvent {
   archivedReason?: "relation-detached" | "manual";
   archivedForOrganizerId?: string | null;
   enrollmentPhotoRequirement?: EnrollmentPhotoRequirement;
+}
+
+export interface EventParticipant {
+  id: string;
+  eventId: string;
+  eventTitle: string;
+  groupId: string;
+  groupName: string;
+  organizerId: string;
+  organizerUserId: string;
+  trainerId: string;
+  trainerUserId: string;
+  participantProfileId: string;
+  participantDisplayName: string;
+  participantPhone: string;
+  participantUserId?: string | null;
+  priority: GroupMemberPriority;
+  status: EventParticipantStatus;
+  source: "auto-core" | "organizer" | "public-form";
+  overCapacity?: boolean;
+  invitedAt: string;
+  attendanceConfirmationStatus?: EnrollmentAttendanceConfirmationStatus;
+  attendanceConfirmationRequestedAt?: string;
+  attendanceConfirmationRespondedAt?: string;
+  attendanceConfirmationExpiresAt?: string;
+  confirmedAt?: string;
+  declinedAt?: string;
+  removedAt?: string;
+  updatedAt?: string;
 }
 
 export interface AvailabilitySlot {
@@ -286,6 +400,15 @@ export interface TrainerExternalBusyMonth {
   updatedAt: string;
 }
 
+export interface TrainerCalendarLivePreview {
+  busyIntervals: ExternalBusyInterval[];
+  enabledFeedCount: number;
+  successfulFeedCount: number;
+  fetchedAt: string;
+  rangeStart: string;
+  rangeEnd: string;
+}
+
 export interface SharedAvailabilityWindow {
   startsAt: string;
   endsAt: string;
@@ -319,6 +442,8 @@ export interface EnrollmentRequest {
   trainerId?: string | null;
   organizerId?: string | null;
   submitterUid?: string;
+  participantProfileId?: string | null;
+  eventParticipantId?: string | null;
   normalizedPhone?: string;
   trainerUserId?: string | null;
   organizerUserId?: string | null;
@@ -406,6 +531,10 @@ export interface DemoStore {
   users: AppUser[];
   trainers: TrainerProfile[];
   organizers: OrganizerProfile[];
+  participantProfiles?: ParticipantProfile[];
+  groups?: Group[];
+  groupMembers?: GroupMember[];
+  eventParticipants?: EventParticipant[];
   relations: TrainerOrganizerRelation[];
   trainingEvents: TrainingEvent[];
   publicTrainingEvents: TrainingEvent[];
@@ -460,6 +589,13 @@ export interface ParticipantProfileUpdateInput {
   avatarFile?: File | null;
 }
 
+export interface OrganizerParticipantProfileInput {
+  displayName: string;
+  phone: string;
+  notes?: string;
+  referralSource?: string;
+}
+
 export interface AvailabilityInput {
   trainerId: string;
   startsAt: string;
@@ -495,6 +631,7 @@ export interface TrainerSharedSlotUpdateInput {
 }
 
 export interface OrganizerTrainingDraftInput {
+  groupId: string;
   sharedSlotId: string;
   trainerId?: string;
   title?: string;
@@ -503,10 +640,13 @@ export interface OrganizerTrainingDraftInput {
   summary: string;
   description: string;
   type: string;
+  eventTypeSystem?: GroupEventType;
   scheduleDays: TrainingEventScheduleDay[];
   location: string;
   tags?: string[];
   capacity: number;
+  eligibleGroupPriorities?: GroupMemberPriority[];
+  confirmationLeadTimeDays?: number;
   brandStatus?: EmandarBrandStatus;
   status?: TrainingEventStatus;
   minimumParticipants?: number;
@@ -515,6 +655,7 @@ export interface OrganizerTrainingDraftInput {
 
 export interface OrganizerTrainingDraftUpdateInput {
   eventId: string;
+  groupId: string;
   sharedSlotId: string;
   title?: string;
   eventImages?: TrainingEventImage[];
@@ -522,10 +663,13 @@ export interface OrganizerTrainingDraftUpdateInput {
   summary: string;
   description: string;
   type: string;
+  eventTypeSystem?: GroupEventType;
   scheduleDays: TrainingEventScheduleDay[];
   location: string;
   tags?: string[];
   capacity: number;
+  eligibleGroupPriorities?: GroupMemberPriority[];
+  confirmationLeadTimeDays?: number;
   status?: TrainingEventStatus;
   minimumParticipants?: number;
   publishAutomaticallyAfterTrainerApproval?: boolean;
@@ -540,6 +684,7 @@ export interface OrganizerTrainingDraftDecisionInput {
 export interface TrainingEventInput {
   trainerId?: string;
   organizerId?: string;
+  groupId?: string;
   title?: string;
   eventImages?: TrainingEventImage[];
   useEventImageAsCover?: boolean;
@@ -554,7 +699,59 @@ export interface TrainingEventInput {
   brandStatus?: EmandarBrandStatus;
   status?: TrainingEventStatus;
   minimumParticipants?: number;
+  eventTypeSystem?: GroupEventType;
+  eligibleGroupPriorities?: GroupMemberPriority[];
+  confirmationLeadTimeDays?: number;
   selfManagedByTrainer?: boolean;
+}
+
+export interface GroupInput {
+  name: string;
+  trainerId: string;
+  notes?: string;
+  defaultLocation?: string;
+  defaultEventType: GroupEventType;
+  defaultCapacity?: number;
+  defaultTags?: string[];
+  defaultConfirmationLeadTimeDays: number;
+}
+
+export interface GroupUpdateInput {
+  groupId: string;
+  name: string;
+  notes?: string;
+  defaultLocation?: string;
+  defaultEventType: GroupEventType;
+  defaultCapacity?: number;
+  defaultTags?: string[];
+  defaultConfirmationLeadTimeDays: number;
+}
+
+export interface GroupMemberInput {
+  groupId: string;
+  participantProfileId?: string;
+  displayName?: string;
+  phone?: string;
+  notes?: string;
+  referralSource?: string;
+  priority: GroupMemberPriority;
+}
+
+export interface GroupMemberUpdateInput {
+  memberId: string;
+  priority: GroupMemberPriority;
+  notes?: string;
+}
+
+export interface EventParticipantInput {
+  eventId: string;
+  participantProfileId: string;
+  overCapacity?: boolean;
+}
+
+export interface EventParticipantStatusUpdateInput {
+  eventParticipantId: string;
+  status: EventParticipantStatus;
 }
 
 export interface TrainerProfileUpdateInput {
@@ -618,6 +815,12 @@ export interface EnrollmentRequestManagementInput {
 
 export interface ParticipantEnrollmentManagementInput {
   requestId: string;
+  action: "cancel" | "transfer";
+  transferTargetEventId?: string | null;
+}
+
+export interface ParticipantGroupEventManagementInput {
+  eventParticipantId: string;
   action: "cancel" | "transfer";
   transferTargetEventId?: string | null;
 }

@@ -13,6 +13,37 @@ function normalizeFeedUrl(url: string) {
   return trimmedUrl;
 }
 
+function padIcalNumber(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function formatUtcTimestamp(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Nie udało się sformatować daty iCal.");
+  }
+
+  return [
+    date.getUTCFullYear(),
+    padIcalNumber(date.getUTCMonth() + 1),
+    padIcalNumber(date.getUTCDate()),
+    "T",
+    padIcalNumber(date.getUTCHours()),
+    padIcalNumber(date.getUTCMinutes()),
+    padIcalNumber(date.getUTCSeconds()),
+    "Z",
+  ].join("");
+}
+
+function escapeIcalText(value: string) {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\r?\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
 async function fetchCalendarResponse(url: string) {
   const normalizedUrl = normalizeFeedUrl(url);
 
@@ -207,4 +238,46 @@ export async function fetchIcalBusyIntervals({
     rangeStart,
     rangeEnd,
   });
+}
+
+export function serializeBusyIntervalsToIcal({
+  intervals,
+  calendarName,
+  prodId = "-//Emandar//Parsed Busy Export//PL",
+}: {
+  intervals: ExternalBusyInterval[];
+  calendarName: string;
+  prodId?: string;
+}) {
+  const dtStamp = formatUtcTimestamp(new Date());
+  const sortedIntervals = [...intervals]
+    .filter((interval) => new Date(interval.endsAt).getTime() > new Date(interval.startsAt).getTime())
+    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    `PRODID:${prodId}`,
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+    `X-WR-CALNAME:${escapeIcalText(calendarName)}`,
+    "X-WR-TIMEZONE:UTC",
+  ];
+
+  sortedIntervals.forEach((interval, index) => {
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:parsed-busy-${index + 1}-${formatUtcTimestamp(interval.startsAt)}@panel.ceo`,
+      `DTSTAMP:${dtStamp}`,
+      `DTSTART:${formatUtcTimestamp(interval.startsAt)}`,
+      `DTEND:${formatUtcTimestamp(interval.endsAt)}`,
+      `SUMMARY:${escapeIcalText(`Parsed busy block ${index + 1}`)}`,
+      "TRANSP:OPAQUE",
+      "END:VEVENT",
+    );
+  });
+
+  lines.push("END:VCALENDAR");
+
+  return `${lines.join("\r\n")}\r\n`;
 }

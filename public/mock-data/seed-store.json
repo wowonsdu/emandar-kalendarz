@@ -698,6 +698,26 @@
       "createdAt": "2026-03-05T13:00:00.000Z"
     },
     {
+      "id": "trainer-1__organizer-anita",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "status": "approved",
+      "requestedBy": "organizer",
+      "createdAt": "2026-03-07T09:00:00.000Z"
+    },
+    {
+      "id": "trainer-4__organizer-anita",
+      "trainerId": "trainer-4",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-asia",
+      "organizerUserId": "user-organizer-anita",
+      "status": "approved",
+      "requestedBy": "organizer",
+      "createdAt": "2026-03-07T09:10:00.000Z"
+    },
+    {
       "id": "trainer-1__organizer-demo",
       "trainerId": "trainer-1",
       "organizerId": "organizer-demo",
@@ -915,6 +935,200 @@
       "createdByRole": "organizer",
       "publicationApprovalStatus": "pending",
       "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-warszawa-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "title": "Warszawa • Letni Krąg",
+      "summary": "Dwudniowe szkolenie Emandar dla osób, które chcą wejść głębiej w rytm grupy i regularność praktyki.",
+      "description": "Format oficjalnego szkolenia Emandar z wyraźnym prowadzeniem, progiem uczestników i klasycznym trybem współpracy trener-organizator.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-06-20T08:00:00.000Z",
+      "endsAt": "2026-06-21T15:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-20T08:00:00.000Z",
+          "endsAt": "2026-06-20T15:00:00.000Z"
+        },
+        {
+          "startsAt": "2026-06-21T08:00:00.000Z",
+          "endsAt": "2026-06-21T15:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Żoliborz",
+      "tags": [
+        "warszawa",
+        "oddech",
+        "lato"
+      ],
+      "capacity": 18,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "summer breath workshop",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni",
+        "rezerwowi"
+      ],
+      "confirmationLeadTimeDays": 6,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-lodz-lipiec",
+      "trainerId": "trainer-4",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-asia",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "title": "Łódź • Jesienna Praktyka",
+      "summary": "Oficjalne szkolenie Emandar przygotowane pod nową grupę, ale jeszcze ukryte przed publikacją.",
+      "description": "Drugi przykład oficjalnego szkolenia: klasyczny format Emandar, współpraca z trenerem, ale widoczny w panelu jeszcze jako ukryty rekord roboczy.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-07-11T08:30:00.000Z",
+      "endsAt": "2026-07-12T15:30:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-07-11T08:30:00.000Z",
+          "endsAt": "2026-07-11T15:30:00.000Z"
+        },
+        {
+          "startsAt": "2026-07-12T08:30:00.000Z",
+          "endsAt": "2026-07-12T15:30:00.000Z"
+        }
+      ],
+      "location": "Łódź / Centrum",
+      "tags": [
+        "łódź",
+        "praktyka",
+        "grupa"
+      ],
+      "capacity": 20,
+      "enrolledCount": 0,
+      "isPublished": false,
+      "imageHint": "practice training",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 10,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni"
+      ],
+      "confirmationLeadTimeDays": 7,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "required"
+    },
+    {
+      "id": "event-anita-community-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "creatorPhone": "+48 602 100 204",
+      "title": "Warszawa • Krąg społeczności",
+      "summary": "Lżejszy format community z krótszym wejściem, rozmową i otwartym zaproszeniem dla nowych osób.",
+      "description": "To przykład wydarzenia społeczności: krótszy format, prostszy opis, brak klasycznego progu współpracy i publikacja zależna od moderacji admina.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-06-26T17:30:00.000Z",
+      "endsAt": "2026-06-26T20:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-26T17:30:00.000Z",
+          "endsAt": "2026-06-26T20:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Saska Kępa",
+      "tags": [
+        "społeczność",
+        "warszawa",
+        "krąg"
+      ],
+      "capacity": 24,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "community circle",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "publicationApprovalStatus": "accepted",
+      "publicationApprovalRequestedAt": "2026-05-30T10:00:00.000Z",
+      "publicationReviewedAt": "2026-05-31T09:00:00.000Z",
+      "publicationReviewedByUserId": "user-admin-dariusz",
+      "publicationReviewMessage": "Dobre wydarzenie pokazujące community flow.",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-community-sierpien",
+      "trainerId": "trainer-4",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-asia",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "creatorPhone": "+48 602 100 204",
+      "title": "Warszawa • Poranek społeczności",
+      "summary": "Drugi przykład community, nadal przed decyzją moderacyjną, więc jeszcze niewidoczny publicznie.",
+      "description": "To przykład wydarzenia społeczności oczekującego na publikację. Na liście panelowej widać jego status moderacji i różnicę względem oficjalnego szkolenia.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-08-09T08:00:00.000Z",
+      "endsAt": "2026-08-09T10:30:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-08-09T08:00:00.000Z",
+          "endsAt": "2026-08-09T10:30:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Mokotów",
+      "tags": [
+        "społeczność",
+        "poranek",
+        "warszawa"
+      ],
+      "capacity": 18,
+      "enrolledCount": 0,
+      "isPublished": false,
+      "imageHint": "community morning event",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "publicationApprovalStatus": "pending",
+      "publicationApprovalRequestedAt": "2026-06-15T11:00:00.000Z",
+      "enrollmentPhotoRequirement": "optional"
     }
   ],
   "publicTrainingEvents": [
@@ -1080,6 +1294,105 @@
         }
       ],
       "useEventImageAsCover": true,
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-warszawa-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "title": "Warszawa • Letni Krąg",
+      "summary": "Dwudniowe szkolenie Emandar dla osób, które chcą wejść głębiej w rytm grupy i regularność praktyki.",
+      "description": "Format oficjalnego szkolenia Emandar z wyraźnym prowadzeniem, progiem uczestników i klasycznym trybem współpracy trener-organizator.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-06-20T08:00:00.000Z",
+      "endsAt": "2026-06-21T15:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-20T08:00:00.000Z",
+          "endsAt": "2026-06-20T15:00:00.000Z"
+        },
+        {
+          "startsAt": "2026-06-21T08:00:00.000Z",
+          "endsAt": "2026-06-21T15:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Żoliborz",
+      "tags": [
+        "warszawa",
+        "oddech",
+        "lato"
+      ],
+      "capacity": 18,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "summer breath workshop",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni",
+        "rezerwowi"
+      ],
+      "confirmationLeadTimeDays": 6,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-community-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "creatorPhone": "+48 602 100 204",
+      "title": "Warszawa • Krąg społeczności",
+      "summary": "Lżejszy format community z krótszym wejściem, rozmową i otwartym zaproszeniem dla nowych osób.",
+      "description": "To przykład wydarzenia społeczności: krótszy format, prostszy opis, brak klasycznego progu współpracy i publikacja zależna od moderacji admina.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-06-26T17:30:00.000Z",
+      "endsAt": "2026-06-26T20:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-26T17:30:00.000Z",
+          "endsAt": "2026-06-26T20:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Saska Kępa",
+      "tags": [
+        "społeczność",
+        "warszawa",
+        "krąg"
+      ],
+      "capacity": 24,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "community circle",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "publicationApprovalStatus": "accepted",
+      "publicationApprovalRequestedAt": "2026-05-30T10:00:00.000Z",
+      "publicationReviewedAt": "2026-05-31T09:00:00.000Z",
+      "publicationReviewedByUserId": "user-admin-dariusz",
+      "publicationReviewMessage": "Dobre wydarzenie pokazujące community flow.",
       "enrollmentPhotoRequirement": "optional"
     }
   ],

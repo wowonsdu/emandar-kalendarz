@@ -66,7 +66,7 @@ type StorePatch = Partial<DemoStore>;
 
 const authSessionStorageKey = "emandar:mock-auth-session";
 const smsSessionStorageKey = "emandar:mock-sms-session";
-const storeShadowStorageKey = "emandar:mock-store-shadow";
+const storeShadowStorageKey = "emandar:mock-store-shadow:v2";
 const pollIntervalMs = 5000;
 
 let cachedStore: DemoStore | null = null;
@@ -150,6 +150,19 @@ function isStoreEmpty(store: DemoStore) {
     store.groups.length === 0 &&
     store.trainingEvents.length === 0 &&
     store.enrollmentRequests.length === 0
+  );
+}
+
+function shouldReplaceShadowWithSeed(shadowStore: DemoStore, seedStore: DemoStore) {
+  return (
+    seedStore.users.length > shadowStore.users.length ||
+    seedStore.trainers.length > shadowStore.trainers.length ||
+    seedStore.organizers.length > shadowStore.organizers.length ||
+    seedStore.participantProfiles.length > shadowStore.participantProfiles.length ||
+    seedStore.relations.length > shadowStore.relations.length ||
+    seedStore.trainingEvents.length > shadowStore.trainingEvents.length ||
+    seedStore.groups.length > shadowStore.groups.length ||
+    seedStore.groupMembers.length > shadowStore.groupMembers.length
   );
 }
 
@@ -310,13 +323,6 @@ async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number 
       readStorageJson<DemoStore | null>(storeShadowStorageKey, null),
     );
 
-    if (!isStoreEmpty(shadowStore)) {
-      return {
-        store: shadowStore,
-        version: Date.now(),
-      };
-    }
-
     try {
       const response = await fetch(getMockStaticUrl("seed-store.json"), {
         method: "GET",
@@ -330,10 +336,17 @@ async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number 
 
       const payload = (await response.json()) as Partial<DemoStore>;
       const store = normalizePublicStore(payload);
-      writeStorageJson(storeShadowStorageKey, store);
+
+      if (isStoreEmpty(shadowStore) || shouldReplaceShadowWithSeed(shadowStore, store)) {
+        writeStorageJson(storeShadowStorageKey, store);
+        return {
+          store,
+          version: Date.now(),
+        };
+      }
 
       return {
-        store,
+        store: shadowStore,
         version: Date.now(),
       };
     } catch {

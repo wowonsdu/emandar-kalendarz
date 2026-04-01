@@ -434,28 +434,28 @@ export function PanelLayout() {
         <div className="min-w-0">
           <header className="sticky top-0 z-30 border-b border-brand-line/80 bg-white/90 backdrop-blur-xl">
             <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-10">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 sm:gap-3">
                 <button
                   type="button"
                   onClick={() => setIsMobileMenuOpen(true)}
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft lg:hidden"
+                  className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft lg:hidden"
                   aria-label="Otwórz menu"
                 >
-                  <Menu size={18} />
+                  <Menu size={22} />
                 </button>
                 <div>
-                <p className="text-xs uppercase tracking-[0.32em] text-brand-muted">
-                  {getRoleLabel(currentUser.role)}
-                </p>
-                <h1 className="text-2xl font-semibold text-brand-navy">
-                  Panel zarzadzania
-                </h1>
+                  <p className="text-[10px] uppercase tracking-[0.28em] text-brand-muted sm:text-xs sm:tracking-[0.32em]">
+                    {getRoleLabel(currentUser.role)}
+                  </p>
+                  <h1 className="whitespace-nowrap text-lg font-semibold leading-tight text-brand-navy sm:text-2xl">
+                    Panel zarzadzania
+                  </h1>
                 </div>
               </div>
               <div className="flex items-center gap-4">
                 <Link
                   to="/kalendarz"
-                  className="rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy"
+                  className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold text-brand-navy sm:px-4 sm:text-sm"
                 >
                   <span className="hidden sm:inline">Zobacz widok publiczny</span>
                   <span className="sm:hidden">Publiczny</span>

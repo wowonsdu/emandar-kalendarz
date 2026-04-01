@@ -1389,7 +1389,7 @@ function ParticipantOnboardingCard() {
 }
 
 function getDashboardChartHeight(itemCount: number) {
-  return Math.max(240, itemCount * 56);
+  return Math.max(180, itemCount * 48);
 }
 
 function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
@@ -1557,16 +1557,16 @@ function PanelSection({
   children: ReactNode;
 }) {
   return (
-    <section className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <section className="space-y-4 sm:space-y-6">
+      <div className="flex flex-col gap-3 sm:gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           {eyebrow ? (
-            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-sky-deep sm:text-sm sm:tracking-[0.3em]">
               {eyebrow}
             </p>
           ) : null}
-          <h2 className="mt-3 text-4xl font-semibold text-brand-navy">{title}</h2>
-          <p className="mt-3 max-w-3xl text-lg text-brand-muted">{description}</p>
+          <h2 className="mt-2 text-3xl font-semibold leading-tight text-brand-navy sm:mt-3 sm:text-4xl">{title}</h2>
+          <p className="mt-2 max-w-3xl text-base text-brand-muted sm:mt-3 sm:text-lg">{description}</p>
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -1585,14 +1585,16 @@ function StatCard({
   icon: typeof Bell;
 }) {
   return (
-    <article className="rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft">
-      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy">
-        <Icon size={20} />
+    <article className="flex min-h-[96px] items-center gap-3 rounded-[1.5rem] border border-brand-line bg-white p-3.5 shadow-soft sm:min-h-[108px] sm:rounded-[2rem] sm:p-5">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
+        <Icon size={18} />
       </div>
-      <p className="mt-4 text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-        {label}
-      </p>
-      <p className="mt-2 text-4xl font-semibold text-brand-navy">{value}</p>
+      <div className="min-w-0">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-muted sm:mt-4 sm:text-sm sm:tracking-[0.2em]">
+          {label}
+        </p>
+        <p className="mt-1 text-3xl font-semibold leading-none text-brand-navy sm:mt-2 sm:text-4xl">{value}</p>
+      </div>
     </article>
   );
 }
@@ -1621,7 +1623,7 @@ function SectionBlockHeading({
 }) {
   return (
     <div>
-      <h3 className="text-2xl font-semibold text-brand-navy">{title}</h3>
+      <h3 className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">{title}</h3>
       <p className="mt-2 text-sm text-brand-muted">{description}</p>
     </div>
   );
@@ -1842,18 +1844,18 @@ function DashboardChartCard({
   children: ReactNode;
 }) {
   return (
-    <article className="rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft">
-      <div className="min-h-[88px]">
+    <article className="rounded-[1.5rem] border border-brand-line bg-white p-3.5 shadow-soft sm:rounded-[2rem] sm:p-5">
+      <div className="min-h-0 sm:min-h-[88px]">
         <SectionBlockHeading title={title} description={description} />
       </div>
-      <div className="mt-5">{children}</div>
+      <div className="mt-3.5 sm:mt-5">{children}</div>
     </article>
   );
 }
 
 function DashboardChartEmptyState({ message }: { message: string }) {
   return (
-    <div className="flex min-h-[240px] items-center justify-center rounded-[1.5rem] border border-dashed border-brand-line bg-brand-shell px-5 text-center text-sm text-brand-muted">
+    <div className="flex min-h-[168px] items-center justify-center rounded-[1.5rem] border border-dashed border-brand-line bg-brand-shell px-4 text-center text-sm text-brand-muted sm:min-h-[240px] sm:px-5">
       {message}
     </div>
   );
@@ -2648,7 +2650,7 @@ export function DashboardPage() {
       title="Pulpit pracy"
       description="Panel działa teraz na współdzielonym mock backendzie JSON. Wszystkie liczby i rekordy pochodzą z bieżącego store prototypowego."
     >
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
         <StatCard label="Intake" value={relevantOperationalRequests.length} icon={Bell} />
         <StatCard label="Powiadomienia" value={notificationsCount} icon={ShieldCheck} />
@@ -2672,7 +2674,7 @@ export function DashboardPage() {
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
                 Oblozenie na najblizsze miesiace
               </p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+              <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
                 Nadchodzace szkolenia i ile osob jeszcze brakuje
               </p>
             </div>
@@ -2760,7 +2762,7 @@ export function DashboardPage() {
                     { label: "Liczba miejsc", color: "#88aee0" },
                   ]}
                 />
-                <div className="h-[280px]">
+                <div className="h-[220px] sm:h-[280px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={capacityByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
                       <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
@@ -2813,7 +2815,7 @@ export function DashboardPage() {
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
                 Operacyjnie
               </p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+              <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
                 Jak splywaja zgloszenia i czym koncza sie terminy
               </p>
             </div>
@@ -2825,7 +2827,7 @@ export function DashboardPage() {
                 {analyticsRequestsInRange.length === 0 ? (
                   <DashboardChartEmptyState message="Brak intake w biezacym oknie 3 miesiecy." />
                 ) : (
-                  <div className="h-[280px]">
+                  <div className="h-[220px] sm:h-[280px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={requestsByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
                         <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
@@ -2855,7 +2857,7 @@ export function DashboardPage() {
                         { label: "Odrzucone", color: "#c84b4b" },
                       ]}
                     />
-                    <div className="h-[280px]">
+                    <div className="h-[220px] sm:h-[280px]">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                           data={requestDecisionsByMonthData}
@@ -2886,7 +2888,7 @@ export function DashboardPage() {
                     { label: "Anulowane", color: "#c84b4b" },
                   ]}
                 />
-                <div className="h-[280px]">
+                <div className="h-[220px] sm:h-[280px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={eventOutcomesByMonthData}
@@ -2907,9 +2909,9 @@ export function DashboardPage() {
         </>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <h3 className="text-2xl font-semibold text-brand-navy">Najbliższe szkolenia</h3>
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+          <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">Najbliższe szkolenia</h3>
           <div className="mt-5 space-y-4">
             {sortEventsByDate(relevantEvents)
               .slice(0, 4)
@@ -2932,8 +2934,8 @@ export function DashboardPage() {
           </div>
         </article>
 
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <h3 className="text-2xl font-semibold text-brand-navy">Ostatnie powiadomienia</h3>
+        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+          <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">Ostatnie powiadomienia</h3>
           <div className="mt-5 space-y-4">
             {store.notifications.slice(0, 4).map((notification) => (
               <div

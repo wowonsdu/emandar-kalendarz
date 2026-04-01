@@ -37,15 +37,15 @@ function exactNavLinkClass(currentPath: string, targetPath: string) {
 
 function BrandMark() {
   return (
-    <Link to="/" className="flex items-center gap-3">
-      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-sky/15 text-brand-navy">
+    <Link to="/" className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
         <Sparkles size={20} />
       </div>
-      <div>
-        <div className="text-xs uppercase tracking-[0.35em] text-brand-navy/60">
+      <div className="min-w-0">
+        <div className="truncate text-[10px] uppercase tracking-[0.28em] text-brand-navy/60 sm:text-xs sm:tracking-[0.35em]">
           Emandar
         </div>
-        <div className="text-lg font-semibold text-brand-navy">Kalendarz</div>
+        <div className="truncate text-base font-semibold text-brand-navy sm:text-lg">Kalendarz</div>
       </div>
     </Link>
   );
@@ -59,7 +59,7 @@ export function PublicLayout() {
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-6 px-4 py-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:gap-6 sm:px-6 sm:py-4 lg:px-8">
           <BrandMark />
 
           <nav className="hidden items-center gap-2 md:flex">
@@ -85,29 +85,30 @@ export function PublicLayout() {
             </NavLink>
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="ml-auto flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto sm:gap-3">
             {currentUser ? (
               <Link
                 to={userHomePath}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-2.5 text-sm font-semibold text-white shadow-soft"
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-2 text-xs font-semibold text-white shadow-soft sm:px-5 sm:py-2.5 sm:text-sm"
               >
                 <LayoutDashboard size={16} />
-                Moja Przestrzen
+                <span className="hidden sm:inline">Moja Przestrzen</span>
+                <span className="sm:hidden">Panel</span>
               </Link>
             ) : (
               <>
                 <Link
                   to="/login"
-                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-2.5 text-sm font-semibold text-brand-navy"
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold text-brand-navy sm:px-5 sm:py-2.5 sm:text-sm"
                 >
-                  <ShieldCheck size={16} />
+                  <ShieldCheck size={15} className="hidden sm:block" />
                   Logowanie
                 </Link>
                 <Link
                   to="/rejestracja"
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-2.5 text-sm font-semibold text-white shadow-soft"
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-3 py-2 text-xs font-semibold text-white shadow-soft sm:px-5 sm:py-2.5 sm:text-sm"
                 >
-                  <ShieldCheck size={16} />
+                  <ShieldCheck size={15} className="hidden sm:block" />
                   Rejestracja
                 </Link>
               </>
@@ -126,7 +127,7 @@ export function PublicLayout() {
             <p className="font-semibold text-brand-navy">Emandar Kalendarz</p>
             <p>Osobna aplikacja React podpieta do emandar.pl przez link w menu.</p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Link to="/kalendarz" className="hover:text-brand-navy">
               Najblizsze szkolenia
             </Link>
@@ -433,7 +434,7 @@ export function PanelLayout() {
 
         <div className="min-w-0">
           <header className="sticky top-0 z-30 border-b border-brand-line/80 bg-white/90 backdrop-blur-xl">
-            <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-10">
+            <div className="flex items-center justify-between gap-3 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:px-10">
               <div className="flex items-center gap-2.5 sm:gap-3">
                 <button
                   type="button"
@@ -452,7 +453,7 @@ export function PanelLayout() {
                   </h1>
                 </div>
               </div>
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 sm:gap-4">
                 <Link
                   to="/kalendarz"
                   className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold text-brand-navy sm:px-4 sm:text-sm"
@@ -464,7 +465,7 @@ export function PanelLayout() {
             </div>
           </header>
 
-          <main className="px-4 py-6 sm:px-6 lg:px-10">
+          <main className="px-3 py-4 sm:px-6 sm:py-6 lg:px-10">
             <Outlet />
           </main>
         </div>

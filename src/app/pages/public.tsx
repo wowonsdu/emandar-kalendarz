@@ -2089,16 +2089,16 @@ function SmsLoginScreen() {
   }
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
+    <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-14 lg:px-8">
       <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
+        <div className="rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:rounded-[2.5rem] sm:p-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-sky-deep sm:text-sm sm:tracking-[0.3em]">
             Logowanie SMS
           </p>
-          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
+          <h1 className="mt-3 text-3xl font-semibold leading-tight text-brand-navy sm:mt-4 sm:text-4xl">
             Wejście do aplikacji tylko numerem telefonu
           </h1>
-          <p className="mt-4 max-w-2xl text-lg text-brand-muted">
+          <p className="mt-3 max-w-2xl text-base text-brand-muted sm:mt-4 sm:text-lg">
             Podaj numer telefonu, potwierdź kod SMS i gotowe. To jest główny sposób
             logowania dla wszystkich zwykłych użytkowników.
           </p>
@@ -2141,25 +2141,25 @@ function SmsLoginScreen() {
               />
             </label>
 
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <button
                 type="submit"
                 disabled={!confirmationResult || confirmingCode}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60 sm:w-auto"
               >
                 {confirmingCode ? "Potwierdzanie..." : "Potwierdź i wejdź"}
                 <ArrowRight size={16} />
               </button>
               <Link
                 to="/rejestracja"
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy sm:w-auto"
               >
                 Załóż nowe konto
               </Link>
             </div>
           </form>
 
-          <div className="mt-8 rounded-3xl border border-brand-line bg-brand-shell p-5 text-sm text-brand-muted">
+          <div className="mt-8 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted sm:p-5">
             <div className="flex items-center gap-2 font-semibold text-brand-navy">
               <ShieldCheck size={16} />
               Konta demo
@@ -2171,7 +2171,7 @@ function SmsLoginScreen() {
           </div>
         </div>
 
-        <aside className="rounded-[2.5rem] border border-brand-line bg-white p-6 shadow-soft">
+        <aside className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:rounded-[2.5rem] sm:p-6">
           <div className="flex items-center gap-2 text-brand-navy">
             <Sparkles size={18} />
             <p className="text-sm font-semibold uppercase tracking-[0.25em]">

@@ -10,7 +10,7 @@ function isCodedAppError(error: unknown): error is AppErrorWithCode {
 }
 
 function normalizeAppErrorCode(code: string) {
-  return code.startsWith("functions/") ? code.slice("functions/".length) : code;
+  return code.startsWith("backend/") ? code.slice("backend/".length) : code;
 }
 
 export function mapAppError(error: unknown) {
@@ -54,13 +54,13 @@ export function mapAppError(error: unknown) {
       return new Error("Nie udalo sie zsynchronizowac feedow iCal. Sprobuj ponownie za chwile.");
     case "unavailable":
       return new Error("Usluga jest chwilowo niedostepna. Sprobuj ponownie za chwile.");
-    case "storage/unauthorized":
+    case "file/unauthorized":
       return new Error("Nie masz uprawnien do tego pliku.");
-    case "storage/canceled":
+    case "file/canceled":
       return new Error("Wysylanie pliku zostalo przerwane.");
-    case "storage/object-not-found":
+    case "file/object-not-found":
       return new Error("Nie znaleziono pliku.");
-    case "storage/retry-limit-exceeded":
+    case "file/retry-limit-exceeded":
       return new Error("Nie udalo sie przeslac pliku. Sprobuj ponownie.");
     default:
       return new Error(error.message || "Nie udalo sie wykonac tej operacji.");

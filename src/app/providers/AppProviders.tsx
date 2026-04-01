@@ -6,8 +6,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { onAuthStateChanged } from "firebase/auth";
-import { firebaseAuth, isFirebaseConfigured } from "@/lib/firebase";
 import { mapAppError } from "@/domain/errors";
 import { sortTrainerProfiles } from "@/domain/utils";
 import {
@@ -52,6 +50,7 @@ import {
   signOut as signOutAction,
   submitAccountRequest as submitAccountRequestAction,
   submitEnrollment as submitEnrollmentAction,
+  subscribeAuthState,
   subscribePrivateStore,
   subscribePublicStore,
   subscribeUserProfile,
@@ -77,7 +76,7 @@ import {
   updateTrainerProfile as updateTrainerProfileAction,
   uploadCommunityEventImages as uploadCommunityEventImagesAction,
   withdrawOrganizerTrainingDraft as withdrawOrganizerTrainingDraftAction,
-} from "@/data/firebaseRepository";
+} from "@/data/mockRepository";
 import type {
   AccountRequestInput,
   AppSettings,
@@ -335,11 +334,6 @@ export function AppProviders({ children }: { children: ReactNode }) {
   const [authUserId, setAuthUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isFirebaseConfigured) {
-      setAuthReady(true);
-      return;
-    }
-
     return subscribePublicStore((patch) => {
       setPublicStore((previous) => ({
         ...previous,
@@ -349,16 +343,10 @@ export function AppProviders({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!firebaseAuth) {
-      setAuthReady(true);
-      setCurrentUserReady(true);
-      return;
-    }
-
-    return onAuthStateChanged(firebaseAuth, (user) => {
+    return subscribeAuthState((userId) => {
       setAuthReady(true);
 
-      if (!user || user.isAnonymous) {
+      if (!userId) {
         setAuthUserId(null);
         setCurrentUser(null);
         setPrivateStore({});
@@ -369,12 +357,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
       setCurrentUser(null);
       setPrivateStore({});
       setCurrentUserReady(false);
-      setAuthUserId(user.uid);
+      setAuthUserId(userId);
     });
   }, []);
 
   useEffect(() => {
-    if (!firebaseAuth || !authUserId) {
+    if (!authUserId) {
       return;
     }
 

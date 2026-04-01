@@ -15,11 +15,6 @@ import {
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import {
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
-  type ConfirmationResult,
-} from "firebase/auth";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type {
@@ -29,8 +24,13 @@ import type {
   TrainingEvent,
   TrainingEventImage,
 } from "@/domain/types";
-import { updateActiveRole as updateActiveRoleAction } from "@/data/firebaseRepository";
-import { fetchAppUser } from "@/data/firebaseRepository";
+import {
+  confirmSmsCode,
+  fetchAppUser,
+  getCurrentSessionPhone,
+  requestSmsCode,
+  updateActiveRole as updateActiveRoleAction,
+} from "@/data/mockRepository";
 import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
@@ -46,7 +46,6 @@ import {
   resolveTrainingEventStatus,
   sortEventsByDate,
 } from "@/domain/utils";
-import { firebaseAuth } from "@/lib/firebase";
 import {
   Dialog,
   DialogClose,
@@ -58,6 +57,19 @@ import {
   DialogTitle,
 } from "@/app/components/ui/dialog";
 import { useAppState } from "../providers/AppProviders";
+
+type ConfirmationResult = {
+  confirm: (code: string) => Promise<{
+    user: {
+      uid: string;
+      phoneNumber: string | null;
+    };
+  }>;
+};
+
+class RecaptchaVerifier {
+  clear() {}
+}
 
 function formatDate(date: string) {
   return new Intl.DateTimeFormat("pl-PL", {
@@ -815,7 +827,7 @@ export function LandingPage() {
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
             <Sparkles size={16} />
-            Kalendarz i panel Emandar na Firebase
+            Kalendarz i panel Emandar w trybie prototypowym
           </div>
           <h1 className="mt-6 max-w-4xl text-5xl font-semibold leading-tight text-brand-navy sm:text-6xl">
             Publiczny kalendarz szkoleń i panel współpracy dla Przekazujących
@@ -823,7 +835,7 @@ export function LandingPage() {
           </h1>
           <p className="mt-6 max-w-3xl text-lg text-brand-muted">
             W tej wersji dane publiczne, logowanie, zgłoszenia i zdjęcia trafiają
-            już do Firebase. Możesz przejść do kalendarza, sprawdzić
+            do współdzielonego mock backendu opartego o JSON-y. Możesz przejść do kalendarza, sprawdzić
             Przekazujących Wiedzę albo zalogować się do panelu.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
@@ -868,7 +880,7 @@ export function LandingPage() {
             {
               title: "Panel",
               description:
-                "Osobny obszar dla admina, Przekazującego Wiedzę i organizatora oparty o Firebase Auth.",
+                "Osobny obszar dla admina, Przekazującego Wiedzę i organizatora oparty o mock auth SMS i współdzielony store.",
               icon: ShieldCheck,
               to: "/login",
             },
@@ -967,12 +979,10 @@ export function EventDetailsPage() {
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [smsDialogStage, setSmsDialogStage] = useState<"verify" | "success">("verify");
-  const [smsVerified, setSmsVerified] = useState(
-    Boolean(firebaseAuth?.currentUser?.phoneNumber),
-  );
+  const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
   const [form, setForm] = useState({
     imieNazwisko: "",
-    telefon: firebaseAuth?.currentUser?.phoneNumber ?? "",
+    telefon: currentUser?.phone ?? getCurrentSessionPhone(),
     polecenieOdKogo: "",
     wiadomosc: "",
     photoFile: null as File | null,
@@ -1084,7 +1094,7 @@ export function EventDetailsPage() {
       setIsSmsDialogOpen(true);
       setForm({
         imieNazwisko: "",
-        telefon: firebaseAuth?.currentUser?.phoneNumber ?? "",
+        telefon: currentUser?.phone ?? getCurrentSessionPhone(),
         polecenieOdKogo: "",
         wiadomosc: "",
         photoFile: null,
@@ -1101,11 +1111,6 @@ export function EventDetailsPage() {
   }
 
   async function handleSendCode() {
-    if (!firebaseAuth) {
-      toast.error("Firebase Auth nie jest skonfigurowany.");
-      return;
-    }
-
     setSendingCode(true);
 
     try {
@@ -1114,10 +1119,9 @@ export function EventDetailsPage() {
         recaptchaRef.current = createRecaptchaVerifier("enrollment-phone-recaptcha");
       }
 
-      const result = await signInWithPhoneNumber(
-        firebaseAuth,
+      const { code, result } = await createConfirmationResult(
         normalizedPhone,
-        recaptchaRef.current,
+        event.trainerId ?? undefined,
       );
 
       setForm((current) => ({
@@ -1129,7 +1133,7 @@ export function EventDetailsPage() {
       setConfirmationResult(result);
       setSmsVerified(false);
       setIsSmsDialogOpen(true);
-      toast.success("Kod SMS został wysłany.");
+      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
@@ -1351,7 +1355,7 @@ export function EventDetailsPage() {
             Zgłoszenie trafi do Przekazującego Wiedzę
             {organizer ? " i organizatora." : "."}{" "}
             {enrollmentPhotoMode === "required"
-              ? "Zdjęcie jest wymagane i trafia do Firebase Storage tylko dla uprawnionych osób."
+              ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
               : enrollmentPhotoMode === "optional"
                 ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
                 : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."}
@@ -1956,14 +1960,29 @@ function normalizePhoneNumberForSms(value: string) {
   throw new Error("Podaj poprawny numer telefonu.");
 }
 
-function createRecaptchaVerifier(containerId: string) {
-  if (!firebaseAuth) {
-    throw new Error("Firebase Auth nie jest skonfigurowany.");
-  }
+function createRecaptchaVerifier(_containerId: string) {
+  return new RecaptchaVerifier();
+}
 
-  return new RecaptchaVerifier(firebaseAuth, containerId, {
-    size: "invisible",
-  });
+async function createConfirmationResult(phone: string, seedTrainerId?: string) {
+  const { normalizedPhone, code } = await requestSmsCode(phone);
+
+  return {
+    normalizedPhone,
+    code,
+    result: {
+      confirm: async (submittedCode: string) => {
+        const confirmed = await confirmSmsCode(normalizedPhone, submittedCode, seedTrainerId);
+
+        return {
+          user: {
+            uid: confirmed.userId,
+            phoneNumber: confirmed.phone,
+          },
+        };
+      },
+    } satisfies ConfirmationResult,
+  };
 }
 
 function SmsLoginScreen() {
@@ -1992,11 +2011,6 @@ function SmsLoginScreen() {
   async function handleSendCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!firebaseAuth) {
-      toast.error("Firebase Auth nie jest skonfigurowany.");
-      return;
-    }
-
     setSendingCode(true);
 
     try {
@@ -2005,15 +2019,11 @@ function SmsLoginScreen() {
         recaptchaRef.current = createRecaptchaVerifier("login-phone-recaptcha");
       }
 
-      const result = await signInWithPhoneNumber(
-        firebaseAuth,
-        normalizedPhone,
-        recaptchaRef.current,
-      );
+      const { code, result } = await createConfirmationResult(normalizedPhone);
 
       setPhone(normalizedPhone);
       setConfirmationResult(result);
-      toast.success("Kod SMS został wysłany.");
+      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
@@ -2037,36 +2047,14 @@ function SmsLoginScreen() {
 
     try {
       const result = await confirmationResult.confirm(verificationCode.trim());
-      let appUser;
-      try {
-        appUser = await fetchAppUser(result.user.uid);
-      } catch {
+      let appUser = await fetchAppUser(result.user.uid);
+      if (!appUser.participantProfileId) {
         await ensurePhoneParticipantProfileForFlow();
         appUser = await fetchAppUser(result.user.uid);
       }
       toast.success("Zalogowano do panelu.");
       navigate(getRoleHomePath(appUser.role));
     } catch (error) {
-      if (firebaseAuth?.currentUser?.uid) {
-        try {
-          const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
-          toast.success("Zalogowano do panelu.");
-          navigate(getRoleHomePath(appUser.role));
-          return;
-        } catch {
-          try {
-            await ensurePhoneParticipantProfileForFlow();
-            const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
-            toast.success("Utworzono konto uczestnika i zalogowano do panelu.");
-            navigate(getRoleHomePath(appUser.role));
-            return;
-          } catch {
-            toast.error("Nie udało się dokończyć tworzenia konta uczestnika.");
-            return;
-          }
-        }
-      }
-
       toast.error(
         error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
       );
@@ -2249,12 +2237,10 @@ function SmsRegisterScreen() {
   const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [smsVerified, setSmsVerified] = useState(
-    Boolean(firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous),
-  );
+  const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
   const [form, setForm] = useState({
     displayName: "",
-    phone: prefetchedPhone,
+    phone: prefetchedPhone || currentUser?.phone || getCurrentSessionPhone(),
     trainerAuthorizationCode: "",
     notes: "",
     avatarFile: null as File | null,
@@ -2264,21 +2250,20 @@ function SmsRegisterScreen() {
   const signupPhotoEnabled = isPhotoModeEnabled(signupPhotoMode);
 
   useEffect(() => {
-    if (firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous) {
+    const sessionPhone = currentUser?.phone || getCurrentSessionPhone();
+    if (sessionPhone) {
       setSmsVerified(true);
-      if (firebaseAuth.currentUser.phoneNumber) {
-        setForm((current) => ({
-          ...current,
-          phone: firebaseAuth.currentUser?.phoneNumber ?? current.phone,
-        }));
-      }
+      setForm((current) => ({
+        ...current,
+        phone: sessionPhone || current.phone,
+      }));
     }
 
     return () => {
       recaptchaRef.current?.clear();
       recaptchaRef.current = null;
     };
-  }, []);
+  }, [currentUser?.phone]);
 
   useEffect(() => {
     if (!signupPhotoEnabled && form.avatarFile) {
@@ -2343,11 +2328,6 @@ function SmsRegisterScreen() {
   }
 
   async function handleSendCode() {
-    if (!firebaseAuth) {
-      toast.error("Firebase Auth nie jest skonfigurowany.");
-      return;
-    }
-
     setSendingCode(true);
 
     try {
@@ -2356,11 +2336,7 @@ function SmsRegisterScreen() {
         recaptchaRef.current = createRecaptchaVerifier("register-phone-recaptcha");
       }
 
-      const result = await signInWithPhoneNumber(
-        firebaseAuth,
-        normalizedPhone,
-        recaptchaRef.current,
-      );
+      const { code, result } = await createConfirmationResult(normalizedPhone);
 
       setForm((current) => ({
         ...current,
@@ -2369,7 +2345,7 @@ function SmsRegisterScreen() {
       setVerificationCode("");
       setConfirmationResult(result);
       setIsSmsDialogOpen(true);
-      toast.success("Kod SMS został wysłany.");
+      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",

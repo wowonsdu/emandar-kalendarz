@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { mapAppError } from "./errors";
 
 describe("mapAppError", () => {
-  it("normalizes callable function codes before mapping", () => {
+  it("normalizes backend codes before mapping", () => {
     const mapped = mapAppError({
-      code: "functions/internal",
+      code: "backend/internal",
       message: "internal",
     });
 
@@ -16,7 +16,7 @@ describe("mapAppError", () => {
 
   it("keeps explicit backend messages when no dedicated mapping exists", () => {
     const mapped = mapAppError({
-      code: "functions/unknown-code",
+      code: "backend/unknown-code",
       message: "Backend exploded",
     });
 

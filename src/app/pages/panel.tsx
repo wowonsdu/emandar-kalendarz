@@ -4150,57 +4150,57 @@ export function GroupsPage() {
       ) : null}
 
       {!isGroupDetailView ? (
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <div className="space-y-3">
-            {visibleGroups.length === 0 ? (
-              <EmptyPanelState
-                title="Brak grup"
-                description={
-                  canManageGroups
-                    ? "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
-                    : "Nie masz jeszcze żadnych przypisanych grup."
-                }
-              />
-            ) : (
-              visibleGroups.map((group) => {
-                const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-                const isSelected = selectedGroup?.id === group.id;
+        <div className="space-y-3">
+          {visibleGroups.length === 0 ? (
+            <EmptyPanelState
+              title="Brak grup"
+              description={
+                canManageGroups
+                  ? "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
+                  : "Nie masz jeszcze żadnych przypisanych grup."
+              }
+            />
+          ) : (
+            visibleGroups.map((group) => {
+              const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
+              const isSelected = selectedGroup?.id === group.id;
 
-                return (
-                  <Link
-                    key={group.id}
-                    to={`/panel/grupy/${group.id}`}
-                    className={`block rounded-3xl border p-4 transition ${
-                      isSelected
-                        ? "border-brand-navy bg-brand-navy/5"
-                        : "border-brand-line bg-brand-shell/60 hover:bg-brand-shell"
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                            {group.status === "active" ? "Aktywna" : "Archiwum"}
-                          </span>
-                          <span className="text-xs text-brand-muted">
-                            {getGroupEventTypeLabel(group.defaultEventType)}
-                          </span>
-                        </div>
-                        <p className="text-lg font-semibold text-brand-navy">{group.name}</p>
-                        <p className="text-sm text-brand-muted">{trainerName}</p>
+              return (
+                <Link
+                  key={group.id}
+                  to={`/panel/grupy/${group.id}`}
+                  className={`block rounded-[1.75rem] border p-4 shadow-soft transition sm:rounded-[2rem] sm:p-5 ${
+                    isSelected
+                      ? "border-brand-navy bg-brand-navy/5"
+                      : "border-brand-line bg-white hover:bg-brand-shell/70"
+                  }`}
+                >
+                  <div className="flex flex-col gap-3">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.2em]">
+                          {group.status === "active" ? "Aktywna" : "Archiwum"}
+                        </span>
+                        <span className="text-xs text-brand-muted">
+                          {getGroupEventTypeLabel(group.defaultEventType)}
+                        </span>
                       </div>
-                      <div className="text-right text-sm text-brand-muted">
-                        <p>{activeMemberCounts[group.id] ?? 0} aktywnych osób</p>
-                        <p className="mt-1">{groupEventCounts[group.id] ?? 0} wydarzeń</p>
-                        <p className="mt-3 font-semibold text-brand-navy">Otwórz grupę</p>
-                      </div>
+                      <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-lg">
+                        {group.name}
+                      </p>
+                      <p className="text-sm text-brand-muted">{trainerName}</p>
                     </div>
-                  </Link>
-                );
-              })
-            )}
-          </div>
-        </article>
+                    <div className="grid grid-cols-2 gap-3 text-sm text-brand-muted">
+                      <p>{activeMemberCounts[group.id] ?? 0} aktywnych osób</p>
+                      <p className="text-right">{groupEventCounts[group.id] ?? 0} wydarzeń</p>
+                    </div>
+                    <p className="text-sm font-semibold text-brand-navy">Otwórz grupę</p>
+                  </div>
+                </Link>
+              );
+            })
+          )}
+        </div>
       ) : selectedGroup ? (
         <div className="space-y-6">
           {isEditGroupFormVisible ? (

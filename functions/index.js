@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { initializeApp } from "firebase-admin/app";
@@ -18,10 +18,18 @@ const collections = {
   users: "users",
   trainers: "trainers",
   organizers: "organizers",
+  groups: "groups",
+  groupMembers: "groupMembers",
+  participantProfiles: "participantProfiles",
+  eventParticipants: "eventParticipants",
   relations: "trainerOrganizerRelations",
   trainingEvents: "trainingEvents",
   availabilitySlots: "availabilitySlots",
+  trainerSharedSlots: "trainerSharedSlots",
   trainerCalendarFeeds: "trainerCalendarFeeds",
+  organizerCalendarFeeds: "organizerCalendarFeeds",
+  organizerExternalBusyMonths: "organizerExternalBusyMonths",
+  trainerOrganizerCalendarFeeds: "trainerOrganizerCalendarFeeds",
   trainerExternalBusyMonths: "trainerExternalBusyMonths",
   enrollmentRequests: "enrollmentRequests",
   notifications: "notifications",
@@ -41,6 +49,9 @@ const PUBLIC_APP_BASE_URL =
   (process.env.FUNCTIONS_EMULATOR === "true"
     ? "http://127.0.0.1:5173"
     : "https://panel.ceo/emandar");
+const PUBLIC_ICAL_BASE_URL =
+  asString(process.env.EMANDAR_ICAL_BASE_URL) ||
+  `${PUBLIC_APP_BASE_URL.replace(/\/$/, "")}/api/ical`;
 
 function nowIso() {
   return new Date().toISOString();
@@ -178,6 +189,26 @@ function normalizePhoneLookupKey(value) {
   return digits;
 }
 
+function buildParticipantProfileId(phoneNumber) {
+  const phoneLookupKey = normalizePhoneLookupKey(phoneNumber);
+  if (!phoneLookupKey) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny numer telefonu.");
+  }
+
+  return `participant-${phoneLookupKey}`;
+}
+
+function splitDisplayName(value) {
+  const displayName = requiredString(value, "Podaj imię i nazwisko.");
+  const [firstName = "", ...lastNameParts] = displayName.split(/\s+/).filter(Boolean);
+
+  return {
+    displayName,
+    firstName,
+    lastName: lastNameParts.join(" ") || null,
+  };
+}
+
 function resolveAccountApprovalStatus(approvals) {
   if (approvals.some((approval) => approval.status === "accepted")) {
     return "approved";
@@ -301,6 +332,13 @@ function deriveEnrollmentFinalStatus(
 
 function resolveParticipantEnrollmentStatus(value) {
   return value === "cancelled" ? "cancelled" : "active";
+}
+
+function isParticipantEnrollmentActive(request) {
+  return (
+    resolveParticipantEnrollmentStatus(request?.participantStatus) === "active" &&
+    request?.finalStatus !== "rejected"
+  );
 }
 
 function resolveOrganizerCollaborationStatus(event) {
@@ -486,6 +524,10 @@ function hashReviewToken(token) {
   return createHash("sha256").update(token).digest("hex");
 }
 
+function hashIcalToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 function hashTrainerAuthorizationCode(code) {
   return createHash("sha256").update(requiredString(code, "Podaj kod trenera.")).digest("hex");
 }
@@ -523,6 +565,56 @@ function buildCommunityEventReviewUrl(token) {
   return `${PUBLIC_APP_BASE_URL.replace(/\/$/, "")}/moderacja-wydarzenia/${token}`;
 }
 
+function buildTrainerOrganizerIcalUrl(token) {
+  return `${PUBLIC_ICAL_BASE_URL.replace(/\/$/, "")}/trainer-organizer?token=${encodeURIComponent(token)}`;
+}
+
+function buildGoogleCalendarSubscribeUrl(calendarUrl) {
+  return `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(calendarUrl)}`;
+}
+
+function escapeIcalText(value) {
+  return String(value ?? "")
+    .replace(/\\/g, "\\\\")
+    .replace(/\r?\n/g, "\\n")
+    .replace(/,/g, "\\,")
+    .replace(/;/g, "\\;");
+}
+
+function formatIcalDateTime(value) {
+  const date = new Date(value);
+  return date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
+function buildTrainerOrganizerIcalContent(feed, slots) {
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Emandar Kalendarz//Trainer Organizer Feed//PL",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+  ];
+
+  slots.forEach((slot) => {
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${escapeIcalText(`${feed.id}:${slot.id}`)}`,
+      `DTSTAMP:${formatIcalDateTime(feed.updatedAt || feed.createdAt || nowIso())}`,
+      `DTSTART:${formatIcalDateTime(slot.startsAt)}`,
+      `DTEND:${formatIcalDateTime(slot.endsAt)}`,
+      `SUMMARY:${escapeIcalText(slot.location || "Dostepny termin szkolenia")}`,
+      `DESCRIPTION:${escapeIcalText(slot.notes || "Udostepniony termin szkolenia")}`,
+      `LOCATION:${escapeIcalText(slot.location || "")}`,
+      "STATUS:CONFIRMED",
+      "TRANSP:OPAQUE",
+      "END:VEVENT",
+    );
+  });
+
+  lines.push("END:VCALENDAR");
+  return `${lines.join("\r\n")}\r\n`;
+}
+
 function formatEventDateForSms(event) {
   const firstDay = getTrainingEventScheduleDays(event)[0] ?? {
     startsAt: event.startsAt,
@@ -549,6 +641,16 @@ function renderSmsTemplate(template, values) {
 }
 
 function buildAttendanceResetFields() {
+  return {
+    attendanceConfirmationStatus: "not-required",
+    attendanceConfirmationRequestedAt: FieldValue.delete(),
+    attendanceConfirmationRespondedAt: FieldValue.delete(),
+    attendanceConfirmationTokenHash: FieldValue.delete(),
+    attendanceConfirmationExpiresAt: FieldValue.delete(),
+  };
+}
+
+function buildEventParticipantAttendanceResetFields() {
   return {
     attendanceConfirmationStatus: "not-required",
     attendanceConfirmationRequestedAt: FieldValue.delete(),
@@ -644,8 +746,83 @@ async function findOrganizerProfile(organizerId) {
   return findDocument(collections.organizers, organizerId);
 }
 
+async function requireGroup(groupId) {
+  return requireDocument(collections.groups, groupId, "Nie znaleziono grupy.");
+}
+
+async function findGroup(groupId) {
+  return findDocument(collections.groups, groupId);
+}
+
+async function requireParticipantProfile(participantProfileId) {
+  return requireDocument(
+    collections.participantProfiles,
+    participantProfileId,
+    "Nie znaleziono profilu uczestnika.",
+  );
+}
+
+async function findParticipantProfile(participantProfileId) {
+  return findDocument(collections.participantProfiles, participantProfileId);
+}
+
+async function findParticipantProfileByPhoneLookupKey(phoneLookupKey) {
+  if (!phoneLookupKey) {
+    return null;
+  }
+
+  const snapshot = await db
+    .collection(collections.participantProfiles)
+    .where("phoneLookupKey", "==", phoneLookupKey)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const docSnapshot = snapshot.docs[0];
+  return {
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  };
+}
+
+async function resolveParticipantProfileIdByPhone(phoneNumber) {
+  const phoneLookupKey = normalizePhoneLookupKey(phoneNumber);
+  if (!phoneLookupKey) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny numer telefonu.");
+  }
+
+  const existingProfile = await findParticipantProfileByPhoneLookupKey(phoneLookupKey);
+  return existingProfile?.id || buildParticipantProfileId(phoneNumber);
+}
+
+async function findGroupMemberByGroupAndParticipant(groupId, participantProfileId) {
+  return findDocument(collections.groupMembers, buildGroupMemberId(groupId, participantProfileId));
+}
+
+async function findEventParticipantByEventAndParticipant(eventId, participantProfileId) {
+  return findDocument(
+    collections.eventParticipants,
+    buildEventParticipantId(eventId, participantProfileId),
+  );
+}
+
 async function findEvent(eventId) {
   return findDocument(collections.trainingEvents, eventId);
+}
+
+async function requireGroupMember(memberId) {
+  return requireDocument(collections.groupMembers, memberId, "Nie znaleziono członka grupy.");
+}
+
+async function requireEventParticipant(eventParticipantId) {
+  return requireDocument(
+    collections.eventParticipants,
+    eventParticipantId,
+    "Nie znaleziono uczestnika wydarzenia.",
+  );
 }
 
 async function findAppUser(userId) {
@@ -654,6 +831,891 @@ async function findAppUser(userId) {
 
 async function requireAppUser(userId) {
   return requireDocument(collections.users, userId, "Nie znaleziono konta użytkownika.");
+}
+
+async function findApprovedRelationByPair(trainerId, organizerId) {
+  const snapshot = await db
+    .collection(collections.relations)
+    .doc(buildRelationId(trainerId, organizerId))
+    .get();
+
+  if (!snapshot.exists) {
+    return null;
+  }
+
+  const relation = {
+    id: snapshot.id,
+    ...snapshot.data(),
+  };
+
+  return relation.status === "approved" ? relation : null;
+}
+
+async function requireApprovedRelationByIds(trainerId, organizerId) {
+  const relation = await findApprovedRelationByPair(trainerId, organizerId);
+
+  if (!relation) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Najpierw potrzebujesz zatwierdzonej relacji między trenerem i organizatorem.",
+    );
+  }
+
+  return relation;
+}
+
+function buildGroupMemberId(groupId, participantProfileId) {
+  return `${groupId}__${participantProfileId}`;
+}
+
+function buildEventParticipantId(eventId, participantProfileId) {
+  return `${eventId}__${participantProfileId}`;
+}
+
+function resolveGroupEventType(value) {
+  return value === "post" ? "post" : "training";
+}
+
+function normalizeGroupMemberPriority(value) {
+  if (value === "regularni" || value === "rezerwowi") {
+    return value;
+  }
+
+  return "stali";
+}
+
+function normalizeEligibleGroupPriorities(value) {
+  const normalized = Array.from(
+    new Set(
+      Array.isArray(value)
+        ? value.map((item) => normalizeGroupMemberPriority(item))
+        : ["stali", "regularni", "rezerwowi"],
+    ),
+  );
+
+  return normalized.length > 0 ? normalized : ["stali", "regularni", "rezerwowi"];
+}
+
+function countActiveEventParticipants(participants) {
+  return participants.filter(
+    (participant) => participant.status === "invited" || participant.status === "confirmed",
+  ).length;
+}
+
+function isEventParticipantActiveStatus(status) {
+  return status === "invited" || status === "confirmed";
+}
+
+function createParticipantProfilePayload({
+  existingProfile,
+  displayName,
+  phone,
+  notes,
+  referralSource,
+  organizer,
+  trainer,
+  createdByUserId,
+}) {
+  const createdAt = nowIso();
+  const phoneLookupKey = normalizePhoneLookupKey(phone);
+
+  return {
+    displayName,
+    firstName: displayName.split(/\s+/)[0] || displayName,
+    lastName: displayName.split(/\s+/).slice(1).join(" ") || "",
+    phone,
+    phoneLookupKey,
+    notes,
+    referralSource,
+    avatarUrl: asString(existingProfile?.avatarUrl),
+    avatarPath: existingProfile?.avatarPath ?? null,
+    linkedUserId: existingProfile?.linkedUserId ?? null,
+    confirmationStatus: existingProfile?.confirmationStatus || "unconfirmed",
+    status: existingProfile?.status || "active",
+    managerOrganizerIds: Array.from(
+      new Set([...(existingProfile?.managerOrganizerIds || []), organizer.id]),
+    ),
+    managerOrganizerUserIds: Array.from(
+      new Set([...(existingProfile?.managerOrganizerUserIds || []), organizer.userId]),
+    ),
+    managerTrainerIds: Array.from(
+      new Set([...(existingProfile?.managerTrainerIds || []), trainer.id]),
+    ),
+    managerTrainerUserIds: Array.from(
+      new Set([...(existingProfile?.managerTrainerUserIds || []), trainer.userId]),
+    ),
+    groupIds: Array.from(new Set(existingProfile?.groupIds || [])),
+    activeGroupIds: Array.from(new Set(existingProfile?.activeGroupIds || [])),
+    createdByOrganizerId: existingProfile?.createdByOrganizerId ?? organizer.id,
+    createdByUserId: existingProfile?.createdByUserId ?? createdByUserId,
+    createdAt: existingProfile?.createdAt || createdAt,
+    updatedAt: createdAt,
+    confirmedAt: existingProfile?.confirmedAt || null,
+  };
+}
+
+async function upsertManagedParticipantProfile({
+  organizer,
+  trainer,
+  displayName,
+  phone,
+  notes,
+  referralSource,
+  participantProfileId,
+  createdByUserId,
+}) {
+  const normalizedDisplayName = requiredString(displayName, "Podaj imię i nazwisko uczestnika.");
+  const normalizedPhone = requiredString(phone, "Podaj numer telefonu uczestnika.");
+  const phoneLookupKey = normalizePhoneLookupKey(normalizedPhone);
+  const existingProfile =
+    (participantProfileId ? await findParticipantProfile(participantProfileId) : null) ||
+    (await findParticipantProfileByPhoneLookupKey(phoneLookupKey));
+  const profileId = existingProfile?.id || buildParticipantProfileId(normalizedPhone);
+  const payload = createParticipantProfilePayload({
+    existingProfile,
+    displayName: normalizedDisplayName,
+    phone: normalizedPhone,
+    notes: asString(notes),
+    referralSource: asString(referralSource),
+    organizer,
+    trainer,
+    createdByUserId,
+  });
+
+  await db.collection(collections.participantProfiles).doc(profileId).set(payload, { merge: true });
+
+  return {
+    id: profileId,
+    ...payload,
+  };
+}
+
+async function ensureGroupMember({
+  group,
+  participantProfile,
+  priority,
+  notes,
+}) {
+  const memberId = buildGroupMemberId(group.id, participantProfile.id);
+  const memberPayload = {
+    groupId: group.id,
+    organizerId: group.organizerId,
+    organizerUserId: group.organizerUserId || null,
+    trainerId: group.trainerId,
+    trainerUserId: group.trainerUserId || null,
+    participantProfileId: participantProfile.id,
+    participantUserId: participantProfile.linkedUserId || null,
+    participantDisplayName: participantProfile.displayName,
+    participantPhone: participantProfile.phone,
+    priority: normalizeGroupMemberPriority(priority),
+    membershipStatus: "active",
+    notes: asString(notes),
+    joinedAt: nowIso(),
+    updatedAt: nowIso(),
+    removedAt: null,
+  };
+
+  await db.collection(collections.groupMembers).doc(memberId).set(memberPayload, { merge: true });
+  await db.collection(collections.participantProfiles).doc(participantProfile.id).set(
+    {
+      groupIds: FieldValue.arrayUnion(group.id),
+      activeGroupIds: FieldValue.arrayUnion(group.id),
+      managerOrganizerIds: FieldValue.arrayUnion(group.organizerId),
+      managerTrainerIds: FieldValue.arrayUnion(group.trainerId),
+      ...(group.organizerUserId
+        ? { managerOrganizerUserIds: FieldValue.arrayUnion(group.organizerUserId) }
+        : {}),
+      ...(group.trainerUserId
+        ? { managerTrainerUserIds: FieldValue.arrayUnion(group.trainerUserId) }
+        : {}),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return {
+    id: memberId,
+    ...memberPayload,
+  };
+}
+
+async function syncEventParticipantCount(eventId) {
+  const snapshot = await db
+    .collection(collections.eventParticipants)
+    .where("eventId", "==", eventId)
+    .get();
+  const participants = snapshot.docs.map((docSnapshot) => ({
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  }));
+  const activeCount = countActiveEventParticipants(participants);
+
+  await db.collection(collections.trainingEvents).doc(eventId).set(
+    {
+      enrolledCount: activeCount,
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return activeCount;
+}
+
+function buildEventParticipantStatusPatch(status, existingParticipant = null) {
+  const timestamp = nowIso();
+
+  return {
+    status,
+    updatedAt: timestamp,
+    confirmedAt:
+      status === "confirmed"
+        ? existingParticipant?.confirmedAt || timestamp
+        : null,
+    declinedAt:
+      status === "declined"
+        ? existingParticipant?.declinedAt || timestamp
+        : null,
+    removedAt:
+      status === "removed"
+        ? existingParticipant?.removedAt || timestamp
+        : null,
+  };
+}
+
+async function countManagedEventEnrollments(event) {
+  if (event.groupId) {
+    const snapshot = await db
+      .collection(collections.eventParticipants)
+      .where("eventId", "==", event.id)
+      .get();
+
+    return countActiveEventParticipants(
+      snapshot.docs.map((docSnapshot) => ({
+        id: docSnapshot.id,
+        ...docSnapshot.data(),
+      })),
+    );
+  }
+
+  const requests = await getEnrollmentRequestsForEvent(event.id);
+  return countAcceptedEnrollmentRequests(requests);
+}
+
+async function upsertEventParticipantAssignment({
+  event,
+  participantProfile,
+  priority,
+  source,
+  overCapacity = false,
+}) {
+  const existingParticipant = await findEventParticipantByEventAndParticipant(
+    event.id,
+    participantProfile.id,
+  );
+  const eventParticipantId = buildEventParticipantId(event.id, participantProfile.id);
+  const payload = {
+    eventId: event.id,
+    eventTitle: event.title,
+    groupId: event.groupId,
+    groupName: asString(event.groupName),
+    organizerId: event.organizerId || null,
+    organizerUserId: event.organizerUserId || null,
+    trainerId: event.trainerId || null,
+    trainerUserId: event.trainerUserId || null,
+    participantProfileId: participantProfile.id,
+    participantDisplayName: participantProfile.displayName,
+    participantPhone: participantProfile.phone,
+    participantUserId: participantProfile.linkedUserId || null,
+    priority: normalizeGroupMemberPriority(priority),
+    status: existingParticipant?.status || "invited",
+    source: existingParticipant?.source || source,
+    overCapacity: existingParticipant?.overCapacity ?? Boolean(overCapacity),
+    invitedAt: existingParticipant?.invitedAt || nowIso(),
+    updatedAt: nowIso(),
+    confirmedAt: existingParticipant?.confirmedAt ?? null,
+    declinedAt: existingParticipant?.declinedAt ?? null,
+    removedAt: existingParticipant?.removedAt ?? null,
+  };
+
+  await db.collection(collections.eventParticipants).doc(eventParticipantId).set(payload, {
+    merge: true,
+  });
+  await syncEventParticipantCount(event.id);
+
+  return {
+    id: eventParticipantId,
+    ...payload,
+  };
+}
+
+function resolveGroupedEnrollmentParticipantStatus(enrollmentRequest, existingParticipant) {
+  if (
+    enrollmentRequest.finalStatus !== "accepted" ||
+    !isParticipantEnrollmentActive(enrollmentRequest)
+  ) {
+    return existingParticipant ? "removed" : null;
+  }
+
+  const attendanceStatus = resolveAttendanceConfirmationStatus(
+    enrollmentRequest.attendanceConfirmationStatus,
+  );
+
+  if (attendanceStatus === "confirmed") {
+    return "confirmed";
+  }
+
+  if (attendanceStatus === "declined") {
+    return "declined";
+  }
+
+  if (
+    existingParticipant &&
+    (existingParticipant.status === "confirmed" ||
+      existingParticipant.status === "declined" ||
+      existingParticipant.status === "removed")
+  ) {
+    return existingParticipant.status;
+  }
+
+  return "invited";
+}
+
+async function syncGroupedEnrollmentRequestRoster({
+  enrollmentRequest,
+  event,
+  group,
+  organizer,
+  trainer,
+}) {
+  const requestParticipantProfileId = asString(enrollmentRequest.participantProfileId);
+  const requestEventParticipantId = asString(enrollmentRequest.eventParticipantId);
+  const phone = asString(enrollmentRequest.telefon);
+  const phoneLookupKey = normalizePhoneLookupKey(phone);
+
+  let participantProfile =
+    (requestParticipantProfileId
+      ? await findParticipantProfile(requestParticipantProfileId)
+      : null) ||
+    (phoneLookupKey ? await findParticipantProfileByPhoneLookupKey(phoneLookupKey) : null);
+  let eventParticipant =
+    (participantProfile
+      ? await findEventParticipantByEventAndParticipant(event.id, participantProfile.id)
+      : null) ||
+    (requestEventParticipantId
+      ? await findDocument(collections.eventParticipants, requestEventParticipantId)
+      : null);
+
+  if (!participantProfile && eventParticipant?.participantProfileId) {
+    participantProfile = await findParticipantProfile(eventParticipant.participantProfileId);
+  }
+
+  const nextStatus = resolveGroupedEnrollmentParticipantStatus(
+    enrollmentRequest,
+    eventParticipant,
+  );
+
+  if (!participantProfile && nextStatus) {
+    participantProfile = await upsertManagedParticipantProfile({
+      organizer,
+      trainer,
+      displayName: enrollmentRequest.imieNazwisko,
+      phone,
+      notes: enrollmentRequest.wiadomosc,
+      referralSource: enrollmentRequest.polecenieOdKogo,
+      participantProfileId:
+        requestParticipantProfileId || (phone ? await resolveParticipantProfileIdByPhone(phone) : null),
+      createdByUserId:
+        asString(enrollmentRequest.submitterUid) ||
+        asString(organizer.userId) ||
+        asString(trainer.userId) ||
+        "public-enrollment",
+    });
+    eventParticipant = await findEventParticipantByEventAndParticipant(event.id, participantProfile.id);
+  }
+
+  let groupMember = participantProfile
+    ? await findGroupMemberByGroupAndParticipant(group.id, participantProfile.id)
+    : null;
+
+  if (participantProfile && (!groupMember || groupMember.membershipStatus !== "active")) {
+    groupMember = await ensureGroupMember({
+      group,
+      participantProfile,
+      priority: groupMember?.priority || "rezerwowi",
+      notes: groupMember?.notes || asString(enrollmentRequest.wiadomosc),
+    });
+  }
+
+  if (participantProfile && nextStatus) {
+    eventParticipant = await upsertEventParticipantAssignment({
+      event,
+      participantProfile,
+      priority: groupMember?.priority || "rezerwowi",
+      source: eventParticipant?.source || "public-form",
+      overCapacity: Boolean(eventParticipant?.overCapacity),
+    });
+
+    if (eventParticipant.status !== nextStatus) {
+      const statusPatch = buildEventParticipantStatusPatch(nextStatus, eventParticipant);
+      await db.collection(collections.eventParticipants).doc(eventParticipant.id).set(
+        statusPatch,
+        { merge: true },
+      );
+      eventParticipant = {
+        ...eventParticipant,
+        ...statusPatch,
+      };
+    }
+  } else if (eventParticipant) {
+    const statusPatch = buildEventParticipantStatusPatch("removed", eventParticipant);
+    await db.collection(collections.eventParticipants).doc(eventParticipant.id).set(
+      statusPatch,
+      { merge: true },
+    );
+    eventParticipant = {
+      ...eventParticipant,
+      ...statusPatch,
+    };
+  }
+
+  const requestUpdates = {};
+  if (participantProfile && requestParticipantProfileId !== participantProfile.id) {
+    requestUpdates.participantProfileId = participantProfile.id;
+  }
+  if (eventParticipant?.id && requestEventParticipantId !== eventParticipant.id) {
+    requestUpdates.eventParticipantId = eventParticipant.id;
+  }
+
+  if (Object.keys(requestUpdates).length > 0) {
+    await db.collection(collections.enrollmentRequests).doc(enrollmentRequest.id).set(
+      requestUpdates,
+      { merge: true },
+    );
+  }
+
+  return {
+    participantProfileId: participantProfile?.id || null,
+    eventParticipantId: eventParticipant?.id || requestEventParticipantId || null,
+  };
+}
+
+async function findLinkedEnrollmentRequestForEventParticipant(eventParticipant) {
+  const requests = await getEnrollmentRequestsForEvent(eventParticipant.eventId);
+  const participantProfileId = asString(eventParticipant.participantProfileId);
+  const participantPhoneLookupKey = normalizePhoneLookupKey(eventParticipant.participantPhone);
+
+  return (
+    requests.find((request) => asString(request.eventParticipantId) === eventParticipant.id) ||
+    requests.find(
+      (request) =>
+        participantProfileId && asString(request.participantProfileId) === participantProfileId,
+    ) ||
+    requests.find(
+      (request) =>
+        participantPhoneLookupKey &&
+        normalizePhoneLookupKey(asString(request.telefon)) === participantPhoneLookupKey,
+    ) ||
+    null
+  );
+}
+
+function buildEnrollmentRequestPatchFromEventParticipant(eventParticipant, currentRequest) {
+  const timestamp = nowIso();
+  const basePatch = {
+    eventParticipantId: eventParticipant.id,
+    participantProfileId: eventParticipant.participantProfileId,
+    participantManagedAt: timestamp,
+    participantActionSource: "staff",
+  };
+
+  if (eventParticipant.status === "confirmed") {
+    return {
+      ...basePatch,
+      finalStatus: "accepted",
+      participantStatus: "active",
+      attendanceConfirmationStatus: "confirmed",
+      attendanceConfirmationRequestedAt:
+        currentRequest.attendanceConfirmationRequestedAt || timestamp,
+      attendanceConfirmationRespondedAt:
+        currentRequest.attendanceConfirmationRespondedAt || timestamp,
+      attendanceConfirmationTokenHash: FieldValue.delete(),
+      attendanceConfirmationExpiresAt: FieldValue.delete(),
+    };
+  }
+
+  if (eventParticipant.status === "declined") {
+    return {
+      ...basePatch,
+      finalStatus: "accepted",
+      participantStatus: "active",
+      attendanceConfirmationStatus: "declined",
+      attendanceConfirmationRequestedAt:
+        currentRequest.attendanceConfirmationRequestedAt || timestamp,
+      attendanceConfirmationRespondedAt:
+        currentRequest.attendanceConfirmationRespondedAt || timestamp,
+      attendanceConfirmationTokenHash: FieldValue.delete(),
+      attendanceConfirmationExpiresAt: FieldValue.delete(),
+    };
+  }
+
+  if (eventParticipant.status === "removed") {
+    return {
+      ...basePatch,
+      finalStatus: "accepted",
+      participantStatus: "cancelled",
+      ...buildAttendanceResetFields(),
+    };
+  }
+
+  return {
+    ...basePatch,
+    finalStatus: "accepted",
+    participantStatus: "active",
+    ...buildAttendanceResetFields(),
+  };
+}
+
+function buildEventParticipantAttendancePatchFromStatus(status, currentEventParticipant = null) {
+  const timestamp = nowIso();
+
+  if (status === "confirmed") {
+    return {
+      ...buildEventParticipantAttendanceResetFields(),
+      attendanceConfirmationStatus: "confirmed",
+      attendanceConfirmationRequestedAt:
+        currentEventParticipant?.attendanceConfirmationRequestedAt || timestamp,
+      attendanceConfirmationRespondedAt: timestamp,
+    };
+  }
+
+  if (status === "declined") {
+    return {
+      ...buildEventParticipantAttendanceResetFields(),
+      attendanceConfirmationStatus: "declined",
+      attendanceConfirmationRequestedAt:
+        currentEventParticipant?.attendanceConfirmationRequestedAt || timestamp,
+      attendanceConfirmationRespondedAt: timestamp,
+    };
+  }
+
+  return {
+    ...buildEventParticipantAttendanceResetFields(),
+  };
+}
+
+async function syncEnrollmentRequestFromEventParticipant(eventParticipant) {
+  if (eventParticipant.source !== "public-form") {
+    return null;
+  }
+
+  const linkedRequest = await findLinkedEnrollmentRequestForEventParticipant(eventParticipant);
+  if (!linkedRequest) {
+    return null;
+  }
+
+  const patch = buildEnrollmentRequestPatchFromEventParticipant(
+    eventParticipant,
+    linkedRequest,
+  );
+
+  await db.collection(collections.enrollmentRequests).doc(linkedRequest.id).set(patch, {
+    merge: true,
+  });
+
+  return linkedRequest.id;
+}
+
+async function autoAssignCoreMembersToEvent(event) {
+  if (!event.groupId) {
+    return;
+  }
+
+  const eligiblePriorities = normalizeEligibleGroupPriorities(event.eligibleGroupPriorities);
+  if (!eligiblePriorities.includes("stali")) {
+    return;
+  }
+
+  const snapshot = await db
+    .collection(collections.groupMembers)
+    .where("groupId", "==", event.groupId)
+    .where("membershipStatus", "==", "active")
+    .get();
+
+  const coreMembers = snapshot.docs
+    .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+    .filter((member) => member.priority === "stali");
+
+  for (const member of coreMembers) {
+    const participantProfile = await requireParticipantProfile(member.participantProfileId);
+    const existingParticipant = await findEventParticipantByEventAndParticipant(
+      event.id,
+      participantProfile.id,
+    );
+
+    if (existingParticipant) {
+      continue;
+    }
+
+    await upsertEventParticipantAssignment({
+      event,
+      participantProfile,
+      priority: member.priority,
+      source: "auto-core",
+      overCapacity: false,
+    });
+  }
+}
+
+async function findTrainerSharedSlot(slotId) {
+  return findDocument(collections.trainerSharedSlots, slotId);
+}
+
+function isTrainerSharedSlotActive(slot) {
+  return Boolean(slot) && slot.status !== "archived" && !slot.archivedAt;
+}
+
+async function findOrganizerCalendarFeed(feedId) {
+  return findDocument(collections.organizerCalendarFeeds, feedId);
+}
+
+async function findTrainerOrganizerCalendarFeedByRelationId(relationId) {
+  const snapshot = await db
+    .collection(collections.trainerOrganizerCalendarFeeds)
+    .doc(relationId)
+    .get();
+
+  if (!snapshot.exists) {
+    return null;
+  }
+
+  return {
+    id: snapshot.id,
+    ...snapshot.data(),
+  };
+}
+
+async function findTrainerOrganizerCalendarFeedByTokenHash(tokenHash) {
+  const snapshot = await db
+    .collection(collections.trainerOrganizerCalendarFeeds)
+    .where("tokenHash", "==", tokenHash)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const docSnapshot = snapshot.docs[0];
+  return {
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  };
+}
+
+function isTrainerOrganizerCalendarFeedEnabled(feed) {
+  return Boolean(feed?.enabled) && typeof feed?.tokenHash === "string";
+}
+
+function slotIntersectsIntervals(slot, intervals) {
+  return intervals.some((interval) =>
+    new Date(slot.startsAt).getTime() < new Date(interval.endsAt).getTime() &&
+    new Date(slot.endsAt).getTime() > new Date(interval.startsAt).getTime(),
+  );
+}
+
+async function rebuildOrganizerExternalBusyMonths(organizer) {
+  const { rangeStart, rangeEnd } = getAvailabilitySyncRange();
+  const feedSnapshots = await db
+    .collection(collections.organizerCalendarFeeds)
+    .where("organizerId", "==", organizer.id)
+    .get();
+  const enabledFeeds = feedSnapshots.docs
+    .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+    .filter((feed) => feed.enabled);
+
+  const successfulIntervals = [];
+  let successfulFeedCount = 0;
+
+  for (const feed of enabledFeeds) {
+    try {
+      const fetchedIntervals = await fetchIcalBusyIntervals({
+        provider: feed.provider,
+        sourceLabel: feed.id,
+        url: feed.url,
+        rangeStart,
+        rangeEnd,
+      });
+
+      successfulIntervals.push(...fetchedIntervals);
+      successfulFeedCount += 1;
+      await db.collection(collections.organizerCalendarFeeds).doc(feed.id).set(
+        {
+          lastSyncedAt: nowIso(),
+          lastSyncStatus: "success",
+          lastSyncError: FieldValue.delete(),
+          updatedAt: nowIso(),
+        },
+        { merge: true },
+      );
+    } catch (error) {
+      await db.collection(collections.organizerCalendarFeeds).doc(feed.id).set(
+        {
+          lastSyncedAt: nowIso(),
+          lastSyncStatus: "error",
+          lastSyncError:
+            error instanceof Error ? error.message : "Nie udało się pobrać feedu iCal.",
+          updatedAt: nowIso(),
+        },
+        { merge: true },
+      );
+    }
+  }
+
+  if (enabledFeeds.length > 0 && successfulFeedCount === 0) {
+    return;
+  }
+
+  const groupedIntervals = splitIntervalsByMonth(mergeBusyIntervals(successfulIntervals));
+  const existingMonthDocs = await db
+    .collection(collections.organizerExternalBusyMonths)
+    .where("organizerId", "==", organizer.id)
+    .get();
+  const batch = db.batch();
+
+  existingMonthDocs.docs.forEach((docSnapshot) => {
+    batch.delete(docSnapshot.ref);
+  });
+
+  groupedIntervals.forEach((intervals, monthKey) => {
+    const monthDocId = `${organizer.id}__${monthKey}`;
+    batch.set(db.collection(collections.organizerExternalBusyMonths).doc(monthDocId), {
+      organizerId: organizer.id,
+      monthKey,
+      intervals,
+      updatedAt: nowIso(),
+    });
+  });
+
+  await batch.commit();
+}
+
+async function getOrganizerBusyIntervals(organizerId) {
+  const monthsSnapshot = await db
+    .collection(collections.organizerExternalBusyMonths)
+    .where("organizerId", "==", organizerId)
+    .get();
+
+  return monthsSnapshot.docs.flatMap((docSnapshot) => {
+    const data = docSnapshot.data();
+    return Array.isArray(data.intervals) ? data.intervals : [];
+  });
+}
+
+async function rebuildTrainerOrganizerCalendarFeed(relation) {
+  const [trainer, organizer, sharedSlots, organizerBusyIntervals] = await Promise.all([
+    findTrainerProfile(relation.trainerId),
+    findOrganizerProfile(relation.organizerId),
+    db
+      .collection(collections.trainerSharedSlots)
+      .where("trainerId", "==", relation.trainerId)
+      .get()
+      .then((snapshot) =>
+        snapshot.docs
+          .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+          .filter((slot) => slot.status !== "archived" && !slot.archivedAt),
+      ),
+    getOrganizerBusyIntervals(relation.organizerId),
+  ]);
+
+  if (!trainer || !organizer) {
+    return null;
+  }
+
+  const matchedSlots = sharedSlots.filter((slot) => !slotIntersectsIntervals(slot, organizerBusyIntervals));
+  const feedRef = db.collection(collections.trainerOrganizerCalendarFeeds).doc(relation.id);
+  const existing = await feedRef.get();
+  const current = existing.exists
+    ? existing.data()
+    : null;
+  const tokenVersion = typeof current?.tokenVersion === "number" ? current.tokenVersion : 1;
+  const token = asString(current?.token) || randomUUID();
+  const tokenHash = asString(current?.tokenHash) || hashIcalToken(token);
+  const publicFeedUrl = buildTrainerOrganizerIcalUrl(token);
+
+  await feedRef.set(
+    {
+      relationId: relation.id,
+      trainerId: relation.trainerId,
+      organizerId: relation.organizerId,
+      trainerUserId: relation.trainerUserId ?? trainer.userId,
+      organizerUserId: relation.organizerUserId ?? organizer.userId,
+      tokenVersion,
+      token,
+      tokenHash,
+      enabled: relation.status === "approved",
+      publicFeedUrl,
+      matchedSharedSlotIds: matchedSlots.map((slot) => slot.id),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return {
+    id: relation.id,
+    relationId: relation.id,
+    publicFeedUrl,
+    matchedSharedSlotIds: matchedSlots.map((slot) => slot.id),
+  };
+}
+
+async function rebuildTrainerOrganizerCalendarFeedsForTrainer(trainerId) {
+  const relationsSnapshot = await db
+    .collection(collections.relations)
+    .where("trainerId", "==", trainerId)
+    .where("status", "==", "approved")
+    .get();
+
+  const results = [];
+
+  for (const docSnapshot of relationsSnapshot.docs) {
+    const relation = {
+      id: docSnapshot.id,
+      ...docSnapshot.data(),
+    };
+    const result = await rebuildTrainerOrganizerCalendarFeed(relation);
+    if (result) {
+      results.push(result);
+    }
+  }
+
+  return results;
+}
+
+async function rebuildTrainerOrganizerCalendarFeedsForOrganizer(organizerId) {
+  const relationsSnapshot = await db
+    .collection(collections.relations)
+    .where("organizerId", "==", organizerId)
+    .where("status", "==", "approved")
+    .get();
+
+  const results = [];
+
+  for (const docSnapshot of relationsSnapshot.docs) {
+    const relation = {
+      id: docSnapshot.id,
+      ...docSnapshot.data(),
+    };
+    const result = await rebuildTrainerOrganizerCalendarFeed(relation);
+    if (result) {
+      results.push(result);
+    }
+  }
+
+  return results;
+}
+
+function getTrainerOrganizerFeedTokenUrl(token) {
+  return buildTrainerOrganizerIcalUrl(token);
 }
 
 async function syncUserAccountApprovalState(userId) {
@@ -799,6 +1861,7 @@ async function ensurePhoneParticipantAppUser(uid, { seedTrainerId } = {}) {
     authUser.phoneNumber,
     "Numer telefonu musi zostać najpierw potwierdzony kodem SMS.",
   );
+  const participantProfileId = await resolveParticipantProfileIdByPhone(verifiedPhone);
   const userRef = db.collection(collections.users).doc(uid);
   const createdAt = nowIso();
   let accountCreated = false;
@@ -869,12 +1932,25 @@ async function ensurePhoneParticipantAppUser(uid, { seedTrainerId } = {}) {
             : false,
         trainerProfileId: existingUser?.trainerProfileId ?? null,
         organizerProfileId: existingUser?.organizerProfileId ?? null,
+        participantProfileId,
         avatarUrl: asString(existingUser?.avatarUrl),
         avatarPath: existingUser?.avatarPath ?? null,
         createdAt: existingUser?.createdAt ?? createdAt,
       },
       { merge: true },
     );
+  });
+
+  await upsertParticipantProfileByPhone({
+    phoneNumber: verifiedPhone,
+    displayName: resolvePhoneUserDisplayName(null, authUser),
+    notes: "",
+    referralSource: "",
+    linkedUserId: uid,
+    avatarPath: null,
+    avatarUrl: "",
+    createdByUserId: uid,
+    confirmationStatus: "confirmed",
   });
 
   await attachEnrollmentsByPhoneToUser(uid, verifiedPhone);
@@ -905,6 +1981,158 @@ async function resolveEnrollmentContactsForEvent(event) {
       asString(event.creatorDisplayName) ||
       asString(leadUser.displayName) ||
       "Gospodarz wydarzenia",
+  };
+}
+
+async function buildEnrollmentRequestTransferContext(
+  currentRequest,
+  targetEvent,
+  {
+    participantActionSource = "participant",
+    participantStatus = "active",
+    eventParticipantId = undefined,
+    participantProfileId = undefined,
+  } = {},
+) {
+  const {
+    trainer: targetTrainer,
+    organizer: targetOrganizer,
+    leadUser: targetLeadUser,
+    organizerUser: targetOrganizerUser,
+    leadName: targetLeadName,
+  } = await resolveEnrollmentContactsForEvent(targetEvent);
+  const targetRequiresOrganizerApproval =
+    targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
+
+  const nextTrainerDecision =
+    currentRequest.trainerId === targetEvent.trainerId ? currentRequest.trainerDecision : "pending";
+  const nextOrganizerDecision = targetRequiresOrganizerApproval
+    ? currentRequest.organizerId === targetEvent.organizerId
+      ? currentRequest.organizerDecision
+      : "pending"
+    : "pending";
+
+  return {
+    trainer: targetTrainer,
+    organizer: targetOrganizer,
+    leadUser: targetLeadUser,
+    organizerUser: targetOrganizerUser,
+    leadName: targetLeadName,
+    requiresOrganizerApproval: targetRequiresOrganizerApproval,
+    trainerDecision: nextTrainerDecision,
+    organizerDecision: nextOrganizerDecision,
+    patch: {
+      eventId: targetEvent.id,
+      trainerId: targetEvent.trainerId ?? null,
+      organizerId: targetEvent.organizerId ?? null,
+      trainerUserId: targetLeadUser.id,
+      organizerUserId: targetOrganizer?.userId ?? null,
+      trainerContactName: targetLeadName,
+      trainerContactPhone: asString(targetLeadUser.phone) || null,
+      trainerContactEmail: asString(targetLeadUser.email) || null,
+      organizerContactPhone: asString(targetOrganizerUser?.phone) || null,
+      organizerContactEmail: asString(targetOrganizerUser?.email) || null,
+      organizerContactName:
+        asString(targetOrganizer?.contactName || targetOrganizer?.displayName) || null,
+      trainerDecision: nextTrainerDecision,
+      organizerDecision: nextOrganizerDecision,
+      finalStatus: deriveEnrollmentFinalStatus(
+        nextTrainerDecision,
+        nextOrganizerDecision,
+        targetRequiresOrganizerApproval,
+      ),
+      requiresOrganizerApproval: targetRequiresOrganizerApproval,
+      participantStatus,
+      participantManagedAt: nowIso(),
+      participantActionSource,
+      ...(eventParticipantId === undefined ? {} : { eventParticipantId: eventParticipantId || null }),
+      ...(participantProfileId === undefined
+        ? {}
+        : { participantProfileId: participantProfileId || null }),
+      ...buildAttendanceResetFields(),
+    },
+  };
+}
+
+async function findEnrollmentRequestConflictForParticipant({
+  eventId,
+  participantProfileId,
+  phone,
+  excludeRequestId = null,
+}) {
+  const requests = await getEnrollmentRequestsForEvent(eventId);
+  const phoneLookupKey = normalizePhoneLookupKey(phone);
+
+  return (
+    requests.find((request) => {
+      if (request.id === excludeRequestId) {
+        return false;
+      }
+
+      return (
+        (participantProfileId && asString(request.participantProfileId) === participantProfileId) ||
+        (phoneLookupKey &&
+          normalizePhoneLookupKey(asString(request.telefon)) === phoneLookupKey)
+      );
+    }) || null
+  );
+}
+
+async function buildEnrollmentTransferPatch({
+  currentRequest,
+  targetEvent,
+  participantProfileId,
+  eventParticipantId,
+  participantActionSource = "participant",
+}) {
+  const {
+    organizer: targetOrganizer,
+    leadUser: targetLeadUser,
+    organizerUser: targetOrganizerUser,
+    leadName: targetLeadName,
+  } = await resolveEnrollmentContactsForEvent(targetEvent);
+  const targetRequiresOrganizerApproval =
+    targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
+
+  const nextTrainerDecision =
+    currentRequest.trainerId === targetEvent.trainerId ? currentRequest.trainerDecision : "pending";
+  const nextOrganizerDecision = targetRequiresOrganizerApproval
+    ? currentRequest.organizerId === targetEvent.organizerId
+      ? currentRequest.organizerDecision
+      : "pending"
+    : "pending";
+
+  return {
+    patch: {
+      eventId: targetEvent.id,
+      trainerId: targetEvent.trainerId ?? null,
+      organizerId: targetEvent.organizerId ?? null,
+      trainerUserId: targetLeadUser.id,
+      organizerUserId: targetOrganizer?.userId ?? null,
+      trainerContactName: targetLeadName,
+      trainerContactPhone: asString(targetLeadUser.phone) || null,
+      trainerContactEmail: asString(targetLeadUser.email) || null,
+      organizerContactPhone: asString(targetOrganizerUser?.phone) || null,
+      organizerContactEmail: asString(targetOrganizerUser?.email) || null,
+      organizerContactName:
+        asString(targetOrganizer?.contactName || targetOrganizer?.displayName) || null,
+      trainerDecision: nextTrainerDecision,
+      organizerDecision: nextOrganizerDecision,
+      finalStatus: deriveEnrollmentFinalStatus(
+        nextTrainerDecision,
+        nextOrganizerDecision,
+        targetRequiresOrganizerApproval,
+      ),
+      requiresOrganizerApproval: targetRequiresOrganizerApproval,
+      participantProfileId: participantProfileId ?? null,
+      eventParticipantId: eventParticipantId ?? null,
+      participantStatus: "active",
+      participantManagedAt: nowIso(),
+      participantActionSource,
+      ...buildAttendanceResetFields(),
+    },
+    targetLeadUser,
+    targetOrganizer,
   };
 }
 
@@ -1030,6 +2258,101 @@ async function requireApprovedRelation(trainer, organizer) {
   }
 
   return relation;
+}
+
+async function upsertParticipantProfileByPhone({
+  phoneNumber,
+  displayName,
+  notes = "",
+  referralSource = "",
+  linkedUserId = null,
+  avatarPath = null,
+  avatarUrl = "",
+  createdByOrganizerId = null,
+  createdByUserId = null,
+  confirmationStatus = "unconfirmed",
+}) {
+  const normalizedPhone = normalizePhoneLookupKey(phoneNumber);
+  const existingProfileByPhone = await findParticipantProfileByPhoneLookupKey(normalizedPhone);
+  const participantProfileId = existingProfileByPhone?.id || buildParticipantProfileId(phoneNumber);
+  const participantProfileRef = db.collection(collections.participantProfiles).doc(participantProfileId);
+  const participantProfileSnapshot = await participantProfileRef.get();
+  const existingProfile = participantProfileSnapshot.exists
+    ? { id: participantProfileSnapshot.id, ...participantProfileSnapshot.data() }
+    : existingProfileByPhone;
+  const identity = splitDisplayName(displayName || existingProfile?.displayName || phoneNumber);
+
+  await participantProfileRef.set(
+    {
+      displayName: identity.displayName,
+      firstName: identity.firstName,
+      lastName: identity.lastName,
+      phone: phoneNumber,
+      phoneLookupKey: normalizedPhone,
+      notes: asString(notes || existingProfile?.notes),
+      referralSource: asString(referralSource || existingProfile?.referralSource),
+      avatarPath: avatarPath || existingProfile?.avatarPath || null,
+      avatarUrl: avatarUrl || asString(existingProfile?.avatarUrl),
+      linkedUserId: linkedUserId || existingProfile?.linkedUserId || null,
+      confirmationStatus:
+        linkedUserId || confirmationStatus === "confirmed"
+          ? "confirmed"
+          : existingProfile?.confirmationStatus || "unconfirmed",
+      status: existingProfile?.status || "active",
+      managerOrganizerIds: existingProfile?.managerOrganizerIds || [],
+      managerOrganizerUserIds: existingProfile?.managerOrganizerUserIds || [],
+      managerTrainerIds: existingProfile?.managerTrainerIds || [],
+      managerTrainerUserIds: existingProfile?.managerTrainerUserIds || [],
+      groupIds: existingProfile?.groupIds || [],
+      activeGroupIds: existingProfile?.activeGroupIds || [],
+      createdAt: existingProfile?.createdAt || nowIso(),
+      updatedAt: nowIso(),
+      createdByOrganizerId: existingProfile?.createdByOrganizerId ?? createdByOrganizerId,
+      createdByUserId: existingProfile?.createdByUserId ?? createdByUserId,
+      confirmedAt:
+        linkedUserId || confirmationStatus === "confirmed"
+          ? existingProfile?.confirmedAt || nowIso()
+          : existingProfile?.confirmedAt || null,
+    },
+    { merge: true },
+  );
+
+  return {
+    id: participantProfileId,
+    ...(await participantProfileRef.get()).data(),
+  };
+}
+
+async function syncParticipantProfileOwnership(participantProfileId) {
+  const participantProfileRef = db.collection(collections.participantProfiles).doc(participantProfileId);
+  const membersSnapshot = await db
+    .collection(collections.groupMembers)
+    .where("participantProfileId", "==", participantProfileId)
+    .get();
+  const activeMembers = membersSnapshot.docs
+    .map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }))
+    .filter((member) => member.membershipStatus === "active");
+
+  await participantProfileRef.set(
+    {
+      groupIds: Array.from(new Set(activeMembers.map((member) => member.groupId))),
+      activeGroupIds: Array.from(new Set(activeMembers.map((member) => member.groupId))),
+      managerOrganizerIds: Array.from(
+        new Set(activeMembers.map((member) => member.organizerId).filter(Boolean)),
+      ),
+      managerOrganizerUserIds: Array.from(
+        new Set(activeMembers.map((member) => member.organizerUserId).filter(Boolean)),
+      ),
+      managerTrainerIds: Array.from(
+        new Set(activeMembers.map((member) => member.trainerId).filter(Boolean)),
+      ),
+      managerTrainerUserIds: Array.from(
+        new Set(activeMembers.map((member) => member.trainerUserId).filter(Boolean)),
+      ),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
 }
 
 function ensureEventCanAcceptEnrollment(event) {
@@ -1168,9 +2491,39 @@ async function getEnrollmentRequestsForEvent(eventId) {
   }));
 }
 
+async function getEventParticipantsForEvent(eventId) {
+  const snapshot = await db
+    .collection(collections.eventParticipants)
+    .where("eventId", "==", eventId)
+    .get();
+
+  return snapshot.docs.map((docSnapshot) => ({
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  }));
+}
+
 async function findEnrollmentRequestByTokenHash(tokenHash) {
   const snapshot = await db
     .collection(collections.enrollmentRequests)
+    .where("attendanceConfirmationTokenHash", "==", tokenHash)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const docSnapshot = snapshot.docs[0];
+  return {
+    id: docSnapshot.id,
+    ...docSnapshot.data(),
+  };
+}
+
+async function findEventParticipantByTokenHash(tokenHash) {
+  const snapshot = await db
+    .collection(collections.eventParticipants)
     .where("attendanceConfirmationTokenHash", "==", tokenHash)
     .limit(1)
     .get();
@@ -1191,6 +2544,83 @@ async function syncEventEnrollmentState(eventId) {
   if (!event) {
     return;
   }
+
+  if (event.groupId) {
+    const [group, requests] = await Promise.all([
+      requireGroup(event.groupId),
+      getEnrollmentRequestsForEvent(eventId),
+    ]);
+    const [organizer, trainer] = await Promise.all([
+      requireOrganizerProfile(group.organizerId),
+      requireTrainerProfile(group.trainerId),
+    ]);
+    const syncedParticipantProfileIds = new Set();
+
+    for (const request of requests) {
+      const result = await syncGroupedEnrollmentRequestRoster({
+        enrollmentRequest: request,
+        event,
+        group,
+        organizer,
+        trainer,
+      });
+
+      if (result.participantProfileId) {
+        syncedParticipantProfileIds.add(result.participantProfileId);
+      }
+    }
+
+    const existingParticipantsSnapshot = await db
+      .collection(collections.eventParticipants)
+      .where("eventId", "==", eventId)
+      .get();
+
+    for (const docSnapshot of existingParticipantsSnapshot.docs) {
+      const participant = {
+        id: docSnapshot.id,
+        ...docSnapshot.data(),
+      };
+
+      if (
+        participant.source === "public-form" &&
+        !syncedParticipantProfileIds.has(asString(participant.participantProfileId)) &&
+        participant.status !== "removed"
+      ) {
+        await db.collection(collections.eventParticipants).doc(participant.id).set(
+          buildEventParticipantStatusPatch("removed", participant),
+          { merge: true },
+        );
+      }
+    }
+
+    const refreshedParticipantsSnapshot = await db
+      .collection(collections.eventParticipants)
+      .where("eventId", "==", eventId)
+      .get();
+    const participants = refreshedParticipantsSnapshot.docs.map((docSnapshot) => ({
+      id: docSnapshot.id,
+      ...docSnapshot.data(),
+    }));
+    const activeCount = countActiveEventParticipants(participants);
+    const capacity = Math.max(1, asNumber(event.capacity, 1));
+    const minimumParticipants = Math.max(
+      1,
+      Math.min(capacity, resolveMinimumParticipants(event)),
+    );
+    const nextStatus = resolveManagedEventStatus(event.status, activeCount, minimumParticipants);
+
+    await db.collection(collections.trainingEvents).doc(eventId).set(
+      {
+        enrolledCount: activeCount,
+        status: nextStatus,
+        minimumParticipants,
+      },
+      { merge: true },
+    );
+
+    return;
+  }
+
   const requests = await getEnrollmentRequestsForEvent(eventId);
   const acceptedCount = countAcceptedEnrollmentRequests(requests);
   const capacity = Math.max(1, asNumber(event.capacity, 1));
@@ -1584,6 +3014,7 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
     .doc(buildPhoneAccountRequestId(uid));
   const userRef = db.collection(collections.users).doc(uid);
   const createdAt = nowIso();
+  const participantProfileId = await resolveParticipantProfileIdByPhone(verifiedPhone);
 
   const registrationResult = await db.runTransaction(async (transaction) => {
     const existingUserSnapshot = await transaction.get(userRef);
@@ -1630,6 +3061,7 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
       approvedTrainerIds: nextApprovedTrainerIds,
       trainerProfileId: existingUser.trainerProfileId ?? null,
       organizerProfileId: existingUser.organizerProfileId ?? null,
+      participantProfileId,
       participantOnboardingCompletedAt: createdAt,
       createdAt: existingUser.createdAt ?? createdAt,
       communityEventAutoApprove:
@@ -1657,9 +3089,22 @@ export const finalizePhoneRegistration = onCall(callableOptions(), async (reques
       createdUserId: uid,
       trainerProfileId: existingUser.trainerProfileId ?? null,
       organizerProfileId: existingUser.organizerProfileId ?? null,
+      participantProfileId,
     }, { merge: true });
 
     return { accountCreated: !existingUserSnapshot.exists };
+  });
+
+  await upsertParticipantProfileByPhone({
+    phoneNumber: verifiedPhone,
+    displayName,
+    notes,
+    referralSource: asString(currentUser.referralSource),
+    linkedUserId: uid,
+    avatarPath: avatarPath || null,
+    avatarUrl: avatarUrl || "",
+    createdByUserId: uid,
+    confirmationStatus: "confirmed",
   });
 
   return {
@@ -1775,6 +3220,381 @@ export const ensurePhoneParticipantProfile = onCall(callableOptions(), async (re
   return ensurePhoneParticipantAppUser(uid, {
     seedTrainerId,
   });
+});
+
+export const createGroup = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może tworzyć grupy.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const trainerId = requiredString(request.data?.trainerId, "Wybierz trenera grupy.");
+  const trainer = await requireTrainerProfile(trainerId);
+  await requireApprovedRelationByIds(trainer.id, organizer.id);
+
+  const groupId = createId("group");
+  const createdAt = nowIso();
+
+  await db.collection(collections.groups).doc(groupId).set({
+    name: requiredString(request.data?.name, "Podaj nazwę grupy."),
+    organizerId: organizer.id,
+    organizerUserId: organizer.userId,
+    trainerId: trainer.id,
+    trainerUserId: trainer.userId,
+    status: "active",
+    notes: asString(request.data?.notes),
+    defaultLocation: asString(request.data?.defaultLocation),
+    defaultEventType: resolveGroupEventType(request.data?.defaultEventType),
+    defaultCapacity: Math.max(1, asNumber(request.data?.defaultCapacity, 20)),
+    defaultTags: normalizeEventTags(request.data?.defaultTags),
+    defaultConfirmationLeadTimeDays: Math.max(
+      0,
+      Math.round(asNumber(request.data?.defaultConfirmationLeadTimeDays, 7)),
+    ),
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  return { ok: true, groupId };
+});
+
+export const updateGroup = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zmieniać grupy.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const groupId = requiredString(request.data?.groupId, "Brak identyfikatora grupy.");
+  const group = await requireGroup(groupId);
+
+  if (group.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz zmieniać tylko własne grupy.");
+  }
+
+  await db.collection(collections.groups).doc(groupId).set(
+    {
+      name: requiredString(request.data?.name, "Podaj nazwę grupy."),
+      notes: asString(request.data?.notes),
+      defaultLocation: asString(request.data?.defaultLocation),
+      defaultEventType: resolveGroupEventType(request.data?.defaultEventType),
+      defaultCapacity: Math.max(1, asNumber(request.data?.defaultCapacity, 20)),
+      defaultTags: normalizeEventTags(request.data?.defaultTags),
+      defaultConfirmationLeadTimeDays: Math.max(
+        0,
+        Math.round(asNumber(request.data?.defaultConfirmationLeadTimeDays, 7)),
+      ),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return { ok: true };
+});
+
+export const archiveGroup = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może archiwizować grupy.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const groupId = requiredString(request.data?.groupId, "Brak identyfikatora grupy.");
+  const group = await requireGroup(groupId);
+
+  if (group.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz archiwizować tylko własne grupy.");
+  }
+
+  await db.collection(collections.groups).doc(groupId).set(
+    {
+      status: "archived",
+      archivedAt: nowIso(),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return { ok: true };
+});
+
+export const upsertOrganizerParticipantProfile = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError(
+      "permission-denied",
+      "Tylko organizator może zarządzać profilami uczestników.",
+    );
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const trainerId =
+    asString(request.data?.trainerId) ||
+    asString((await findGroup(asString(request.data?.groupId)))?.trainerId);
+  const trainer = trainerId
+    ? await requireTrainerProfile(trainerId)
+    : await requireTrainerProfile(
+        requiredString(request.data?.trainerId, "Wybierz trenera dla profilu uczestnika."),
+      );
+
+  const profile = await upsertManagedParticipantProfile({
+    organizer,
+    trainer,
+    displayName: request.data?.displayName,
+    phone: request.data?.phone,
+    notes: request.data?.notes,
+    referralSource: request.data?.referralSource,
+    participantProfileId: asString(request.data?.participantProfileId),
+    createdByUserId: user.id,
+  });
+
+  return { ok: true, participantProfileId: profile.id };
+});
+
+export const addGroupMember = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zarządzać grupą.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const groupId = requiredString(request.data?.groupId, "Brak identyfikatora grupy.");
+  const group = await requireGroup(groupId);
+
+  if (group.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz zmieniać tylko własne grupy.");
+  }
+
+  const trainer = await requireTrainerProfile(group.trainerId);
+  const participantProfile =
+    asString(request.data?.participantProfileId)
+      ? await requireParticipantProfile(asString(request.data?.participantProfileId))
+      : await upsertManagedParticipantProfile({
+          organizer,
+          trainer,
+          displayName: request.data?.displayName,
+          phone: request.data?.phone,
+          notes: request.data?.notes,
+          referralSource: request.data?.referralSource,
+          createdByUserId: user.id,
+        });
+
+  const groupMember = await ensureGroupMember({
+    group,
+    participantProfile,
+    priority: request.data?.priority,
+    notes: request.data?.notes,
+  });
+
+  return { ok: true, memberId: groupMember.id, participantProfileId: participantProfile.id };
+});
+
+export const updateGroupMember = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zmieniać członków grupy.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const memberId = requiredString(request.data?.memberId, "Brak identyfikatora członka grupy.");
+  const member = await requireDocument(
+    collections.groupMembers,
+    memberId,
+    "Nie znaleziono członka grupy.",
+  );
+
+  if (member.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz zmieniać tylko własne grupy.");
+  }
+
+  await db.collection(collections.groupMembers).doc(memberId).set(
+    {
+      priority: normalizeGroupMemberPriority(request.data?.priority),
+      notes: asString(request.data?.notes),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return { ok: true };
+});
+
+export const removeGroupMember = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może usuwać członków grupy.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const memberId = requiredString(request.data?.memberId, "Brak identyfikatora członka grupy.");
+  const member = await requireDocument(
+    collections.groupMembers,
+    memberId,
+    "Nie znaleziono członka grupy.",
+  );
+
+  if (member.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz zmieniać tylko własne grupy.");
+  }
+
+  await db.collection(collections.groupMembers).doc(memberId).set(
+    {
+      membershipStatus: "removed",
+      removedAt: nowIso(),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await db.collection(collections.participantProfiles).doc(member.participantProfileId).set(
+    {
+      activeGroupIds: FieldValue.arrayRemove(member.groupId),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return { ok: true };
+});
+
+export const assignEventParticipant = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zarządzać składem wydarzenia.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora wydarzenia.");
+  const event = await requireEvent(eventId);
+
+  if (event.organizerId !== organizer.id || !event.groupId) {
+    throw new HttpsError("permission-denied", "Możesz zarządzać tylko własnym wydarzeniem grupowym.");
+  }
+
+  const group = await requireGroup(event.groupId);
+  const trainer = await requireTrainerProfile(group.trainerId);
+  const participantProfile =
+    asString(request.data?.participantProfileId)
+      ? await requireParticipantProfile(asString(request.data?.participantProfileId))
+      : await upsertManagedParticipantProfile({
+          organizer,
+          trainer,
+          displayName: request.data?.displayName,
+          phone: request.data?.phone,
+          notes: request.data?.notes,
+          referralSource: request.data?.referralSource,
+          createdByUserId: user.id,
+        });
+
+  let member = await findGroupMemberByGroupAndParticipant(group.id, participantProfile.id);
+  if (!member) {
+    member = await ensureGroupMember({
+      group,
+      participantProfile,
+      priority: request.data?.priority || "rezerwowi",
+      notes: request.data?.notes,
+    });
+  }
+
+  const eventParticipant = await upsertEventParticipantAssignment({
+    event,
+    participantProfile,
+    priority: member.priority,
+    source: "organizer",
+    overCapacity: Boolean(request.data?.overCapacity),
+  });
+
+  return { ok: true, eventParticipantId: eventParticipant.id };
+});
+
+export const updateEventParticipantStatus = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user) {
+    throw new HttpsError("permission-denied", "Musisz być zalogowany.");
+  }
+
+  const eventParticipantId = requiredString(
+    request.data?.eventParticipantId,
+    "Brak identyfikatora uczestnika wydarzenia.",
+  );
+  const status =
+    request.data?.status === "confirmed" ||
+    request.data?.status === "declined" ||
+    request.data?.status === "removed" ||
+    request.data?.status === "invited"
+      ? request.data.status
+      : null;
+
+  if (!status) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny status uczestnika wydarzenia.");
+  }
+
+  const eventParticipant = await requireDocument(
+    collections.eventParticipants,
+    eventParticipantId,
+    "Nie znaleziono uczestnika wydarzenia.",
+  );
+
+  if (
+    user.role !== "admin" &&
+    !(user.role === "organizer" && user.organizerProfileId === eventParticipant.organizerId)
+  ) {
+    throw new HttpsError("permission-denied", "Brak dostępu do tego uczestnika wydarzenia.");
+  }
+
+  const eventParticipantPatch = {
+    ...buildEventParticipantStatusPatch(status, eventParticipant),
+    ...buildEventParticipantAttendancePatchFromStatus(status, eventParticipant),
+  };
+  await db.collection(collections.eventParticipants).doc(eventParticipantId).set(
+    eventParticipantPatch,
+    { merge: true },
+  );
+  await syncEnrollmentRequestFromEventParticipant({
+    ...eventParticipant,
+    ...eventParticipantPatch,
+  });
+  await syncEventEnrollmentState(eventParticipant.eventId);
+
+  return { ok: true };
+});
+
+export const finalizeEventRoster = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zatwierdzać skład wydarzenia.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora wydarzenia.");
+  const event = await requireEvent(eventId);
+
+  if (event.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz zatwierdzać tylko własne wydarzenia.");
+  }
+
+  if (!event.groupId) {
+    throw new HttpsError("failed-precondition", "To działanie dotyczy tylko wydarzeń grupowych.");
+  }
+
+  const context = await resolveNotificationContextForEvent(event);
+  const eventParticipants = await getEventParticipantsForEvent(event.id);
+
+  await db.collection(collections.trainingEvents).doc(eventId).set(
+    {
+      rosterFinalizedAt: nowIso(),
+      rosterFinalizedByUserId: user.id,
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  for (const eventParticipant of eventParticipants) {
+    await notifyFinalizedGroupEventParticipant(event, context.settings, eventParticipant);
+  }
+
+  return { ok: true };
 });
 
 export const getCommunityEventReview = onCall(callableOptions(), async (request) => {
@@ -2141,6 +3961,24 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     await requireApprovedRelation(trainer, organizer);
   }
 
+  const group =
+    !isCommunityTrainer
+      ? await requireGroup(requiredString(input.groupId, "Najpierw wybierz grupę dla szkolenia."))
+      : null;
+
+  if (group) {
+    if (group.status !== "active") {
+      throw new HttpsError("failed-precondition", "Możesz użyć tylko aktywnej grupy.");
+    }
+
+    if (group.trainerId !== trainer.id || group.organizerId !== organizer?.id) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Ta grupa nie należy do wybranej relacji trener-organizator.",
+      );
+    }
+  }
+
   const normalizedScheduleDays = normalizeScheduleDays(input.scheduleDays);
   const firstScheduleDay = normalizedScheduleDays[0];
   const lastScheduleDay = normalizedScheduleDays[normalizedScheduleDays.length - 1];
@@ -2156,13 +3994,23 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     1,
     Math.min(capacity, asNumber(input.minimumParticipants, capacity)),
   );
+  const eligibleGroupPriorities = normalizeEligibleGroupPriorities(input.eligibleGroupPriorities);
+  const confirmationLeadTimeDays = Math.max(
+    0,
+    asNumber(input.confirmationLeadTimeDays, group?.defaultConfirmationLeadTimeDays ?? 7),
+  );
   const eventTitle = isCommunityTrainer
     ? requiredString(input.title, "Podaj tytuł wydarzenia społeczności.")
     : trimmedLocation;
+  const eventTypeSystem = isCommunityTrainer
+    ? null
+    : resolveGroupEventType(input.eventTypeSystem ?? group?.defaultEventType);
 
   const eventPayload = {
     trainerId: trainer?.id ?? null,
     organizerId: organizer?.id ?? null,
+    groupId: group?.id ?? null,
+    groupName: group?.name ?? null,
     trainerUserId: trainer?.userId ?? null,
     organizerUserId: organizer?.userId ?? null,
     creatorUserId: user.role === "participant" ? user.id : null,
@@ -2175,6 +4023,7 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     summary: requiredString(input.summary, "Podaj krótki opis szkolenia."),
     description: requiredString(input.description, "Podaj pełny opis szkolenia."),
     type: requiredString(input.type, "Podaj typ szkolenia."),
+    eventTypeSystem,
     startsAt: firstScheduleDay.startsAt,
     endsAt: lastScheduleDay.endsAt,
     scheduleDays: normalizedScheduleDays,
@@ -2190,6 +4039,8 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
     status: resolveTrainingEventStatus(input.status),
     minimumParticipants,
     requiresOrganizerApproval: !isCommunityTrainer && !selfManagedByTrainer,
+    eligibleGroupPriorities: isCommunityTrainer ? [] : eligibleGroupPriorities,
+    confirmationLeadTimeDays: isCommunityTrainer ? null : confirmationLeadTimeDays,
     trainerCollaborationStatus:
       isCommunityTrainer || user.role === "trainer" || isParticipantOfficialCreate
         ? "accepted"
@@ -2226,6 +4077,13 @@ export const createUnifiedTrainingEvent = onCall(callableOptions(), async (reque
 
   if (isCommunityTrainer && !shouldAutoPublishCommunityEvent) {
     await queueCommunityEventReviewSms({
+      id: docRef.id,
+      ...eventPayload,
+    });
+  }
+
+  if (!isCommunityTrainer && group) {
+    await autoAssignCoreMembersToEvent({
       id: docRef.id,
       ...eventPayload,
     });
@@ -2351,6 +4209,7 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
   const profilePhone =
     asString(authUser.phoneNumber) ||
     requiredString(enrollmentRequest.get("telefon"), "Brak numeru telefonu w zgłoszeniu.");
+  const participantProfileId = await resolveParticipantProfileIdByPhone(profilePhone);
   const profileReferralSource = asString(enrollmentRequest.get("polecenieOdKogo"));
   const profileNotes = asString(enrollmentRequest.get("wiadomosc"));
   const userRef = db.collection(collections.users).doc(uid);
@@ -2359,6 +4218,13 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
     .doc(buildPhoneAccountRequestId(uid));
   const userSnapshot = await userRef.get();
   const currentUser = userSnapshot.exists ? { id: userSnapshot.id, ...userSnapshot.data() } : null;
+
+  await requestRef.set(
+    {
+      participantProfileId,
+    },
+    { merge: true },
+  );
 
   await userRef.set(
     {
@@ -2370,6 +4236,7 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
       avatarUrl: avatarUrl || asString(currentUser?.avatarUrl),
       authProvider: "phone",
       phoneVerifiedAt: asString(currentUser?.phoneVerifiedAt) || nowIso(),
+      participantProfileId,
     },
     { merge: true },
   );
@@ -2392,9 +4259,22 @@ export const finalizeEnrollmentDraft = onCall(callableOptions(), async (request)
       createdAt: asString(currentUser?.createdAt) || nowIso(),
       reviewedByUserId: "enrollment-self-service",
       reviewedAt: nowIso(),
+      participantProfileId,
     },
     { merge: true },
   );
+
+  await upsertParticipantProfileByPhone({
+    phoneNumber: profilePhone,
+    displayName: profileDisplayName,
+    notes: profileNotes,
+    referralSource: profileReferralSource,
+    linkedUserId: uid,
+    avatarPath: avatarPath || currentUser?.avatarPath || null,
+    avatarUrl: avatarUrl || asString(currentUser?.avatarUrl),
+    createdByUserId: uid,
+    confirmationStatus: "confirmed",
+  });
 
   if (authUser.displayName !== profileDisplayName) {
     await auth.updateUser(uid, { displayName: profileDisplayName });
@@ -2674,55 +4554,21 @@ export const manageOwnEnrollment = onCall(callableOptions(), async (request) => 
     throw new HttpsError("failed-precondition", "Możesz przenieść się tylko na szkolenie tego samego typu.");
   }
 
-  const targetRequests = await getEnrollmentRequestsForEvent(targetEvent.id);
-  if (countAcceptedEnrollmentRequests(targetRequests) >= Math.max(1, asNumber(targetEvent.capacity, 1))) {
+  const targetEnrollmentCount = await countManagedEventEnrollments(targetEvent);
+  if (targetEnrollmentCount >= Math.max(1, asNumber(targetEvent.capacity, 1))) {
     throw new HttpsError("failed-precondition", "To szkolenie nie ma już wolnych miejsc.");
   }
 
-  const {
-    trainer: targetTrainer,
-    organizer: targetOrganizer,
-    leadUser: targetLeadUser,
-    organizerUser: targetOrganizerUser,
-    leadName: targetLeadName,
-  } = await resolveEnrollmentContactsForEvent(targetEvent);
-  const targetRequiresOrganizerApproval =
-    targetEvent.requiresOrganizerApproval ?? !isSelfManagedTrainingEvent(targetEvent);
-
-  const nextTrainerDecision =
-    currentRequest.trainerId === targetEvent.trainerId ? currentRequest.trainerDecision : "pending";
-  const nextOrganizerDecision = targetRequiresOrganizerApproval
-    ? currentRequest.organizerId === targetEvent.organizerId
-      ? currentRequest.organizerDecision
-      : "pending"
-    : "pending";
+  const { patch: requestTransferPatch, targetLeadUser, targetOrganizer } =
+    await buildEnrollmentTransferPatch({
+      currentRequest,
+      targetEvent,
+      participantProfileId: currentRequest.participantProfileId ?? null,
+      eventParticipantId: null,
+    });
 
   await enrollmentRef.set(
-    {
-      eventId: targetEvent.id,
-      trainerId: targetEvent.trainerId ?? null,
-      organizerId: targetEvent.organizerId ?? null,
-      trainerUserId: targetLeadUser.id,
-      organizerUserId: targetOrganizer?.userId ?? null,
-      trainerContactName: targetLeadName,
-      trainerContactPhone: asString(targetLeadUser.phone) || null,
-      trainerContactEmail: asString(targetLeadUser.email) || null,
-      organizerContactPhone: asString(targetOrganizerUser?.phone) || null,
-      organizerContactEmail: asString(targetOrganizerUser?.email) || null,
-      organizerContactName: asString(targetOrganizer?.contactName || targetOrganizer?.displayName) || null,
-      trainerDecision: nextTrainerDecision,
-      organizerDecision: nextOrganizerDecision,
-      finalStatus: deriveEnrollmentFinalStatus(
-        nextTrainerDecision,
-        nextOrganizerDecision,
-        targetRequiresOrganizerApproval,
-      ),
-      requiresOrganizerApproval: targetRequiresOrganizerApproval,
-      participantStatus: "active",
-      participantManagedAt: nowIso(),
-      participantActionSource: "participant",
-      ...buildAttendanceResetFields(),
-    },
+    requestTransferPatch,
     { merge: true },
   );
 
@@ -2746,6 +4592,273 @@ export const manageOwnEnrollment = onCall(callableOptions(), async (request) => 
   return { ok: true };
 });
 
+export const manageOwnGroupEventParticipation = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || user.role !== "participant") {
+    throw new HttpsError("permission-denied", "Tylko uczestnik może zarządzać swoim wpisem grupowym.");
+  }
+
+  const eventParticipantId = requiredString(
+    request.data?.eventParticipantId,
+    "Brak identyfikatora uczestnika wydarzenia.",
+  );
+  const action =
+    request.data?.action === "cancel" || request.data?.action === "transfer"
+      ? request.data.action
+      : null;
+
+  if (!action) {
+    throw new HttpsError("invalid-argument", "Podaj poprawną akcję uczestnika.");
+  }
+
+  const eventParticipant = await requireEventParticipant(eventParticipantId);
+  const ownsEventParticipant =
+    (user.participantProfileId &&
+      user.participantProfileId === eventParticipant.participantProfileId) ||
+    user.id === eventParticipant.participantUserId;
+
+  if (!ownsEventParticipant) {
+    throw new HttpsError("permission-denied", "Możesz zarządzać tylko własnym wpisem grupowym.");
+  }
+
+  const event = await requireEvent(eventParticipant.eventId);
+  const eventEndsAt = new Date(event.endsAt);
+
+  if (
+    isTrainingEventArchived(event) ||
+    (Number.isFinite(eventEndsAt.getTime()) && eventEndsAt.getTime() < Date.now())
+  ) {
+    throw new HttpsError("failed-precondition", "To wydarzenie jest już w archiwum uczestnika.");
+  }
+
+  if (eventParticipant.status === "removed") {
+    throw new HttpsError("failed-precondition", "Ten wpis został już wcześniej usunięty.");
+  }
+
+  if (action === "transfer") {
+    if (!isEventParticipantActiveStatus(eventParticipant.status)) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Możesz przenosić tylko aktywny udział w wydarzeniu grupowym.",
+      );
+    }
+
+    const targetEventId = requiredString(
+      request.data?.transferTargetEventId,
+      "Wybierz docelowe wydarzenie do przeniesienia.",
+    );
+
+    if (targetEventId === event.id) {
+      throw new HttpsError("failed-precondition", "Wybierz inne wydarzenie docelowe.");
+    }
+
+    const targetEvent = await requireEvent(targetEventId);
+    ensureEventCanAcceptEnrollment(targetEvent);
+
+    if (
+      !event.groupId ||
+      !targetEvent.groupId ||
+      !eventParticipant.groupId ||
+      targetEvent.groupId !== event.groupId ||
+      eventParticipant.groupId !== event.groupId
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Możesz przenieść się tylko między wydarzeniami tej samej grupy.",
+      );
+    }
+
+    if (
+      targetEvent.trainerId !== event.trainerId ||
+      (targetEvent.organizerId || null) !== (event.organizerId || null)
+    ) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Docelowe wydarzenie musi należeć do tego samego zestawu trener-organizator.",
+      );
+    }
+
+    if (event.rosterFinalizedAt || targetEvent.rosterFinalizedAt) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Nie możesz przenosić udziału po zamknięciu rosteru źródłowego albo docelowego wydarzenia.",
+      );
+    }
+
+    const sourceStartsAt = new Date(event.startsAt);
+    if (Number.isFinite(sourceStartsAt.getTime()) && sourceStartsAt.getTime() <= Date.now()) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Nie możesz przenieść udziału po rozpoczęciu źródłowego wydarzenia.",
+      );
+    }
+
+    const targetStartsAt = new Date(targetEvent.startsAt);
+    if (Number.isFinite(targetStartsAt.getTime()) && targetStartsAt.getTime() <= Date.now()) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Nie możesz przenieść się na wydarzenie, które już się rozpoczęło.",
+      );
+    }
+
+    const groupMember = await findGroupMemberByGroupAndParticipant(
+      event.groupId,
+      eventParticipant.participantProfileId,
+    );
+    if (!groupMember || groupMember.membershipStatus !== "active") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Tylko aktywny członek grupy może przenieść się między jej wydarzeniami.",
+      );
+    }
+
+    const eligiblePriorities = normalizeEligibleGroupPriorities(
+      targetEvent.eligibleGroupPriorities,
+    );
+    if (!eligiblePriorities.includes(normalizeGroupMemberPriority(groupMember.priority))) {
+      throw new HttpsError(
+        "failed-precondition",
+        "To wydarzenie nie przyjmuje teraz uczestników z Twoim priorytetem w grupie.",
+      );
+    }
+
+    const existingTargetEventParticipant = await findEventParticipantByEventAndParticipant(
+      targetEvent.id,
+      eventParticipant.participantProfileId,
+    );
+
+    if (existingTargetEventParticipant) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Masz już wpis w wybranym wydarzeniu grupowym.",
+      );
+    }
+
+    const targetEnrollmentCount = await countManagedEventEnrollments(targetEvent);
+    if (targetEnrollmentCount >= Math.max(1, asNumber(targetEvent.capacity, 1))) {
+      throw new HttpsError("failed-precondition", "To wydarzenie nie ma już wolnych miejsc.");
+    }
+
+    const participantProfile = await requireParticipantProfile(
+      eventParticipant.participantProfileId,
+    );
+    const linkedSourceRequest =
+      eventParticipant.source === "public-form"
+        ? await findLinkedEnrollmentRequestForEventParticipant(eventParticipant)
+        : null;
+
+    if (eventParticipant.source === "public-form" && !linkedSourceRequest) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Nie udało się znaleźć powiązanego zgłoszenia formularza dla tego wpisu grupowego.",
+      );
+    }
+
+    if (linkedSourceRequest) {
+      const conflictingTargetRequest = await findEnrollmentRequestConflictForParticipant({
+        eventId: targetEvent.id,
+        participantProfileId: participantProfile.id,
+        phone: participantProfile.phone,
+        excludeRequestId: linkedSourceRequest.id,
+      });
+
+      if (conflictingTargetRequest) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Masz już intake albo zgłoszenie do wybranego wydarzenia grupowego.",
+        );
+      }
+    }
+
+    const transferredEventParticipant = await upsertEventParticipantAssignment({
+      event: targetEvent,
+      participantProfile,
+      priority: groupMember.priority,
+      source: eventParticipant.source,
+      overCapacity: false,
+    });
+    const transferredEventParticipantPatch = {
+      ...buildEventParticipantStatusPatch("invited", transferredEventParticipant),
+      ...buildEventParticipantAttendancePatchFromStatus("invited", transferredEventParticipant),
+    };
+
+    await db.collection(collections.eventParticipants).doc(transferredEventParticipant.id).set(
+      transferredEventParticipantPatch,
+      { merge: true },
+    );
+
+    if (linkedSourceRequest) {
+      const { patch: requestTransferPatch } = await buildEnrollmentTransferPatch({
+        currentRequest: linkedSourceRequest,
+        targetEvent,
+        participantProfileId: transferredEventParticipant.participantProfileId,
+        eventParticipantId: transferredEventParticipant.id,
+      });
+
+      await db.collection(collections.enrollmentRequests).doc(linkedSourceRequest.id).set(
+        requestTransferPatch,
+        { merge: true },
+      );
+    }
+
+    const sourceEventParticipantPatch = {
+      ...buildEventParticipantStatusPatch("removed", eventParticipant),
+      ...buildEventParticipantAttendancePatchFromStatus("removed", eventParticipant),
+    };
+
+    await db.collection(collections.eventParticipants).doc(eventParticipant.id).set(
+      sourceEventParticipantPatch,
+      { merge: true },
+    );
+
+    await Promise.all([
+      syncEventEnrollmentState(event.id),
+      syncEventEnrollmentState(targetEvent.id),
+    ]);
+
+    await createNotifications(
+      [
+        eventParticipant.trainerUserId,
+        eventParticipant.organizerUserId,
+        targetEvent.trainerUserId,
+        targetEvent.organizerUserId,
+      ],
+      "Uczestnik przeniósł udział grupowy",
+      `${eventParticipant.participantDisplayName} przeniósł(a) się z ${event.title} do ${targetEvent.title}.`,
+      "request",
+    );
+
+    return {
+      ok: true,
+      eventParticipantId: transferredEventParticipant.id,
+      status: "invited",
+    };
+  }
+
+  const eventParticipantPatch = {
+    ...buildEventParticipantStatusPatch("removed", eventParticipant),
+    ...buildEventParticipantAttendancePatchFromStatus("removed", eventParticipant),
+  };
+
+  await db.collection(collections.eventParticipants).doc(eventParticipant.id).set(
+    eventParticipantPatch,
+    { merge: true },
+  );
+  await syncEnrollmentRequestFromEventParticipant({
+    ...eventParticipant,
+    ...eventParticipantPatch,
+  });
+  await syncEventEnrollmentState(event.id);
+  await createNotifications(
+    [eventParticipant.trainerUserId, eventParticipant.organizerUserId],
+    "Uczestnik zrezygnował ze szkolenia",
+    `${eventParticipant.participantDisplayName} zrezygnował(a) z udziału w ${event.title}.`,
+    "request",
+  );
+
+  return { ok: true };
+});
+
 export const confirmEnrollmentAttendance = onCall(callableOptions(), async (request) => {
   await requireCurrentUser(request, { allowAnonymous: true });
 
@@ -2761,44 +4874,94 @@ export const confirmEnrollmentAttendance = onCall(callableOptions(), async (requ
 
   const tokenHash = hashAttendanceToken(token);
   const enrollmentRequest = await findEnrollmentRequestByTokenHash(tokenHash);
-
-  if (!enrollmentRequest) {
-    throw new HttpsError("not-found", "Link potwierdzenia jest nieprawidłowy albo wygasł.");
-  }
-
-  if (enrollmentRequest.finalStatus !== "accepted") {
-    throw new HttpsError("failed-precondition", "To zgłoszenie nie jest już aktywne.");
-  }
-
-  const expiresAt = enrollmentRequest.attendanceConfirmationExpiresAt
-    ? new Date(enrollmentRequest.attendanceConfirmationExpiresAt)
-    : null;
-  if (expiresAt && !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() < Date.now()) {
-    throw new HttpsError("deadline-exceeded", "Link potwierdzenia już wygasł.");
-  }
-
   const nextStatus = decision === "confirm" ? "confirmed" : "declined";
-  const currentStatus = resolveAttendanceConfirmationStatus(
-    enrollmentRequest.attendanceConfirmationStatus,
-  );
+  if (enrollmentRequest) {
+    if (enrollmentRequest.finalStatus !== "accepted") {
+      throw new HttpsError("failed-precondition", "To zgłoszenie nie jest już aktywne.");
+    }
 
-  if (currentStatus === nextStatus) {
+    const expiresAt = enrollmentRequest.attendanceConfirmationExpiresAt
+      ? new Date(enrollmentRequest.attendanceConfirmationExpiresAt)
+      : null;
+    if (expiresAt && !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() < Date.now()) {
+      throw new HttpsError("deadline-exceeded", "Link potwierdzenia już wygasł.");
+    }
+
+    const currentStatus = resolveAttendanceConfirmationStatus(
+      enrollmentRequest.attendanceConfirmationStatus,
+    );
+
+    if (currentStatus === nextStatus) {
+      return { ok: true, requestId: enrollmentRequest.id, status: nextStatus };
+    }
+
+    if (currentStatus === "confirmed" || currentStatus === "declined") {
+      throw new HttpsError("failed-precondition", "To zgłoszenie zostało już wcześniej potwierdzone.");
+    }
+
+    await db.collection(collections.enrollmentRequests).doc(enrollmentRequest.id).set(
+      {
+        attendanceConfirmationStatus: nextStatus,
+        attendanceConfirmationRespondedAt: nowIso(),
+      },
+      { merge: true },
+    );
+
+    await syncEventEnrollmentState(enrollmentRequest.eventId);
+
     return { ok: true, requestId: enrollmentRequest.id, status: nextStatus };
   }
 
-  if (currentStatus === "confirmed" || currentStatus === "declined") {
-    throw new HttpsError("failed-precondition", "To zgłoszenie zostało już wcześniej potwierdzone.");
+  const eventParticipant = await findEventParticipantByTokenHash(tokenHash);
+  if (!eventParticipant) {
+    throw new HttpsError("not-found", "Link potwierdzenia jest nieprawidłowy albo wygasł.");
   }
 
-  await db.collection(collections.enrollmentRequests).doc(enrollmentRequest.id).set(
-    {
-      attendanceConfirmationStatus: nextStatus,
-      attendanceConfirmationRespondedAt: nowIso(),
-    },
+  if (eventParticipant.status === "removed") {
+    throw new HttpsError("failed-precondition", "To zaproszenie nie jest już aktywne.");
+  }
+
+  const eventParticipantExpiresAt = eventParticipant.attendanceConfirmationExpiresAt
+    ? new Date(eventParticipant.attendanceConfirmationExpiresAt)
+    : null;
+  if (
+    eventParticipantExpiresAt &&
+    !Number.isNaN(eventParticipantExpiresAt.getTime()) &&
+    eventParticipantExpiresAt.getTime() < Date.now()
+  ) {
+    throw new HttpsError("deadline-exceeded", "Link potwierdzenia już wygasł.");
+  }
+
+  const currentEventParticipantStatus = resolveAttendanceConfirmationStatus(
+    eventParticipant.attendanceConfirmationStatus,
+  );
+
+  if (currentEventParticipantStatus === nextStatus) {
+    return { ok: true, eventParticipantId: eventParticipant.id, status: nextStatus };
+  }
+
+  if (
+    currentEventParticipantStatus === "confirmed" ||
+    currentEventParticipantStatus === "declined"
+  ) {
+    throw new HttpsError("failed-precondition", "To zaproszenie zostało już wcześniej potwierdzone.");
+  }
+
+  const updatedEventParticipant = {
+    ...eventParticipant,
+    ...buildEventParticipantStatusPatch(nextStatus, eventParticipant),
+    ...buildEventParticipantAttendancePatchFromStatus(nextStatus, eventParticipant),
+  };
+
+  await db.collection(collections.eventParticipants).doc(eventParticipant.id).set(
+    updatedEventParticipant,
     { merge: true },
   );
 
-  return { ok: true, requestId: enrollmentRequest.id, status: nextStatus };
+  await syncEnrollmentRequestFromEventParticipant(updatedEventParticipant);
+  await syncEventEnrollmentState(eventParticipant.eventId);
+
+  return { ok: true, eventParticipantId: eventParticipant.id, status: nextStatus };
 });
 
 export const updateTrainingEventManagement = onCall(callableOptions(), async (request) => {
@@ -3068,6 +5231,816 @@ export const onTrainerCalendarFeedWrite = onDocumentWritten(
   },
 );
 
+async function rejectDraftEventsForSharedSlot(sharedSlotId, reason, decidedByUserId = null) {
+  const snapshot = await db
+    .collection(collections.trainingEvents)
+    .where("sharedSlotId", "==", sharedSlotId)
+    .get();
+
+  const batch = db.batch();
+  let affected = 0;
+
+  snapshot.docs.forEach((docSnapshot) => {
+    const event = docSnapshot.data();
+    if (event.workflowStatus !== "draft-requested") {
+      return;
+    }
+
+    affected += 1;
+    batch.set(
+      docSnapshot.ref,
+      {
+        workflowStatus: "trainer-rejected",
+        trainerDecisionReason: reason,
+        trainerDecidedAt: nowIso(),
+        trainerDecidedByUserId: decidedByUserId,
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  });
+
+  if (affected > 0) {
+    await batch.commit();
+  }
+
+  return affected;
+}
+
+async function rejectDraftEventsForRelation(relation, reason, decidedByUserId = null) {
+  const snapshot = await db
+    .collection(collections.trainingEvents)
+    .where("trainerId", "==", relation.trainerId)
+    .where("organizerId", "==", relation.organizerId)
+    .get();
+
+  const batch = db.batch();
+  let affected = 0;
+
+  snapshot.docs.forEach((docSnapshot) => {
+    const event = docSnapshot.data();
+    if (event.workflowStatus !== "draft-requested") {
+      return;
+    }
+
+    affected += 1;
+    batch.set(
+      docSnapshot.ref,
+      {
+        workflowStatus: "trainer-rejected",
+        trainerDecisionReason: reason,
+        trainerDecidedAt: nowIso(),
+        trainerDecidedByUserId: decidedByUserId,
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  });
+
+  if (affected > 0) {
+    await batch.commit();
+  }
+
+  return affected;
+}
+
+async function rejectConflictingDraftEvents(acceptedEvent, decidedByUserId = null) {
+  const snapshot = await db
+    .collection(collections.trainingEvents)
+    .where("trainerId", "==", acceptedEvent.trainerId)
+    .get();
+
+  const batch = db.batch();
+  let affected = 0;
+
+  snapshot.docs.forEach((docSnapshot) => {
+    if (docSnapshot.id === acceptedEvent.id) {
+      return;
+    }
+
+    const event = {
+      id: docSnapshot.id,
+      ...docSnapshot.data(),
+    };
+
+    if (event.workflowStatus !== "draft-requested") {
+      return;
+    }
+
+    const overlaps = getTrainingEventScheduleDays(event).some((candidateDay) =>
+      getTrainingEventScheduleDays(acceptedEvent).some((acceptedDay) =>
+        new Date(candidateDay.startsAt).getTime() < new Date(acceptedDay.endsAt).getTime() &&
+        new Date(candidateDay.endsAt).getTime() > new Date(acceptedDay.startsAt).getTime(),
+      ),
+    );
+
+    if (!overlaps) {
+      return;
+    }
+
+    affected += 1;
+    batch.set(
+      docSnapshot.ref,
+      {
+        workflowStatus: "trainer-rejected",
+        trainerDecisionReason: "Ten termin został już zaakceptowany dla innego szkolenia.",
+        trainerDecidedAt: nowIso(),
+        trainerDecidedByUserId: decidedByUserId,
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  });
+
+  if (affected > 0) {
+    await batch.commit();
+  }
+
+  return affected;
+}
+
+async function rebuildFeedsAfterTrainerMutations(trainerId) {
+  await rebuildTrainerOrganizerCalendarFeedsForTrainer(trainerId);
+}
+
+async function rebuildFeedsAfterOrganizerMutations(organizerId) {
+  await rebuildTrainerOrganizerCalendarFeedsForOrganizer(organizerId);
+}
+
+async function ensureTrainerSharedSlotBelongsToTrainer(slotId, trainerId) {
+  const slot = await findTrainerSharedSlot(slotId);
+  if (!slot || slot.trainerId !== trainerId) {
+    throw new HttpsError("permission-denied", "Możesz zarządzać tylko własnym slotem.");
+  }
+
+  return slot;
+}
+
+async function ensureOrganizerCalendarFeedBelongsToOrganizer(feedId, organizerId) {
+  const feed = await findOrganizerCalendarFeed(feedId);
+  if (!feed || feed.organizerId !== organizerId) {
+    throw new HttpsError("permission-denied", "Możesz zarządzać tylko własnym feedem iCal.");
+  }
+
+  return feed;
+}
+
+async function ensureTrainerOrganizerFeedBelongsToTrainer(feedId, trainerId) {
+  const feed = await findTrainerOrganizerCalendarFeedByRelationId(feedId);
+  if (!feed || feed.trainerId !== trainerId) {
+    throw new HttpsError("permission-denied", "Nie możesz zarządzać tym feedem.");
+  }
+
+  return feed;
+}
+
+async function rebuildRelationFeedOrThrow(relation) {
+  const result = await rebuildTrainerOrganizerCalendarFeed(relation);
+  if (!result) {
+    throw new HttpsError("not-found", "Nie udało się odtworzyć feedu.");
+  }
+
+  return result;
+}
+
+export const createTrainerSharedSlot = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko trener może tworzyć sloty.");
+  }
+
+  const trainer = await requireTrainerProfile(user.trainerProfileId);
+  const startsAt = requiredString(request.data?.startsAt, "Podaj datę startu.");
+  const endsAt = requiredString(request.data?.endsAt, "Podaj datę końca.");
+  const startDate = new Date(startsAt);
+  const endDate = new Date(endsAt);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny przedział czasowy.");
+  }
+
+  const slotId = createId("trainer-shared-slot");
+  await db.collection(collections.trainerSharedSlots).doc(slotId).set({
+    trainerId: trainer.id,
+    trainerUserId: trainer.userId,
+    startsAt: startDate.toISOString(),
+    endsAt: endDate.toISOString(),
+    location: requiredString(request.data?.location, "Podaj lokalizację."),
+    notes: asString(request.data?.notes),
+    visibility: "approved-organizers",
+    source: request.data?.source === "ical-derived" ? "ical-derived" : "manual",
+    status: "active",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  });
+
+  await rebuildFeedsAfterTrainerMutations(trainer.id);
+
+  return { ok: true, slotId };
+});
+
+export const addTrainerSharedSlot = createTrainerSharedSlot;
+
+export const updateTrainerSharedSlot = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko trener może zmieniać sloty.");
+  }
+
+  const trainer = await requireTrainerProfile(user.trainerProfileId);
+  const slotId = requiredString(request.data?.slotId, "Brak identyfikatora slotu.");
+  const slot = await ensureTrainerSharedSlotBelongsToTrainer(slotId, trainer.id);
+  const startsAt = requiredString(request.data?.startsAt, "Podaj datę startu.");
+  const endsAt = requiredString(request.data?.endsAt, "Podaj datę końca.");
+  const startDate = new Date(startsAt);
+  const endDate = new Date(endsAt);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
+    throw new HttpsError("invalid-argument", "Podaj poprawny przedział czasowy.");
+  }
+
+  await db.collection(collections.trainerSharedSlots).doc(slotId).set(
+    {
+      trainerId: trainer.id,
+      trainerUserId: trainer.userId,
+      startsAt: startDate.toISOString(),
+      endsAt: endDate.toISOString(),
+      location: requiredString(request.data?.location, "Podaj lokalizację."),
+      notes: asString(request.data?.notes),
+      visibility: "approved-organizers",
+      source: slot.source,
+      status: "active",
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await rejectDraftEventsForSharedSlot(slotId, "Slot został zmieniony.", user.id);
+  await rebuildFeedsAfterTrainerMutations(trainer.id);
+
+  return { ok: true };
+});
+
+export const archiveTrainerSharedSlot = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko trener może archiwizować sloty.");
+  }
+
+  const trainer = await requireTrainerProfile(user.trainerProfileId);
+  const slotId = requiredString(request.data?.slotId, "Brak identyfikatora slotu.");
+  await ensureTrainerSharedSlotBelongsToTrainer(slotId, trainer.id);
+
+  await db.collection(collections.trainerSharedSlots).doc(slotId).set(
+    {
+      status: "archived",
+      archivedAt: nowIso(),
+      archivedReason: "manual",
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await rejectDraftEventsForSharedSlot(slotId, "Slot został wycofany.", user.id);
+  await rebuildFeedsAfterTrainerMutations(trainer.id);
+
+  return { ok: true };
+});
+
+export const createOrganizerCalendarFeed = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może podpiąć feed.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const feedId = createId("organizer-calendar-feed");
+  const createdAt = nowIso();
+
+  await db.collection(collections.organizerCalendarFeeds).doc(feedId).set({
+    organizerId: organizer.id,
+    organizerUserId: organizer.userId,
+    provider: asString(request.data?.provider) === "apple" ? "apple" : asString(request.data?.provider) === "ical" ? "ical" : "google",
+    url: requiredString(request.data?.url, "Podaj URL feedu."),
+    enabled: true,
+    lastSyncStatus: "idle",
+    createdAt,
+    updatedAt: createdAt,
+  });
+
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+
+  return { ok: true, feedId };
+});
+
+export const addOrganizerCalendarFeed = createOrganizerCalendarFeed;
+
+export const updateOrganizerCalendarFeedEnabled = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zmieniać feed.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+  const enabled = Boolean(request.data?.enabled);
+  const feed = await ensureOrganizerCalendarFeedBelongsToOrganizer(feedId, organizer.id);
+
+  await db.collection(collections.organizerCalendarFeeds).doc(feed.id).set(
+    {
+      enabled,
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+  return { ok: true };
+});
+
+export const removeOrganizerCalendarFeed = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może usuwać feed.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+  const feed = await ensureOrganizerCalendarFeedBelongsToOrganizer(feedId, organizer.id);
+
+  await db.collection(collections.organizerCalendarFeeds).doc(feed.id).delete();
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+  return { ok: true };
+});
+
+export const syncOwnOrganizerCalendarFeeds = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może synchronizować feedy.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  await rebuildOrganizerExternalBusyMonths(organizer);
+  await rebuildFeedsAfterOrganizerMutations(organizer.id);
+  return { ok: true };
+});
+
+export const createOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może tworzyć draft.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const groupId = requiredString(request.data?.groupId, "Wybierz grupę dla wydarzenia.");
+  const group = await requireGroup(groupId);
+  if (group.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz tworzyć drafty tylko dla własnych grup.");
+  }
+  if (group.status !== "active") {
+    throw new HttpsError("failed-precondition", "Możesz tworzyć drafty tylko dla aktywnej grupy.");
+  }
+  const sharedSlotId = requiredString(request.data?.sharedSlotId, "Brak identyfikatora slotu.");
+  const sharedSlot = await findTrainerSharedSlot(sharedSlotId);
+  const trainer = await requireTrainerProfile(group.trainerId);
+
+  if (!sharedSlot || !isTrainerSharedSlotActive(sharedSlot)) {
+    throw new HttpsError("failed-precondition", "Slot nie jest już dostępny.");
+  }
+
+  if (sharedSlot.trainerId !== group.trainerId) {
+    throw new HttpsError("failed-precondition", "Wybierz slot trenera przypisanego do tej grupy.");
+  }
+
+  const relation = await requireApprovedRelationByIds(sharedSlot.trainerId, organizer.id);
+  const organizerBusyIntervals = await getOrganizerBusyIntervals(organizer.id);
+  if (slotIntersectsIntervals(sharedSlot, organizerBusyIntervals)) {
+    throw new HttpsError("failed-precondition", "Ten termin koliduje z Twoim kalendarzem.");
+  }
+
+  const normalizedScheduleDays = getTrainingEventScheduleDays({
+    startsAt: requiredString(request.data?.scheduleDays?.[0]?.startsAt, "Podaj start."),
+    endsAt: requiredString(request.data?.scheduleDays?.[0]?.endsAt, "Podaj koniec."),
+    scheduleDays: normalizeScheduleDays(request.data?.scheduleDays),
+  });
+  const startsAt = normalizedScheduleDays[0].startsAt;
+  const endsAt = normalizedScheduleDays[normalizedScheduleDays.length - 1].endsAt;
+
+  if (startsAt !== sharedSlot.startsAt || endsAt !== sharedSlot.endsAt) {
+    throw new HttpsError("failed-precondition", "Draft musi być ustawiony dokładnie na wybranym slocie.");
+  }
+
+  const eventId = createId("training-event");
+  const createdAt = nowIso();
+  const baseTitle =
+    asString(request.data?.title) ||
+    `${group.name} · ${asString(sharedSlot.location) || "Szkolenie"}`;
+  const eligibleGroupPriorities = normalizeEligibleGroupPriorities(
+    request.data?.eligibleGroupPriorities,
+  );
+  const confirmationLeadTimeDays = Math.max(
+    0,
+    Math.round(
+      asNumber(
+        request.data?.confirmationLeadTimeDays,
+        asNumber(group.defaultConfirmationLeadTimeDays, 7),
+      ),
+    ),
+  );
+
+  await db.collection(collections.trainingEvents).doc(eventId).set({
+    trainerId: sharedSlot.trainerId,
+    organizerId: organizer.id,
+    groupId: group.id,
+    groupName: group.name,
+    trainerUserId: relation.trainerUserId ?? null,
+    organizerUserId: relation.organizerUserId ?? null,
+    creatorUserId: user.id,
+    creatorDisplayName: user.displayName,
+    title: baseTitle,
+    summary: requiredString(request.data?.summary, "Podaj krótki opis."),
+    description: requiredString(request.data?.description, "Podaj pełny opis."),
+    type: requiredString(request.data?.type, "Podaj typ szkolenia."),
+    eventTypeSystem: resolveGroupEventType(
+      request.data?.eventTypeSystem ?? group.defaultEventType,
+    ),
+    startsAt,
+    endsAt,
+    scheduleDays: normalizedScheduleDays,
+    location:
+      requiredString(
+        request.data?.location || group.defaultLocation || sharedSlot.location,
+        "Podaj lokalizację.",
+      ),
+    tags: normalizeEventTags(request.data?.tags ?? group.defaultTags),
+    capacity: Math.max(1, asNumber(request.data?.capacity, 1)),
+    enrolledCount: 0,
+    isPublished: false,
+    imageHint: baseTitle.split(/\s+/)[0]?.toLowerCase() || "event",
+    brandStatus: resolveBrandStatus(request.data?.brandStatus ?? trainer.brandStatus),
+    status: resolveTrainingEventStatus(request.data?.status),
+    minimumParticipants: Math.max(
+      1,
+      Math.min(
+        Math.max(1, asNumber(request.data?.capacity, 1)),
+        asNumber(request.data?.minimumParticipants, Math.max(1, asNumber(request.data?.capacity, 1))),
+      ),
+    ),
+    requiresOrganizerApproval: true,
+    eligibleGroupPriorities,
+    confirmationLeadTimeDays,
+    trainerCollaborationStatus: "pending",
+    organizerCollaborationStatus: "accepted",
+    selfManagedByTrainer: false,
+    createdByRole: "organizer",
+    workflowStatus: "draft-requested",
+    sharedSlotId,
+    publishAutomaticallyAfterTrainerApproval: Boolean(
+      request.data?.publishAutomaticallyAfterTrainerApproval,
+    ),
+    publicationApprovalStatus: null,
+    publicationReviewMessage: null,
+    createdAt,
+  });
+  await autoAssignCoreMembersToEvent({
+    id: eventId,
+    title: baseTitle,
+    groupId: group.id,
+    groupName: group.name,
+    organizerId: organizer.id,
+    organizerUserId: relation.organizerUserId ?? organizer.userId,
+    trainerId: sharedSlot.trainerId,
+    trainerUserId: relation.trainerUserId ?? trainer.userId,
+    eligibleGroupPriorities,
+  });
+
+  await createNotifications(
+    [relation.trainerUserId, relation.organizerUserId],
+    "Nowy draft szkolenia",
+    `${user.displayName} utworzył draft szkolenia dla grupy ${group.name}.`,
+    "event",
+  );
+
+  return { ok: true, eventId };
+});
+
+export const updateOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może zmieniać draft.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora szkolenia.");
+  const event = await requireEvent(eventId);
+
+  if (event.organizerId !== organizer.id || event.workflowStatus !== "draft-requested") {
+    throw new HttpsError("failed-precondition", "To szkolenie nie jest Twoim oczekującym draftem.");
+  }
+
+  const requestedGroupId = asString(request.data?.groupId);
+  const groupId = requiredString(event.groupId || requestedGroupId, "Wybierz grupę.");
+  if (event.groupId && requestedGroupId && requestedGroupId !== event.groupId) {
+    throw new HttpsError("failed-precondition", "Nie możesz zmienić grupy istniejącego draftu.");
+  }
+  const group = await requireGroup(groupId);
+  if (group.organizerId !== organizer.id) {
+    throw new HttpsError("permission-denied", "Możesz edytować tylko własne grupy.");
+  }
+  if (group.status !== "active") {
+    throw new HttpsError("failed-precondition", "Możesz edytować tylko aktywną grupę.");
+  }
+  const sharedSlotId = requiredString(request.data?.sharedSlotId, "Brak identyfikatora slotu.");
+  const sharedSlot = await findTrainerSharedSlot(sharedSlotId);
+  if (!sharedSlot || !isTrainerSharedSlotActive(sharedSlot)) {
+    throw new HttpsError("failed-precondition", "Slot nie jest już dostępny.");
+  }
+
+  if (sharedSlot.trainerId !== event.trainerId || sharedSlot.trainerId !== group.trainerId) {
+    throw new HttpsError("failed-precondition", "Wybierz slot tego samego trenera i grupy.");
+  }
+
+  const normalizedScheduleDays = normalizeScheduleDays(request.data?.scheduleDays);
+  const startsAt = normalizedScheduleDays[0].startsAt;
+  const endsAt = normalizedScheduleDays[normalizedScheduleDays.length - 1].endsAt;
+
+  if (startsAt !== sharedSlot.startsAt || endsAt !== sharedSlot.endsAt) {
+    throw new HttpsError("failed-precondition", "Draft musi pozostać w obrębie wybranego slotu.");
+  }
+
+  const eligibleGroupPriorities = normalizeEligibleGroupPriorities(
+    request.data?.eligibleGroupPriorities ?? event.eligibleGroupPriorities,
+  );
+  const capacity = Math.max(1, asNumber(request.data?.capacity, event.capacity));
+  const minimumParticipants = Math.max(
+    1,
+    Math.min(
+      capacity,
+      asNumber(request.data?.minimumParticipants, event.minimumParticipants ?? event.capacity),
+    ),
+  );
+
+  await db.collection(collections.trainingEvents).doc(eventId).set(
+    {
+      groupId: group.id,
+      groupName: group.name,
+      title: asString(request.data?.title) || event.title,
+      summary: requiredString(request.data?.summary, "Podaj krótki opis."),
+      description: requiredString(request.data?.description, "Podaj pełny opis."),
+      type: requiredString(request.data?.type, "Podaj typ szkolenia."),
+      eventTypeSystem: resolveGroupEventType(
+        request.data?.eventTypeSystem ?? event.eventTypeSystem ?? group.defaultEventType,
+      ),
+      scheduleDays: normalizedScheduleDays,
+      location: requiredString(request.data?.location, "Podaj lokalizację."),
+      tags: normalizeEventTags(request.data?.tags ?? group.defaultTags),
+      capacity,
+      minimumParticipants,
+      sharedSlotId,
+      eligibleGroupPriorities,
+      confirmationLeadTimeDays: Math.max(
+        0,
+        Math.round(
+          asNumber(
+            request.data?.confirmationLeadTimeDays,
+            asNumber(event.confirmationLeadTimeDays, group.defaultConfirmationLeadTimeDays || 7),
+          ),
+        ),
+      ),
+      publishAutomaticallyAfterTrainerApproval: Boolean(
+        request.data?.publishAutomaticallyAfterTrainerApproval,
+      ),
+      status: resolveTrainingEventStatus(request.data?.status ?? event.status),
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+  await autoAssignCoreMembersToEvent({
+    ...event,
+    id: eventId,
+    groupId: group.id,
+    groupName: group.name,
+    trainerId: event.trainerId,
+    trainerUserId: event.trainerUserId,
+    organizerId: event.organizerId,
+    organizerUserId: event.organizerUserId,
+    eligibleGroupPriorities,
+    capacity,
+  });
+
+  return { ok: true };
+});
+
+export const withdrawOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || !user.organizerProfileId) {
+    throw new HttpsError("permission-denied", "Tylko organizator może wycofać draft.");
+  }
+
+  const organizer = await requireOrganizerProfile(user.organizerProfileId);
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora szkolenia.");
+  const event = await requireEvent(eventId);
+
+  if (event.organizerId !== organizer.id || event.workflowStatus !== "draft-requested") {
+    throw new HttpsError("failed-precondition", "To szkolenie nie jest Twoim oczekującym draftem.");
+  }
+
+  await db.collection(collections.trainingEvents).doc(eventId).set(
+    {
+      workflowStatus: "withdrawn",
+      withdrawnAt: nowIso(),
+      withdrawnByUserId: user.id,
+      isPublished: false,
+    },
+    { merge: true },
+  );
+
+  return { ok: true };
+});
+
+export const decideOrganizerTrainingDraft = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  if (!user || (!user.trainerProfileId && user.role !== "admin")) {
+    throw new HttpsError("permission-denied", "Tylko trener może decydować o draftach.");
+  }
+
+  const eventId = requiredString(request.data?.eventId, "Brak identyfikatora szkolenia.");
+  const decision = request.data?.decision === "accepted" ? "accepted" : "rejected";
+  const message = asString(request.data?.message);
+  const event = await requireEvent(eventId);
+  const groupId = requiredString(event.groupId, "Szkolenie musi należeć do grupy.");
+  const group = await requireGroup(groupId);
+
+  if (user.role !== "admin" && event.trainerId !== user.trainerProfileId) {
+    throw new HttpsError("permission-denied", "Możesz decydować tylko o swoich draftach.");
+  }
+  if (group.status !== "active") {
+    throw new HttpsError("failed-precondition", "Nie możesz decydować o archiwalnej grupie.");
+  }
+  if (group.trainerId !== event.trainerId || group.organizerId !== event.organizerId) {
+    throw new HttpsError("failed-precondition", "Draft nie jest zgodny z przypisaną grupą.");
+  }
+
+  if (event.workflowStatus !== "draft-requested") {
+    throw new HttpsError("failed-precondition", "To szkolenie nie czeka już na decyzję.");
+  }
+
+  const autoAssignPayload = {
+    ...event,
+    groupId: group.id,
+    groupName: event.groupName || group.name,
+    eligibleGroupPriorities: normalizeEligibleGroupPriorities(
+      event.eligibleGroupPriorities,
+    ),
+  };
+  const acceptedFields = {
+    trainerDecidedAt: nowIso(),
+    trainerDecidedByUserId: user.id,
+    trainerDecisionReason: message || null,
+  };
+
+  if (decision === "accepted") {
+    await autoAssignCoreMembersToEvent(autoAssignPayload);
+    await db.collection(collections.trainingEvents).doc(event.id).set(
+      {
+        ...acceptedFields,
+        trainerCollaborationStatus: "accepted",
+        workflowStatus: event.publishAutomaticallyAfterTrainerApproval ? "published" : "trainer-accepted",
+        isPublished: event.publishAutomaticallyAfterTrainerApproval === true,
+        publicationApprovalStatus: null,
+      },
+      { merge: true },
+    );
+
+    await rejectConflictingDraftEvents(event, user.id);
+
+    if (event.publishAutomaticallyAfterTrainerApproval !== true) {
+      const organizer = await findOrganizerProfile(event.organizerId);
+      if (organizer) {
+        await createNotification(
+          organizer.userId,
+          "Draft szkolenia zaakceptowany",
+          `Trener zaakceptował draft szkolenia ${event.title}.`,
+          "event",
+        );
+      }
+    }
+  } else {
+    await db.collection(collections.trainingEvents).doc(event.id).set(
+      {
+        ...acceptedFields,
+        trainerCollaborationStatus: "rejected",
+        workflowStatus: "trainer-rejected",
+        isPublished: false,
+      },
+      { merge: true },
+    );
+  }
+
+  return { ok: true };
+});
+
+export const resetTrainerOrganizerCalendarFeedToken = onCall(callableOptions(), async (request) => {
+  const { user } = await requireCurrentUser(request);
+  const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+  const feed = await findTrainerOrganizerCalendarFeedByRelationId(feedId);
+
+  if (!feed) {
+    throw new HttpsError("not-found", "Nie znaleziono feedu.");
+  }
+
+  if (user && user.role !== "admin" && user.trainerProfileId !== feed.trainerId) {
+    throw new HttpsError("permission-denied", "Nie możesz resetować tego feedu.");
+  }
+
+  const token = randomUUID();
+  const tokenHash = hashIcalToken(token);
+  const publicFeedUrl = buildTrainerOrganizerIcalUrl(token);
+
+  await db.collection(collections.trainerOrganizerCalendarFeeds).doc(feed.id).set(
+    {
+      token,
+      tokenHash,
+      tokenVersion: (feed.tokenVersion ?? 1) + 1,
+      tokenRotatedAt: nowIso(),
+      publicFeedUrl,
+      updatedAt: nowIso(),
+    },
+    { merge: true },
+  );
+
+  return {
+    ok: true,
+    subscribeUrl: buildGoogleCalendarSubscribeUrl(publicFeedUrl),
+    feedUrl: publicFeedUrl,
+  };
+});
+
+export const getTrainerOrganizerGoogleCalendarSubscribeUrl = onCall(
+  callableOptions(),
+  async (request) => {
+    const { user } = await requireCurrentUser(request);
+    const feedId = requiredString(request.data?.feedId, "Brak identyfikatora feedu.");
+    const feed = await findTrainerOrganizerCalendarFeedByRelationId(feedId);
+
+    if (!feed) {
+      throw new HttpsError("not-found", "Nie znaleziono feedu.");
+    }
+
+    if (user && user.role !== "admin" && user.trainerProfileId !== feed.trainerId) {
+      throw new HttpsError("permission-denied", "Nie możesz pobrać tego URL.");
+    }
+
+    const publicFeedUrl = asString(feed.publicFeedUrl) || buildTrainerOrganizerIcalUrl(feed.token);
+
+    return {
+      ok: true,
+      subscribeUrl: buildGoogleCalendarSubscribeUrl(publicFeedUrl),
+      feedUrl: publicFeedUrl,
+    };
+  },
+);
+
+export const trainerOrganizerIcalFeed = onRequest(
+  {
+    region: FUNCTION_REGION,
+    cors: false,
+  },
+  async (req, res) => {
+    const token = asString(req.query.token);
+
+    if (!token) {
+      res.status(400).send("Missing token.");
+      return;
+    }
+
+    const feed = await findTrainerOrganizerCalendarFeedByTokenHash(hashIcalToken(token));
+
+    if (!feed || feed.enabled !== true) {
+      res.status(404).send("Feed not found.");
+      return;
+    }
+
+    const slotIds = Array.isArray(feed.matchedSharedSlotIds) ? feed.matchedSharedSlotIds : [];
+    const slotDocs = await Promise.all(
+      slotIds.map((slotId) => db.collection(collections.trainerSharedSlots).doc(slotId).get()),
+    );
+    const slots = slotDocs
+      .filter((docSnapshot) => docSnapshot.exists)
+      .map((docSnapshot) => ({ id: docSnapshot.id, ...docSnapshot.data() }))
+      .filter((slot) => slot.status !== "archived" && !slot.archivedAt)
+      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+
+    const content = buildTrainerOrganizerIcalContent(feed, slots);
+    res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.status(200).send(content);
+  },
+);
+
 async function resolveNotificationContextForEvent(event) {
   const [trainer, organizer] = await Promise.all([
     event.trainerId ? findTrainerProfile(event.trainerId) : Promise.resolve(null),
@@ -3142,7 +6115,17 @@ async function queueRoleReminderSms(event, settings, role, profile, user) {
 }
 
 async function queueParticipantReminderSms(event, settings, enrollmentRequest) {
-  if (!settings.sendToParticipants || enrollmentRequest.finalStatus !== "accepted") {
+  const attendanceStatus = resolveAttendanceConfirmationStatus(
+    enrollmentRequest.attendanceConfirmationStatus,
+  );
+
+  if (
+    !settings.sendToParticipants ||
+    enrollmentRequest.finalStatus !== "accepted" ||
+    resolveParticipantEnrollmentStatus(enrollmentRequest.participantStatus) !== "active" ||
+    attendanceStatus === "declined" ||
+    (settings.requireParticipantSmsConfirmation && attendanceStatus === "confirmed")
+  ) {
     return;
   }
 
@@ -3207,6 +6190,155 @@ async function queueParticipantReminderSms(event, settings, enrollmentRequest) {
   }
 }
 
+async function queueGroupEventParticipantReminderSms(event, settings, eventParticipant) {
+  const attendanceStatus = resolveAttendanceConfirmationStatus(
+    eventParticipant.attendanceConfirmationStatus,
+  );
+
+  if (
+    !settings.sendToParticipants ||
+    eventParticipant.status === "removed" ||
+    eventParticipant.status === "declined" ||
+    attendanceStatus === "declined"
+  ) {
+    return;
+  }
+
+  const requiresConfirmation =
+    settings.requireParticipantSmsConfirmation &&
+    eventParticipant.status !== "confirmed" &&
+    attendanceStatus !== "confirmed";
+  const dispatchId = `${event.id}__${eventParticipant.id}__participant__lead-${settings.reminderLeadDays}`;
+  let confirmUrl = "";
+  let declineUrl = "";
+  let tokenHash = null;
+
+  if (requiresConfirmation) {
+    const token = randomUUID();
+    tokenHash = hashAttendanceToken(token);
+    confirmUrl = buildAttendanceDecisionUrl(token, "confirm");
+    declineUrl = buildAttendanceDecisionUrl(token, "decline");
+  }
+
+  const message = renderSmsTemplate(
+    requiresConfirmation ? settings.confirmationSmsTemplate : settings.reminderSmsTemplate,
+    {
+      eventTitle: event.title || event.location,
+      eventDate: formatEventDateForSms(event),
+      eventLocation: event.location || "",
+      recipientName: asString(eventParticipant.participantDisplayName, "Uczestnik"),
+      confirmUrl,
+      declineUrl,
+    },
+  );
+
+  const dispatch = await createSmsDispatchOnce(dispatchId, {
+    eventId: event.id,
+    requestId: null,
+    leadDays: settings.reminderLeadDays,
+    templateKind: requiresConfirmation ? "confirmation" : "reminder",
+    recipientRole: "participant",
+    recipientProfileId: eventParticipant.participantProfileId ?? null,
+    recipientUserId: eventParticipant.participantUserId ?? null,
+    recipientName: asString(eventParticipant.participantDisplayName, "Uczestnik"),
+    recipientPhone: asString(eventParticipant.participantPhone),
+    message,
+  });
+
+  if (requiresConfirmation && dispatch.created && dispatch.status === "pending-provider") {
+    await db.collection(collections.eventParticipants).doc(eventParticipant.id).set(
+      {
+        attendanceConfirmationStatus: "pending",
+        attendanceConfirmationRequestedAt: nowIso(),
+        attendanceConfirmationRespondedAt: FieldValue.delete(),
+        attendanceConfirmationTokenHash: tokenHash,
+        attendanceConfirmationExpiresAt:
+          getTrainingEventScheduleDays(event)[0]?.startsAt ?? event.startsAt,
+      },
+      { merge: true },
+    );
+  }
+}
+
+async function notifyFinalizedGroupEventParticipant(event, settings, eventParticipant) {
+  const attendanceStatus = resolveAttendanceConfirmationStatus(
+    eventParticipant.attendanceConfirmationStatus,
+  );
+
+  if (
+    !settings.sendToParticipants ||
+    eventParticipant.status === "removed" ||
+    eventParticipant.status === "declined" ||
+    attendanceStatus === "declined"
+  ) {
+    return;
+  }
+
+  const requiresConfirmation =
+    settings.requireParticipantSmsConfirmation &&
+    eventParticipant.status !== "confirmed" &&
+    attendanceStatus !== "confirmed";
+  const dispatchId = `${event.id}__${eventParticipant.id}__roster-finalized`;
+  let confirmUrl = "";
+  let declineUrl = "";
+  let tokenHash = null;
+
+  if (requiresConfirmation) {
+    const token = randomUUID();
+    tokenHash = hashAttendanceToken(token);
+    confirmUrl = buildAttendanceDecisionUrl(token, "confirm");
+    declineUrl = buildAttendanceDecisionUrl(token, "decline");
+  }
+
+  const message = renderSmsTemplate(
+    requiresConfirmation ? settings.confirmationSmsTemplate : settings.reminderSmsTemplate,
+    {
+      eventTitle: event.title || event.location,
+      eventDate: formatEventDateForSms(event),
+      eventLocation: event.location || "",
+      recipientName: asString(eventParticipant.participantDisplayName, "Uczestnik"),
+      confirmUrl,
+      declineUrl,
+    },
+  );
+
+  const dispatch = await createSmsDispatchOnce(dispatchId, {
+    eventId: event.id,
+    requestId: null,
+    leadDays: null,
+    templateKind: requiresConfirmation ? "confirmation" : "reminder",
+    recipientRole: "participant",
+    recipientProfileId: eventParticipant.participantProfileId ?? null,
+    recipientUserId: eventParticipant.participantUserId ?? null,
+    recipientName: asString(eventParticipant.participantDisplayName, "Uczestnik"),
+    recipientPhone: asString(eventParticipant.participantPhone),
+    message,
+  });
+
+  if (requiresConfirmation && dispatch.created && dispatch.status === "pending-provider") {
+    await db.collection(collections.eventParticipants).doc(eventParticipant.id).set(
+      {
+        attendanceConfirmationStatus: "pending",
+        attendanceConfirmationRequestedAt: nowIso(),
+        attendanceConfirmationRespondedAt: FieldValue.delete(),
+        attendanceConfirmationTokenHash: tokenHash,
+        attendanceConfirmationExpiresAt:
+          getTrainingEventScheduleDays(event)[0]?.startsAt ?? event.startsAt,
+      },
+      { merge: true },
+    );
+  }
+
+  if (eventParticipant.participantUserId) {
+    await createNotification(
+      eventParticipant.participantUserId,
+      "Zamknięto skład wydarzenia",
+      `Sprawdź swoje miejsce na wydarzeniu ${event.title}.`,
+      "event",
+    );
+  }
+}
+
 async function processNotificationReminders() {
   const now = new Date();
   const eventsSnapshot = await db.collection(collections.trainingEvents).get();
@@ -3229,14 +6361,15 @@ async function processNotificationReminders() {
       continue;
     }
 
-    const [trainerUser, organizerUser, requests] = await Promise.all([
+    const [trainerUser, organizerUser, requests, eventParticipants] = await Promise.all([
       context.trainer?.userId
         ? findAppUser(context.trainer.userId)
         : event.creatorUserId
           ? findAppUser(event.creatorUserId)
           : Promise.resolve(null),
       context.organizer?.userId ? findAppUser(context.organizer.userId) : Promise.resolve(null),
-      getEnrollmentRequestsForEvent(event.id),
+      event.groupId ? Promise.resolve([]) : getEnrollmentRequestsForEvent(event.id),
+      event.groupId ? getEventParticipantsForEvent(event.id) : Promise.resolve([]),
     ]);
 
     await queueRoleReminderSms(event, context.settings, "trainer", context.trainer, trainerUser);
@@ -3248,8 +6381,14 @@ async function processNotificationReminders() {
       organizerUser,
     );
 
-    for (const enrollmentRequest of requests) {
-      await queueParticipantReminderSms(event, context.settings, enrollmentRequest);
+    if (event.groupId) {
+      for (const eventParticipant of eventParticipants) {
+        await queueGroupEventParticipantReminderSms(event, context.settings, eventParticipant);
+      }
+    } else {
+      for (const enrollmentRequest of requests) {
+        await queueParticipantReminderSms(event, context.settings, enrollmentRequest);
+      }
     }
   }
 }
@@ -3297,6 +6436,7 @@ export const onRelationWrite = onDocumentWritten(
           ),
         ),
       );
+      await rebuildTrainerOrganizerCalendarFeed(relation);
 
       const trainer = await findTrainerProfile(relation.trainerId);
       const organizer = await findOrganizerProfile(relation.organizerId);
@@ -3353,6 +6493,14 @@ export const onRelationWrite = onDocumentWritten(
           ),
         ),
       );
+      await db.collection(collections.trainerOrganizerCalendarFeeds).doc(relation.id).set(
+        {
+          enabled: false,
+          updatedAt: nowIso(),
+        },
+        { merge: true },
+      );
+      await rejectDraftEventsForRelation(relation, "Relacja została odpięta.", null);
 
       const trainer = await findTrainerProfile(relation.trainerId);
       const organizer = await findOrganizerProfile(relation.organizerId);
@@ -3391,6 +6539,7 @@ export const onRelationWrite = onDocumentWritten(
         await batch.commit();
       }
 
+      await rebuildTrainerOrganizerCalendarFeed(relation);
       await createNotifications(
         [trainer.userId, organizer.userId],
         "Odpięto relację",

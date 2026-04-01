@@ -167,6 +167,7 @@ function panelItems(
     return [
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
+      { to: "/panel/grupy", label: "Grupy", icon: Users },
       { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
       {
         to: "/panel/wydarzenia-spolecznosci",
@@ -188,6 +189,7 @@ function panelItems(
     return [
       ...base,
       { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
+      { to: "/panel/grupy", label: "Grupy", icon: Users },
       { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
       {
         to: "/panel/wydarzenia-spolecznosci",
@@ -210,6 +212,7 @@ function panelItems(
   return [
     ...base,
     { to: "/panel/ustawienia", label: "Ustawienia profilu", icon: ShieldCheck },
+    { to: "/panel/grupy", label: "Grupy", icon: Users },
     { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
     { to: "/panel/trenerzy", label: "Przekazujacy Wiedze", icon: Users },
     { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },

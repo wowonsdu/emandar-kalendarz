@@ -153,17 +153,122 @@ function isStoreEmpty(store: DemoStore) {
   );
 }
 
-function shouldReplaceShadowWithSeed(shadowStore: DemoStore, seedStore: DemoStore) {
-  return (
-    seedStore.users.length > shadowStore.users.length ||
-    seedStore.trainers.length > shadowStore.trainers.length ||
-    seedStore.organizers.length > shadowStore.organizers.length ||
-    seedStore.participantProfiles.length > shadowStore.participantProfiles.length ||
-    seedStore.relations.length > shadowStore.relations.length ||
-    seedStore.trainingEvents.length > shadowStore.trainingEvents.length ||
-    seedStore.groups.length > shadowStore.groups.length ||
-    seedStore.groupMembers.length > shadowStore.groupMembers.length
-  );
+function mergeStoreCollections<T extends { id: string }>(
+  seedItems: T[] | null | undefined,
+  runtimeItems: T[] | null | undefined,
+) {
+  const merged = new Map<string, T>();
+
+  for (const item of seedItems ?? []) {
+    merged.set(item.id, cloneValue(item));
+  }
+
+  for (const item of runtimeItems ?? []) {
+    const previous = merged.get(item.id);
+    merged.set(
+      item.id,
+      previous
+        ? ({
+            ...cloneValue(previous),
+            ...cloneValue(item),
+          } as T)
+        : cloneValue(item),
+    );
+  }
+
+  return [...merged.values()];
+}
+
+function mergeSeedWithRuntime(seedStore: DemoStore, runtimeStore: Partial<DemoStore> | null | undefined) {
+  if (!runtimeStore) {
+    return normalizePublicStore(seedStore);
+  }
+
+  const mergedStore: Partial<DemoStore> = {
+    ...cloneValue(seedStore),
+    ...cloneValue(runtimeStore),
+    users: mergeStoreCollections(seedStore.users, runtimeStore.users),
+    trainers: mergeStoreCollections(seedStore.trainers, runtimeStore.trainers),
+    organizers: mergeStoreCollections(seedStore.organizers, runtimeStore.organizers),
+    participantProfiles: mergeStoreCollections(
+      seedStore.participantProfiles,
+      runtimeStore.participantProfiles,
+    ),
+    groups: mergeStoreCollections(seedStore.groups, runtimeStore.groups),
+    groupMembers: mergeStoreCollections(seedStore.groupMembers, runtimeStore.groupMembers),
+    eventParticipants: mergeStoreCollections(
+      seedStore.eventParticipants,
+      runtimeStore.eventParticipants,
+    ),
+    relations: mergeStoreCollections(seedStore.relations, runtimeStore.relations),
+    trainingEvents: mergeStoreCollections(seedStore.trainingEvents, runtimeStore.trainingEvents),
+    publicTrainingEvents: mergeStoreCollections(
+      seedStore.publicTrainingEvents,
+      runtimeStore.publicTrainingEvents,
+    ),
+    availabilitySlots: mergeStoreCollections(
+      seedStore.availabilitySlots,
+      runtimeStore.availabilitySlots,
+    ),
+    trainerSharedSlots: mergeStoreCollections(
+      seedStore.trainerSharedSlots,
+      runtimeStore.trainerSharedSlots,
+    ),
+    trainerCalendarFeeds: mergeStoreCollections(
+      seedStore.trainerCalendarFeeds,
+      runtimeStore.trainerCalendarFeeds,
+    ),
+    organizerCalendarFeeds: mergeStoreCollections(
+      seedStore.organizerCalendarFeeds,
+      runtimeStore.organizerCalendarFeeds,
+    ),
+    trainerOrganizerCalendarFeeds: mergeStoreCollections(
+      seedStore.trainerOrganizerCalendarFeeds,
+      runtimeStore.trainerOrganizerCalendarFeeds,
+    ),
+    trainerExternalBusyMonths: mergeStoreCollections(
+      seedStore.trainerExternalBusyMonths,
+      runtimeStore.trainerExternalBusyMonths,
+    ),
+    organizerExternalBusyMonths: mergeStoreCollections(
+      seedStore.organizerExternalBusyMonths,
+      runtimeStore.organizerExternalBusyMonths,
+    ),
+    enrollmentRequests: mergeStoreCollections(
+      seedStore.enrollmentRequests,
+      runtimeStore.enrollmentRequests,
+    ),
+    notifications: mergeStoreCollections(seedStore.notifications, runtimeStore.notifications),
+    accountRequests: mergeStoreCollections(seedStore.accountRequests, runtimeStore.accountRequests),
+    trainerAccountApprovals: mergeStoreCollections(
+      seedStore.trainerAccountApprovals,
+      runtimeStore.trainerAccountApprovals,
+    ),
+    appSettings: {
+      ...cloneValue(seedStore.appSettings),
+      ...(runtimeStore.appSettings ? cloneValue(runtimeStore.appSettings) : {}),
+    },
+  };
+
+  return normalizePublicStore(mergedStore);
+}
+
+async function fetchJsonOrNull<T>(url: string) {
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
 }
 
 function createId(prefix: string) {
@@ -296,66 +401,25 @@ function getCurrentSmsSession() {
 }
 
 async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number }> {
-  try {
-    const response = await fetch(getMockApiUrl("store.php"), {
-      method: "GET",
-      cache: "no-store",
-      credentials: "same-origin",
-    });
-
-    if (!response.ok) {
-      throw new Error(`mock-store-${response.status}`);
-    }
-
-    const payload = (await response.json()) as {
-      store?: Partial<DemoStore>;
-      version?: number;
-    };
-
-    const store = normalizePublicStore(payload.store);
+  const seedPayload = await fetchJsonOrNull<Partial<DemoStore>>(getMockStaticUrl("seed-store.json"));
+  if (seedPayload) {
+    const seedStore = normalizePublicStore(seedPayload);
+    const runtimePayload = await fetchJsonOrNull<Partial<DemoStore>>(
+      getMockStaticUrl("runtime-store.json"),
+    );
+    const store = mergeSeedWithRuntime(seedStore, runtimePayload);
     writeStorageJson(storeShadowStorageKey, store);
     return {
       store,
-      version: Number(payload.version ?? Date.now()),
+      version: Date.now(),
     };
-  } catch {
-    const shadowStore = normalizePublicStore(
-      readStorageJson<DemoStore | null>(storeShadowStorageKey, null),
-    );
-
-    try {
-      const response = await fetch(getMockStaticUrl("seed-store.json"), {
-        method: "GET",
-        cache: "no-store",
-        credentials: "same-origin",
-      });
-
-      if (!response.ok) {
-        throw new Error(`mock-static-seed-${response.status}`);
-      }
-
-      const payload = (await response.json()) as Partial<DemoStore>;
-      const store = normalizePublicStore(payload);
-
-      if (isStoreEmpty(shadowStore) || shouldReplaceShadowWithSeed(shadowStore, store)) {
-        writeStorageJson(storeShadowStorageKey, store);
-        return {
-          store,
-          version: Date.now(),
-        };
-      }
-
-      return {
-        store: shadowStore,
-        version: Date.now(),
-      };
-    } catch {
-      return {
-        store: shadowStore,
-        version: Date.now(),
-      };
-    }
   }
+
+  const shadowStore = normalizePublicStore(readStorageJson<DemoStore | null>(storeShadowStorageKey, null));
+  return {
+    store: shadowStore,
+    version: Date.now(),
+  };
 }
 
 async function persistStore(store: DemoStore) {
@@ -364,7 +428,7 @@ async function persistStore(store: DemoStore) {
 
   savePromise = savePromise.then(async () => {
     try {
-      const response = await fetch(getMockApiUrl("save.php"), {
+      const response = await fetch(getMockApiUrl("runtime-store"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -8,20 +8,6 @@ const mockDataDir = path.resolve(__dirname, "public/mock-data");
 const mockSeedStorePath = path.join(mockDataDir, "seed-store.json");
 const mockRuntimeStorePath = path.join(mockDataDir, "runtime-store.json");
 
-async function readMockStorePayload() {
-  const preferredPath = await readFile(mockRuntimeStorePath, "utf8")
-    .then((contents) => ({ contents, runtime: true }))
-    .catch(async () => ({
-      contents: await readFile(mockSeedStorePath, "utf8"),
-      runtime: false,
-    }));
-
-  return {
-    store: JSON.parse(preferredPath.contents),
-    version: Date.now(),
-  };
-}
-
 async function writeMockStorePayload(store: unknown) {
   await mkdir(mockDataDir, { recursive: true });
   await writeFile(mockRuntimeStorePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
@@ -33,33 +19,28 @@ async function writeMockStorePayload(store: unknown) {
 }
 
 function mockStoreApiPlugin() {
+  const runtimeStoreRoutes = new Set([
+    "/emandar/api/mock/runtime-store",
+    "/api/mock/runtime-store",
+  ]);
+  const resetRoutes = new Set([
+    "/emandar/api/mock/reset",
+    "/api/mock/reset",
+  ]);
+
   return {
     name: "mock-store-api",
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const requestPath = req.url?.split("?")[0] ?? "";
 
-        if (requestPath !== "/emandar/api/mock/store.php" && requestPath !== "/api/mock/store.php") {
-          if (
-            requestPath !== "/emandar/api/mock/save.php" &&
-            requestPath !== "/api/mock/save.php" &&
-            requestPath !== "/emandar/api/mock/reset.php" &&
-            requestPath !== "/api/mock/reset.php"
-          ) {
-            next();
-            return;
-          }
+        if (!runtimeStoreRoutes.has(requestPath) && !resetRoutes.has(requestPath)) {
+          next();
+          return;
         }
 
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.setHeader("Cache-Control", "no-store");
-
-        if (requestPath.endsWith("/store.php")) {
-          const payload = await readMockStorePayload();
-          res.statusCode = 200;
-          res.end(JSON.stringify(payload));
-          return;
-        }
 
         if (req.method !== "POST") {
           res.statusCode = 405;
@@ -67,7 +48,7 @@ function mockStoreApiPlugin() {
           return;
         }
 
-        if (requestPath.endsWith("/reset.php")) {
+        if (resetRoutes.has(requestPath)) {
           const seedStore = JSON.parse(await readFile(mockSeedStorePath, "utf8"));
           const payload = await writeMockStorePayload(seedStore);
           res.statusCode = 200;

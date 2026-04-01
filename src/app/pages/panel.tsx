@@ -2646,7 +2646,7 @@ export function DashboardPage() {
     <PanelSection
       eyebrow={getRoleLabel(currentUser.role)}
       title="Pulpit pracy"
-      description="Panel jest już oparty o Firebase Auth, Firestore i Storage. Wszystkie liczby i rekordy pochodzą z bieżącej bazy projektu."
+      description="Panel działa teraz na współdzielonym mock backendzie JSON. Wszystkie liczby i rekordy pochodzą z bieżącego store prototypowego."
     >
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />

@@ -1,6 +1,6 @@
-import type { FirebaseError } from "firebase/app";
+type AppErrorWithCode = Error & { code: string };
 
-function isFirebaseError(error: unknown): error is FirebaseError {
+function isCodedAppError(error: unknown): error is AppErrorWithCode {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -9,12 +9,12 @@ function isFirebaseError(error: unknown): error is FirebaseError {
   );
 }
 
-function normalizeFirebaseErrorCode(code: string) {
+function normalizeAppErrorCode(code: string) {
   return code.startsWith("functions/") ? code.slice("functions/".length) : code;
 }
 
 export function mapAppError(error: unknown) {
-  if (!isFirebaseError(error)) {
+  if (!isCodedAppError(error)) {
     if (error instanceof Error) {
       return error;
     }
@@ -22,10 +22,10 @@ export function mapAppError(error: unknown) {
     return new Error("Nie udalo sie wykonac tej operacji.");
   }
 
-  switch (normalizeFirebaseErrorCode(error.code)) {
+  switch (normalizeAppErrorCode(error.code)) {
     case "auth/operation-not-allowed":
       return new Error(
-        "Na tym projekcie Firebase nie jest wlaczone logowanie email/haslo. Po migracji trzeba domknac konfiguracje providerow Auth.",
+        "Na tym prototypie ten sposob logowania nie jest dostepny.",
       );
     case "auth/invalid-credential":
     case "auth/invalid-login-credentials":

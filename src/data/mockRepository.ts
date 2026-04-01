@@ -66,7 +66,7 @@ type StorePatch = Partial<DemoStore>;
 
 const authSessionStorageKey = "emandar:mock-auth-session";
 const smsSessionStorageKey = "emandar:mock-sms-session";
-const storeShadowStorageKey = "emandar:mock-store-shadow:v3";
+const storeShadowStorageKey = "emandar:mock-store-shadow:v4";
 const pollIntervalMs = 5000;
 
 let cachedStore: DemoStore | null = null;

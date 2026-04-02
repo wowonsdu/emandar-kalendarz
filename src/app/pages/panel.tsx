@@ -218,6 +218,27 @@ type GroupMemberFormState = {
   priority: GroupMemberPriority;
 };
 
+type TrainingEventFormState = {
+  groupId: string;
+  trainerId: string;
+  organizerId: string;
+  selfManagedByTrainer: boolean;
+  title: string;
+  eventImages: TrainingEventImage[];
+  useEventImageAsCover: boolean;
+  summary: string;
+  description: string;
+  tags: string;
+  type: string;
+  status: TrainingEventStatus;
+  firstDayDate: string;
+  scheduleDays: ScheduleDayDraft[];
+  location: string;
+  capacity: string;
+  minimumParticipants: string;
+  isPublished: boolean;
+};
+
 function createEmptyGroupFormState(trainerId = ""): GroupFormState {
   return {
     name: "",
@@ -228,6 +249,29 @@ function createEmptyGroupFormState(trainerId = ""): GroupFormState {
     defaultCapacity: "20",
     defaultTagsText: "",
     defaultConfirmationLeadTimeDays: "7",
+  };
+}
+
+function createEmptyTrainingEventFormState(): TrainingEventFormState {
+  return {
+    groupId: "",
+    trainerId: "",
+    organizerId: "",
+    selfManagedByTrainer: false,
+    title: "",
+    eventImages: [],
+    useEventImageAsCover: false,
+    summary: "",
+    description: "",
+    tags: "",
+    type: "Warsztat stacjonarny",
+    status: "active",
+    firstDayDate: "",
+    scheduleDays: resizeScheduleDayDrafts(2, []),
+    location: "",
+    capacity: "20",
+    minimumParticipants: "10",
+    isPublished: true,
   };
 }
 
@@ -1552,21 +1596,25 @@ function PanelSection({
 }: {
   eyebrow?: string;
   title: string;
-  description: string;
+  description?: string;
   action?: ReactNode;
   children: ReactNode;
 }) {
+  const leadText = description ?? title;
+
   return (
-    <section className="space-y-4 sm:space-y-6">
-      <div className="flex flex-col gap-3 sm:gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
+    <section className="space-y-4 sm:space-y-5">
+      <div className="flex flex-col gap-2.5 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
           {eyebrow ? (
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-sky-deep sm:text-sm sm:tracking-[0.3em]">
               {eyebrow}
             </p>
           ) : null}
-          <h2 className="mt-2 text-3xl font-semibold leading-tight text-brand-navy sm:mt-3 sm:text-4xl">{title}</h2>
-          <p className="mt-2 max-w-3xl text-base text-brand-muted sm:mt-3 sm:text-lg">{description}</p>
+          <h2 className="sr-only">{title}</h2>
+          <p className="mt-1 max-w-3xl text-xl font-medium leading-snug text-brand-navy sm:mt-1.5 sm:text-2xl">
+            {leadText}
+          </p>
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -1618,13 +1666,19 @@ function SectionBlockHeading({
   title,
   description,
 }: {
-  title: string;
-  description: string;
+  title?: string;
+  description?: string;
 }) {
+  if (!title && !description) {
+    return null;
+  }
+
   return (
     <div>
-      <h3 className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">{title}</h3>
-      <p className="mt-2 text-sm text-brand-muted">{description}</p>
+      {title ? (
+        <h3 className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">{title}</h3>
+      ) : null}
+      {description ? <p className="mt-2 text-sm text-brand-muted">{description}</p> : null}
     </div>
   );
 }
@@ -3578,10 +3632,10 @@ export function GroupsPage() {
     updateGroup,
     updateGroupMember,
   } = useAppState();
+  const location = useLocation();
   const navigate = useNavigate();
   const { groupId } = useParams();
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
-  const [isCreateGroupFormOpen, setIsCreateGroupFormOpen] = useState(false);
   const [planningIntervalWeeks, setPlanningIntervalWeeks] =
     useState<(typeof ANNUAL_PLANNING_INTERVALS)[number]>(8);
   const [groupForm, setGroupForm] = useState<GroupFormState>(createEmptyGroupFormState());
@@ -3653,6 +3707,7 @@ export function GroupsPage() {
       return left.name.localeCompare(right.name, "pl");
     });
   }, [currentUser.role, organizerProfile, store.groups, trainerProfile]);
+  const isCreateGroupRoute = location.pathname === "/panel/grupy/utworz";
   const isGroupDetailView = Boolean(groupId);
   const selectedGroup = groupId
     ? visibleGroups.find((group) => group.id === groupId) ?? null
@@ -3830,17 +3885,10 @@ export function GroupsPage() {
 
   function resetGroupForm() {
     setEditingGroupId(null);
-    setIsCreateGroupFormOpen(false);
     setGroupForm(createEmptyGroupFormState(availableTrainers[0]?.id ?? ""));
   }
 
-  function openCreateGroupForm() {
-    setEditingGroupId(null);
-    setGroupForm(createEmptyGroupFormState(availableTrainers[0]?.id ?? ""));
-    setIsCreateGroupFormOpen(true);
-  }
-
-  const isCreateGroupFormVisible = canManageGroups && !isGroupDetailView && isCreateGroupFormOpen;
+  const isCreateGroupFormVisible = canManageGroups && !isGroupDetailView && isCreateGroupRoute;
   const isEditGroupFormVisible =
     canManageGroups &&
     isGroupDetailView &&
@@ -3967,23 +4015,35 @@ export function GroupsPage() {
     }
   }
 
+  if (isCreateGroupRoute && !canManageGroups) {
+    return <Navigate to="/panel/grupy" replace />;
+  }
+
   if (isGroupDetailView && !selectedGroup) {
     return <Navigate to="/panel/grupy" replace />;
   }
 
   return (
     <PanelSection
-      eyebrow={undefined}
-      title={isGroupDetailView && selectedGroup ? selectedGroup.name : "Grupy Emandar"}
+      eyebrow="Grupy"
+      title={
+        isCreateGroupRoute
+          ? "Nowa grupa"
+          : isGroupDetailView && selectedGroup
+            ? selectedGroup.name
+            : "Grupy Emandar"
+      }
       description={
-        isGroupDetailView
+        isCreateGroupRoute
+          ? "Każde szkolenie Emandar musi należeć do grupy. Tutaj ustawiasz bazę pod dalsze zatwierdzanie i planowanie."
+          : isGroupDetailView
           ? "To nadrzędny kontekst dla wszystkich szkoleń Emandar w tej relacji trener-organizator."
           : canManageGroups
             ? "Grupa jest nadrzędna wobec szkolenia. Tutaj konfigurujesz relację trener-organizator i przechodzisz do szczegółowego widoku danej grupy."
             : "To przegląd prywatnych grup Emandar. Trener widzi kontekst grup przy swoich draftach i szkoleniach."
       }
       action={
-        isGroupDetailView ? (
+        isCreateGroupRoute ? undefined : isGroupDetailView ? (
           <div className="flex flex-wrap gap-3">
             <Link
               to="/panel/grupy"
@@ -3993,25 +4053,12 @@ export function GroupsPage() {
               Wróć do listy
             </Link>
           </div>
-        ) : canManageGroups && !isCreateGroupFormVisible ? (
-          <button
-            type="button"
-            onClick={openCreateGroupForm}
-            className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
-          >
-            <Plus size={16} />
-            Nowa grupa
-          </button>
         ) : undefined
       }
     >
       {isCreateGroupFormVisible ? (
         <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <SectionBlockHeading
-            title="Nowa grupa"
-            description="Każde szkolenie Emandar musi należeć do grupy. Organizator ustawia tu domyślne parametry dla tej relacji z trenerem."
-          />
-          <form onSubmit={handleSaveGroup} className="mt-6 grid gap-4 lg:grid-cols-2">
+          <form onSubmit={handleSaveGroup} className="grid gap-4 lg:grid-cols-2">
             <label className="grid gap-2 lg:col-span-2">
               <span className="text-sm font-semibold text-brand-navy">Nazwa grupy</span>
               <input
@@ -4134,10 +4181,13 @@ export function GroupsPage() {
                 <Check size={16} />
                 {savingGroup ? "Zapisywanie..." : "Utwórz grupę"}
               </button>
-              {isCreateGroupFormOpen ? (
+              {isCreateGroupFormVisible ? (
                 <button
                   type="button"
-                  onClick={resetGroupForm}
+                  onClick={() => {
+                    resetGroupForm();
+                    navigate("/panel/grupy");
+                  }}
                   className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
                 >
                   <X size={16} />
@@ -4149,7 +4199,7 @@ export function GroupsPage() {
         </article>
       ) : null}
 
-      {!isGroupDetailView ? (
+      {!isGroupDetailView && !isCreateGroupRoute ? (
         <div className="space-y-3">
           {visibleGroups.length === 0 ? (
             <EmptyPanelState
@@ -4204,7 +4254,7 @@ export function GroupsPage() {
       ) : selectedGroup ? (
         <div className="space-y-6">
           {isEditGroupFormVisible ? (
-            <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Edytuj grupę"
                 description="Zmieniasz ustawienia nadrzędne dla tej relacji trener-organizator."
@@ -4346,11 +4396,7 @@ export function GroupsPage() {
           ) : null}
 
           <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <SectionBlockHeading
-              title={selectedGroup.name}
-                description="To nadrzędny kontekst dla wszystkich szkoleń Emandar w tej relacji trener-organizator."
-              />
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-2">
                 <StatCard
                   label="Członkowie"
                   value={activeMemberCounts[selectedGroup.id] ?? 0}
@@ -4489,14 +4535,14 @@ export function GroupsPage() {
               </article>
             ) : null}
 
-            <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Członkowie grupy"
                 description="Priorytet członka steruje tym, kto wpada automatycznie do rosteru wydarzenia i kto ma pierwszeństwo przy obsłudze listy."
               />
               {canManageGroups && selectedGroup.status === "active" ? (
-                <form onSubmit={handleAddMember} className="mt-6 grid gap-4 lg:grid-cols-2">
-                  <label className="grid gap-2 lg:col-span-2">
+                <form onSubmit={handleAddMember} className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
+                  <label className="grid min-w-0 gap-2 lg:col-span-2">
                     <span className="text-sm font-semibold text-brand-navy">
                       Istniejący profil uczestnika
                     </span>
@@ -4508,7 +4554,7 @@ export function GroupsPage() {
                           participantProfileId: event.target.value,
                         }))
                       }
-                      className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                     >
                       <option value="">Utwórz nowy profil przy dodawaniu</option>
                       {organizerManagedProfiles.map((profile) => (
@@ -4518,7 +4564,7 @@ export function GroupsPage() {
                       ))}
                     </select>
                   </label>
-                  <label className="grid gap-2">
+                  <label className="grid min-w-0 gap-2">
                     <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
                     <input
                       value={memberForm.displayName}
@@ -4529,10 +4575,10 @@ export function GroupsPage() {
                         }))
                       }
                       disabled={Boolean(memberForm.participantProfileId)}
-                      className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
+                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
                     />
                   </label>
-                  <label className="grid gap-2">
+                  <label className="grid min-w-0 gap-2">
                     <span className="text-sm font-semibold text-brand-navy">Telefon</span>
                     <input
                       value={memberForm.phone}
@@ -4540,10 +4586,10 @@ export function GroupsPage() {
                         setMemberForm((previous) => ({ ...previous, phone: event.target.value }))
                       }
                       disabled={Boolean(memberForm.participantProfileId)}
-                      className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
+                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
                     />
                   </label>
-                  <label className="grid gap-2">
+                  <label className="grid min-w-0 gap-2">
                     <span className="text-sm font-semibold text-brand-navy">Priorytet</span>
                     <select
                       value={memberForm.priority}
@@ -4553,14 +4599,14 @@ export function GroupsPage() {
                           priority: event.target.value as GroupMemberPriority,
                         }))
                       }
-                      className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                     >
                       <option value="stali">Stali</option>
                       <option value="regularni">Regularni</option>
                       <option value="rezerwowi">Rezerwowi</option>
                     </select>
                   </label>
-                  <label className="grid gap-2">
+                  <label className="grid min-w-0 gap-2">
                     <span className="text-sm font-semibold text-brand-navy">Źródło / polecenie</span>
                     <input
                       value={memberForm.referralSource}
@@ -4570,10 +4616,10 @@ export function GroupsPage() {
                           referralSource: event.target.value,
                         }))
                       }
-                      className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                     />
                   </label>
-                  <label className="grid gap-2 lg:col-span-2">
+                  <label className="grid min-w-0 gap-2 lg:col-span-2">
                     <span className="text-sm font-semibold text-brand-navy">Notatki</span>
                     <textarea
                       rows={3}
@@ -4581,7 +4627,7 @@ export function GroupsPage() {
                       onChange={(event) =>
                         setMemberForm((previous) => ({ ...previous, notes: event.target.value }))
                       }
-                      className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                     />
                   </label>
                   <div className="lg:col-span-2">
@@ -4628,7 +4674,7 @@ export function GroupsPage() {
                             </p>
                           </div>
                           {canManageGroups ? (
-                            <div className="grid min-w-[250px] gap-3">
+                            <div className="grid min-w-0 gap-3 sm:min-w-[250px]">
                               <select
                                 value={draft?.priority ?? member.priority}
                                 onChange={(event) =>
@@ -4640,7 +4686,7 @@ export function GroupsPage() {
                                     },
                                   }))
                                 }
-                                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy outline-none"
+                                className="min-w-0 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy outline-none"
                               >
                                 <option value="stali">Stali</option>
                                 <option value="regularni">Regularni</option>
@@ -4658,7 +4704,7 @@ export function GroupsPage() {
                                   }))
                                 }
                                 placeholder="Notatki o uczestniku"
-                                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy outline-none"
+                                className="min-w-0 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy outline-none"
                               />
                               <div className="flex flex-wrap gap-2">
                                 <button
@@ -5614,7 +5660,7 @@ export function EventsPage() {
     isParticipant && isCommunitySection && eventScope === "mine";
   const isParticipantOfficialJoinedView =
     isParticipant && !isCommunitySection && eventScope === "all";
-  const eyebrow = undefined;
+  const eyebrow = isCommunitySection ? "Społeczność" : "Szkolenia";
   const sectionTitle = isCreatorView
     ? isCommunitySection
       ? "Utwórz wydarzenie społeczności"
@@ -5675,29 +5721,83 @@ export function EventsPage() {
     currentUser.role === "trainer" ||
     currentUser.role === "organizer" ||
     (isParticipant && availableTrainers.length > 0);
-  const [trainerEventForm, setTrainerEventForm] = useState({
-    trainerId: "",
-    organizerId: "",
-    selfManagedByTrainer: false,
-    title: "",
-    eventImages: [] as TrainingEventImage[],
-    useEventImageAsCover: false,
-    summary: "",
-    description: "",
-    tags: "",
-    type: "Warsztat stacjonarny",
-    status: "active" as TrainingEventStatus,
-    firstDayDate: "",
-    scheduleDays: resizeScheduleDayDrafts(2, []),
-    location: "",
-    capacity: "20",
-    minimumParticipants: "10",
-    isPublished: true,
-  });
+  const [trainerEventForm, setTrainerEventForm] = useState<TrainingEventFormState>(
+    createEmptyTrainingEventFormState(),
+  );
   const selfManagedOrganizerPlaceholder = "-";
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [uploadingCreatorImages, setUploadingCreatorImages] = useState(false);
   const [savingEventId, setSavingEventId] = useState<string | null>(null);
+  const availableOfficialGroups = useMemo(() => {
+    if (isCommunitySection) {
+      return [] as Group[];
+    }
+
+    if (currentUser.role === "organizer" && organizerProfile) {
+      return store.groups
+        .filter(
+          (group) =>
+            group.organizerId === organizerProfile.id && group.status === "active",
+        )
+        .sort((left, right) => left.name.localeCompare(right.name, "pl"));
+    }
+
+    if (currentUser.role === "trainer" && trainerProfile) {
+      return store.groups
+        .filter(
+          (group) => group.trainerId === trainerProfile.id && group.status === "active",
+        )
+        .sort((left, right) => left.name.localeCompare(right.name, "pl"));
+    }
+
+    return [] as Group[];
+  }, [
+    currentUser.role,
+    isCommunitySection,
+    organizerProfile,
+    store.groups,
+    trainerProfile,
+  ]);
+  const selectedOfficialGroup =
+    availableOfficialGroups.find((group) => group.id === trainerEventForm.groupId) ?? null;
+  const selectedOfficialGroupTrainerName = selectedOfficialGroup
+    ? store.trainers.find((trainer) => trainer.id === selectedOfficialGroup.trainerId)?.displayName ??
+      "Przekazujący Wiedzę"
+    : null;
+  const selectedOfficialGroupEvents = useMemo(
+    () =>
+      selectedOfficialGroup
+        ? sortEventsByDate(
+            store.trainingEvents.filter(
+              (event) =>
+                !isCommunityPanelEvent(event) && event.groupId === selectedOfficialGroup.id,
+            ),
+          )
+        : [],
+    [selectedOfficialGroup, store.trainingEvents],
+  );
+
+  function applyOfficialGroupToTrainingForm(groupId: string) {
+    const nextGroup = availableOfficialGroups.find((group) => group.id === groupId) ?? null;
+
+    setTrainerEventForm((previous) => ({
+      ...previous,
+      groupId,
+      trainerId: nextGroup?.trainerId ?? previous.trainerId,
+      location:
+        nextGroup?.defaultLocation && previous.location !== nextGroup.defaultLocation
+          ? nextGroup.defaultLocation
+          : previous.location,
+      capacity:
+        typeof nextGroup?.defaultCapacity === "number"
+          ? String(nextGroup.defaultCapacity)
+          : previous.capacity,
+      tags:
+        nextGroup?.defaultTags && nextGroup.defaultTags.length > 0
+          ? nextGroup.defaultTags.join(", ")
+          : previous.tags,
+    }));
+  }
 
   useEffect(() => {
     if (currentUser.role !== "trainer" || isCommunityTrainer) {
@@ -5743,6 +5843,32 @@ export function EventsPage() {
     });
   }, [availableTrainers, currentUser.role, organizerProfile]);
 
+  useEffect(() => {
+    if (isCommunitySection) {
+      return;
+    }
+
+    if (currentUser.role !== "organizer" && currentUser.role !== "trainer") {
+      return;
+    }
+
+    const nextGroupId =
+      availableOfficialGroups.find((group) => group.id === trainerEventForm.groupId)?.id ??
+      availableOfficialGroups[0]?.id ??
+      "";
+
+    if (!nextGroupId || trainerEventForm.groupId === nextGroupId) {
+      return;
+    }
+
+    applyOfficialGroupToTrainingForm(nextGroupId);
+  }, [
+    availableOfficialGroups,
+    currentUser.role,
+    isCommunitySection,
+    trainerEventForm.groupId,
+  ]);
+
   if (isLegacyCreatorView) {
     return (
       <Navigate
@@ -5750,8 +5876,8 @@ export function EventsPage() {
           canCreateOfficialTraining && currentUser.role === "participant"
             ? "/panel/szkolenia/utworz"
             : canCreateOfficialTraining
-              ? "/panel/grupy"
-            : "/panel/wydarzenia-spolecznosci/utworz"
+              ? "/panel/szkolenia/utworz"
+              : "/panel/wydarzenia-spolecznosci/utworz"
         }
         replace
       />
@@ -5760,10 +5886,6 @@ export function EventsPage() {
 
   if (isOfficialCreatorView && !canCreateOfficialTraining) {
     return <Navigate to="/panel/szkolenia" replace />;
-  }
-
-  if (isOfficialCreatorView && currentUser.role !== "participant") {
-    return <Navigate to="/panel/grupy" replace />;
   }
 
   if (isCommunityCreatorView && !canCreateCommunityEvent) {
@@ -5776,23 +5898,7 @@ export function EventsPage() {
       title={sectionTitle}
       description={sectionDescription}
       action={
-        !isCreatorView && isCommunitySection && canCreateCommunityEvent ? (
-          <Link
-            to="/panel/wydarzenia-spolecznosci/utworz"
-            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-          >
-            <CalendarDays size={16} />
-            Utwórz wydarzenie
-          </Link>
-        ) : !isCreatorView && !isCommunitySection && isParticipant && canCreateOfficialTraining ? (
-          <Link
-            to="/panel/szkolenia/utworz"
-            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-          >
-            <CalendarDays size={16} />
-            Utwórz szkolenie Emandar
-          </Link>
-        ) : !isCreatorView && !isCommunitySection && isParticipant ? (
+        !isCreatorView && !isCommunitySection && isParticipant ? (
           <button
             type="button"
             onClick={() => setShowConnectTrainerCard((current) => !current)}
@@ -5801,25 +5907,6 @@ export function EventsPage() {
             <Link2 size={16} />
             Połącz się z trenerem
           </button>
-        ) : !isCreatorView && !isCommunitySection && currentUser.role === "organizer" ? (
-          <Link
-            to="/panel/grupy"
-            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-          >
-            <CalendarDays size={16} />
-            Przejdz do grup
-          </Link>
-        ) : !isCreatorView &&
-          !isCommunitySection &&
-          canCreateOfficialTraining &&
-          currentUser.role !== "participant" ? (
-          <Link
-            to="/panel/grupy"
-            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-          >
-            <CalendarDays size={16} />
-            Otwórz grupy
-          </Link>
         ) : undefined
       }
     >
@@ -5892,10 +5979,15 @@ export function EventsPage() {
       (currentUser.role === "trainer" ||
         currentUser.role === "organizer" ||
         currentUser.role === "participant") ? (
-        !isCommunitySection &&
-        (currentUser.role === "organizer" ||
-          (currentUser.role === "participant" && organizerProfile)) &&
-        availableTrainers.length === 0 ? (
+        !isCommunitySection && currentUser.role === "organizer" && availableOfficialGroups.length === 0 ? (
+          <EmptyPanelState
+            title="Najpierw utwórz grupę"
+            description="Oficjalne szkolenie organizatora musi być przypięte do grupy. Najpierw dodaj grupę, a potem wróć do kreatora szkolenia."
+          />
+        ) : !isCommunitySection &&
+          currentUser.role === "participant" &&
+          organizerProfile &&
+          availableTrainers.length === 0 ? (
           <EmptyPanelState
             title="Najpierw aktywna relacja"
             description="Aby dodać szkolenie, Przekazujący Wiedzę musi mieć przynajmniej jedną zaakceptowaną relację z organizatorem."
@@ -5908,6 +6000,10 @@ export function EventsPage() {
 
               try {
                 await createTrainingEvent({
+                  groupId:
+                    !isCommunitySection && trainerEventForm.groupId
+                      ? trainerEventForm.groupId
+                      : undefined,
                   trainerId:
                     !isCommunitySection &&
                     (currentUser.role === "organizer" || currentUser.role === "participant")
@@ -5940,6 +6036,14 @@ export function EventsPage() {
                   minimumParticipants: Number(trainerEventForm.minimumParticipants),
                   isPublished: isCommunitySection ? false : trainerEventForm.isPublished,
                   brandStatus: isCommunitySection ? "supported" : undefined,
+                  eventTypeSystem:
+                    !isCommunitySection && selectedOfficialGroup
+                      ? selectedOfficialGroup.defaultEventType
+                      : undefined,
+                  confirmationLeadTimeDays:
+                    !isCommunitySection && selectedOfficialGroup
+                      ? selectedOfficialGroup.defaultConfirmationLeadTimeDays
+                      : undefined,
                   selfManagedByTrainer:
                     currentUser.role === "trainer" &&
                     !isCommunitySection &&
@@ -5953,24 +6057,34 @@ export function EventsPage() {
                     : "Szkolenie zostało dodane.",
                 );
                 setTrainerEventForm((previous) => ({
-                  ...previous,
-                  trainerId:
+                  ...createEmptyTrainingEventFormState(),
+                  groupId:
                     !isCommunitySection &&
-                    (currentUser.role === "organizer" || currentUser.role === "participant")
-                      ? availableTrainers[0]?.id ?? ""
+                    (currentUser.role === "organizer" || currentUser.role === "trainer")
+                      ? previous.groupId
+                      : "",
+                  trainerId:
+                    !isCommunitySection && selectedOfficialGroup
+                      ? selectedOfficialGroup.trainerId
+                      : !isCommunitySection &&
+                          (currentUser.role === "organizer" || currentUser.role === "participant")
+                        ? availableTrainers[0]?.id ?? ""
                       : previous.trainerId,
-                  summary: "",
-                  description: "",
-                  tags: "",
-                  status: "active",
-                  firstDayDate: "",
-                  scheduleDays: resizeScheduleDayDrafts(2, []),
-                  location: "",
-                  title: "",
-                  eventImages: [],
-                  useEventImageAsCover: false,
-                  capacity: "20",
-                  minimumParticipants: "10",
+                  location:
+                    !isCommunitySection && selectedOfficialGroup?.defaultLocation
+                      ? selectedOfficialGroup.defaultLocation
+                      : "",
+                  capacity:
+                    !isCommunitySection &&
+                    typeof selectedOfficialGroup?.defaultCapacity === "number"
+                      ? String(selectedOfficialGroup.defaultCapacity)
+                      : "20",
+                  tags:
+                    !isCommunitySection &&
+                    selectedOfficialGroup?.defaultTags &&
+                    selectedOfficialGroup.defaultTags.length > 0
+                      ? selectedOfficialGroup.defaultTags.join(", ")
+                      : "",
                   isPublished: !isCommunitySection,
                   selfManagedByTrainer:
                     currentUser.role === "trainer" && !isCommunitySection
@@ -5989,19 +6103,6 @@ export function EventsPage() {
             }}
             className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
           >
-            <div className="mb-5">
-              <h3 className="text-2xl font-semibold text-brand-navy">
-                {isCommunitySection
-                  ? "Dodaj wydarzenie społeczności"
-                  : "Dodaj nowe szkolenie"}
-              </h3>
-              <p className="mt-2 text-brand-muted">
-                {isCommunitySection
-                  ? "Uzupełnij tytuł, miejsce, krótki opis i termin. Każde wydarzenie społeczności trafia do akceptacji Dariusza albo roli admin."
-                  : "Ustaw dwa dni szkolenia, nagłówek miejsca i krótką informację od organizatora."}
-              </p>
-            </div>
-
             {currentUser.role === "trainer" &&
               !isCommunitySection &&
               !isCommunityTrainer &&
@@ -6038,6 +6139,73 @@ export function EventsPage() {
 
             <div className="grid gap-4 xl:grid-cols-2">
               {!isCommunitySection &&
+                (currentUser.role === "organizer" || currentUser.role === "trainer") && (
+                <label className="grid gap-2 xl:col-span-2">
+                  <span className="text-sm font-semibold text-brand-navy">Grupa</span>
+                  <select
+                    required={currentUser.role === "organizer"}
+                    value={trainerEventForm.groupId}
+                    onChange={(event) => applyOfficialGroupToTrainingForm(event.target.value)}
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  >
+                    {currentUser.role === "trainer" ? (
+                      <option value="">Bez przypiętej grupy</option>
+                    ) : null}
+                    {availableOfficialGroups.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {!isCommunitySection &&
+                selectedOfficialGroup &&
+                (currentUser.role === "organizer" || currentUser.role === "trainer") && (
+                <div className="rounded-3xl border border-brand-line bg-brand-shell/70 p-4 xl:col-span-2">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                        Wybrana grupa
+                      </p>
+                      <p className="mt-2 text-lg font-semibold text-brand-navy">
+                        {selectedOfficialGroup.name}
+                      </p>
+                      <p className="mt-1 text-sm text-brand-muted">
+                        Trener: {selectedOfficialGroupTrainerName}
+                      </p>
+                    </div>
+                    <p className="text-sm text-brand-muted">
+                      {selectedOfficialGroupEvents.length === 0
+                        ? "Brak zaplanowanych szkoleń tej grupy."
+                        : `${selectedOfficialGroupEvents.length} zaplanowanych szkoleń.`}
+                    </p>
+                  </div>
+
+                  {selectedOfficialGroupEvents.length > 0 ? (
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {selectedOfficialGroupEvents.slice(0, 4).map((event) => (
+                        <div
+                          key={`${selectedOfficialGroup.id}-${event.id}`}
+                          className="rounded-2xl border border-brand-line bg-white px-4 py-3"
+                        >
+                          <p className="text-sm font-semibold text-brand-navy">
+                            {getPanelScheduleRangeLabel(event)}
+                          </p>
+                          <p className="mt-1 text-sm text-brand-muted">{event.location}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  <p className="mt-4 text-sm text-brand-muted">
+                    Wybierz jedną z istniejących rezerwacji tej grupy albo ustaw nową datę niżej.
+                  </p>
+                </div>
+              )}
+
+              {!isCommunitySection &&
                 (currentUser.role === "organizer" ||
                   (currentUser.role === "participant" && organizerProfile)) && (
                 <label className="grid gap-2">
@@ -6054,6 +6222,7 @@ export function EventsPage() {
                       }))
                     }
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    disabled={currentUser.role === "organizer" && Boolean(selectedOfficialGroup)}
                   >
                     {availableTrainers.map((trainer) => (
                       <option key={trainer.id} value={trainer.id}>
@@ -6812,6 +6981,9 @@ export function EventManagementPage() {
     scheduleDays: resizeScheduleDayDrafts(2, []),
   });
   const event = store.trainingEvents.find((item) => item.id === eventId);
+  const sectionEyebrow = location.pathname.startsWith("/panel/wydarzenia-spolecznosci")
+    ? "Społeczność"
+    : "Szkolenia";
   const fallbackListPath = event
     ? getPanelEventListPath(event)
     : location.pathname.startsWith("/panel/wydarzenia-spolecznosci")
@@ -6847,7 +7019,7 @@ export function EventManagementPage() {
   if (!event) {
     return (
       <PanelSection
-        eyebrow="Szkolenie"
+        eyebrow={sectionEyebrow}
         title="Nie znaleziono wydarzenia"
         description="To wydarzenie nie jest dostępne w Twoim panelu."
       >
@@ -6947,17 +7119,16 @@ export function EventManagementPage() {
 
   return (
     <PanelSection
-      eyebrow="Pelny widok szkolenia"
+      eyebrow={sectionEyebrow}
       title={detailTitle}
       description="Tutaj zarządzasz ustawieniami wydarzenia i listą osób, które chcą wziąć w nim udział."
     >
       <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+          <div className="max-w-3xl">
             <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
               {detailEyebrow}
             </p>
-            <h3 className="mt-2 text-2xl font-semibold text-brand-navy">{detailTitle}</h3>
             <p className="mt-2 text-brand-muted">{event.summary}</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">

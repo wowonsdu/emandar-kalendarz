@@ -80,6 +80,7 @@ export const router = createBrowserRouter(
             { path: "ustawienia", Component: ProfileSettingsPage },
             { path: "powiadomienia", Component: NotificationsSettingsPage },
             { path: "grupy", Component: GroupsPage },
+            { path: "grupy/utworz", Component: GroupsPage },
             { path: "grupy/:groupId", Component: GroupsPage },
             { path: "rejestracje", Component: AccountRequestsPage },
             { path: "zgloszenia", Component: RequestsPage },

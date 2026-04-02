@@ -111,6 +111,11 @@ function getEventDurationDaysLabel(event: TrainingEvent) {
   return bounds.dayCount === 1 ? "1 dzień" : `${bounds.dayCount} dni`;
 }
 
+function getCompactLocationTitle(location: string) {
+  const [primary = location] = location.split("/");
+  return primary.trim();
+}
+
 function firstName(value?: string) {
   if (!value) {
     return "";
@@ -524,6 +529,7 @@ function EventCard({
   const eventTags = getEventTags(event);
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
+  const scheduleStartLabel = formatDate(getTrainingEventScheduleBounds(event).startsAt);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventImages = event.eventImages ?? [];
   const communityLeadMaxHeight = eventImages.length > 0 ? "544px" : "336px";
@@ -541,72 +547,83 @@ function EventCard({
     : `/panel/szkolenia/${event.id}`;
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [isMobileExpanded, setIsMobileExpanded] = useState(false);
-  const compactTitle = isCommunityEvent ? event.title || event.location : event.location;
-  const compactMeta = isCommunityEvent ? event.location : leadName;
+  const compactTitle = isCommunityEvent
+    ? event.title || event.location
+    : getCompactLocationTitle(event.location);
+  const compactLocation = event.location;
   const durationDaysLabel = getEventDurationDaysLabel(event);
   const mobileSummarySchedule = scheduleRows.slice(0, 2);
+  const compactTags = eventTags.slice(0, 2);
+  const hasMoreCompactTags = eventTags.length > compactTags.length;
 
   const mobileCard = (
-    <article className="rounded-[1.75rem] border border-brand-line bg-white p-3.5 shadow-soft md:hidden">
+    <article className="rounded-[1.75rem] border border-brand-line bg-white p-3 shadow-soft md:hidden">
       <button
         type="button"
         onClick={() => setIsMobileExpanded((value) => !value)}
         className="flex w-full items-start gap-3 text-left"
         aria-expanded={isMobileExpanded}
       >
-        <div className="flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.4rem] bg-brand-shell">
-          {leadAvatarUrl ? (
-            <img
-              src={leadAvatarUrl}
-              alt={leadName}
-              className="h-full w-full object-cover object-top"
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-2xl font-semibold text-brand-navy">
-              {leadName.slice(0, 1)}
-            </div>
-          )}
+        <div className="flex w-[4.35rem] shrink-0 flex-col items-center">
+          <div className="flex h-[4.35rem] w-[4.35rem] items-center justify-center overflow-hidden rounded-[1.35rem] bg-brand-shell">
+            {leadAvatarUrl ? (
+              <img
+                src={leadAvatarUrl}
+                alt={leadName}
+                className="h-full w-full object-cover object-top"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-2xl font-semibold text-brand-navy">
+                {leadName.slice(0, 1)}
+              </div>
+            )}
+          </div>
+          <p className="mt-2 line-clamp-2 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-sky-deep">
+            {leadName}
+          </p>
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pt-0.5">
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
-                {leadName}
-              </p>
-              <h3 className="mt-1 text-xl font-semibold leading-tight text-brand-navy">
+              <h3 className="text-[1.75rem] font-semibold leading-[1.15] text-brand-navy">
                 {compactTitle}
               </h3>
             </div>
             <span
-              className={`mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-brand-line bg-brand-shell text-brand-navy transition-transform ${
+              className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-brand-line bg-brand-shell text-brand-navy transition-transform ${
                 isMobileExpanded ? "rotate-180" : ""
               }`}
             >
               <ChevronDown size={16} />
             </span>
           </div>
-          <div className="mt-2 grid gap-1 text-sm text-brand-muted">
+          <div className="mt-2.5 grid gap-1.5 text-sm text-brand-muted">
             <div className="flex items-center gap-2">
               <MapPin size={14} className="shrink-0 text-brand-sky-deep" />
-              <span className="min-w-0 truncate">{compactMeta}</span>
+              <span className="min-w-0 truncate">{compactLocation}</span>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="font-medium text-brand-navy">{scheduleRangeLabel}</span>
+              <span className="font-medium text-brand-navy">{scheduleStartLabel}</span>
               <span className="rounded-full bg-brand-shell px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-muted">
                 {durationDaysLabel}
               </span>
             </div>
           </div>
-          {eventTags.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {eventTags.map((tag) => (
+          {compactTags.length > 0 && (
+            <div className="mt-3 flex flex-nowrap gap-2 overflow-hidden">
+              {compactTags.map((tag) => (
                 <span
                   key={`${event.id}-compact-${tag}`}
-                  className="rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy"
+                  className="truncate rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy"
                 >
                   {tag}
                 </span>
               ))}
+              {hasMoreCompactTags ? (
+                <span className="shrink-0 rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+                  ...
+                </span>
+              ) : null}
             </div>
           )}
         </div>
@@ -1056,9 +1073,8 @@ export function CalendarPage() {
 
   return (
     <EventFeedSection
-      eyebrow="Kalendarz"
-      title="Najblizsze grupy Emandar"
-      description="Znajdz wydarzenie dla siebie i popros o kontakt z osoba prowadzaca lub organizatorem."
+      eyebrow="Szkolenia Emandar"
+      title="Spotkania z Przekazującymi wiedzę"
       emptyTitle="Brak opublikowanych szkoleń"
       emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
       events={events}

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import {
+  ArrowLeft,
   Bell,
   CalendarDays,
   LayoutDashboard,
   LogOut,
   Menu,
+  Plus,
   ShieldCheck,
   Sparkles,
   Users,
@@ -41,17 +43,34 @@ const publicNavItems = [
   { to: "/wydarzenia-spolecznosci", label: "Społeczność", icon: Bell },
 ] as const;
 
-function BrandMark() {
+function BrandMark({ inverted = false }: { inverted?: boolean }) {
   return (
     <Link to="/" className="flex min-w-0 items-center gap-2.5 sm:gap-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
+      <div
+        className={[
+          "flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11",
+          inverted ? "bg-white/10 text-white" : "bg-brand-sky/15 text-brand-navy",
+        ].join(" ")}
+      >
         <Sparkles size={20} />
       </div>
       <div className="min-w-0">
-        <div className="truncate text-[10px] uppercase tracking-[0.28em] text-brand-navy/60 sm:text-xs sm:tracking-[0.35em]">
+        <div
+          className={[
+            "truncate text-[10px] uppercase tracking-[0.28em] sm:text-xs sm:tracking-[0.35em]",
+            inverted ? "text-white/60" : "text-brand-navy/60",
+          ].join(" ")}
+        >
           Emandar
         </div>
-        <div className="truncate text-base font-semibold text-brand-navy sm:text-lg">Kalendarz</div>
+        <div
+          className={[
+            "truncate text-base font-semibold sm:text-lg",
+            inverted ? "text-white" : "text-brand-navy",
+          ].join(" ")}
+        >
+          Kalendarz
+        </div>
       </div>
     </Link>
   );
@@ -88,18 +107,10 @@ export function PublicLayout() {
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:gap-6 sm:px-6 sm:py-4 lg:px-8">
-          <div className="flex items-center gap-2.5 md:hidden">
-            <button
-              type="button"
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft"
-              aria-label="Otwórz menu"
-            >
-              <Menu size={22} />
-            </button>
+          <div className="min-w-0 md:hidden">
             <BrandMark />
           </div>
-          <div className="hidden md:block">
+          <div className="hidden min-w-0 md:block">
             <BrandMark />
           </div>
 
@@ -144,6 +155,15 @@ export function PublicLayout() {
               </>
             )}
           </div>
+
+          <button
+            type="button"
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="ml-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft md:hidden"
+            aria-label="Otwórz menu"
+          >
+            <Menu size={22} />
+          </button>
         </div>
       </header>
 
@@ -159,14 +179,14 @@ export function PublicLayout() {
             onClick={() => setIsMobileMenuOpen(false)}
             className="absolute inset-0 bg-brand-navy/45 backdrop-blur-sm"
           />
-          <aside className="absolute inset-y-0 left-0 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border-r border-brand-line/80 bg-white text-brand-navy shadow-2xl">
+          <aside className="absolute inset-y-0 right-0 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border-l border-white/10 bg-brand-navy text-white shadow-2xl">
             <div className="flex min-h-full flex-col px-5 py-6">
               <div className="mb-8 flex items-start justify-between gap-4">
-                <BrandMark />
+                <BrandMark inverted />
                 <button
                   type="button"
                   onClick={() => setIsMobileMenuOpen(false)}
-                  className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft"
+                  className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-white hover:bg-white/20"
                   aria-label="Zamknij menu"
                 >
                   <X size={18} />
@@ -186,8 +206,8 @@ export function PublicLayout() {
                       className={[
                         "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors",
                         isActive
-                          ? "bg-brand-navy text-white"
-                          : "bg-brand-shell/70 text-brand-navy hover:bg-brand-shell",
+                          ? "bg-white text-brand-navy"
+                          : "text-white/75 hover:bg-white/10 hover:text-white",
                       ].join(" ")}
                     >
                       <Icon size={18} />
@@ -197,7 +217,7 @@ export function PublicLayout() {
                 })}
               </nav>
 
-              <div className="mt-8 space-y-3 rounded-[1.75rem] border border-brand-line bg-brand-shell/70 p-4">
+              <div className="mt-8 space-y-3 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
                 {currentUser ? (
                   <Link
                     to={userHomePath}
@@ -212,7 +232,7 @@ export function PublicLayout() {
                     <Link
                       to="/login"
                       onClick={() => setIsMobileMenuOpen(false)}
-                      className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy"
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white hover:bg-white/20"
                     >
                       <ShieldCheck size={16} />
                       Logowanie
@@ -264,7 +284,10 @@ function panelItems(
   isCommunityTrainer = false,
   pendingCommunityApprovals = 0,
 ) {
-  const base = [{ to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard }];
+  const base = [
+    { to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { to: "/kalendarz", label: "Widok publiczny", icon: Sparkles },
+  ];
 
   if (role === "participant") {
     return [
@@ -344,6 +367,39 @@ function panelItems(
     { to: "/panel/relacje", label: "Relacje", icon: ShieldCheck },
     { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
   ];
+}
+
+function getPanelBackPath(pathname: string, search: string) {
+  const searchParams = new URLSearchParams(search);
+  const mode = searchParams.get("mode");
+
+  if (pathname === "/panel/grupy" && mode === "create") {
+    return "/panel/grupy";
+  }
+
+  if (pathname.startsWith("/panel/grupy/")) {
+    if (mode === "edit") {
+      return pathname;
+    }
+    return "/panel/grupy";
+  }
+
+  if (pathname === "/panel/szkolenia/utworz" || pathname.startsWith("/panel/szkolenia/")) {
+    return "/panel/szkolenia";
+  }
+
+  if (
+    pathname === "/panel/wydarzenia-spolecznosci/utworz" ||
+    pathname.startsWith("/panel/wydarzenia-spolecznosci/")
+  ) {
+    return "/panel/wydarzenia-spolecznosci";
+  }
+
+  if (pathname === "/panel/terminy" && (searchParams.get("groupId") || searchParams.get("slotId"))) {
+    return "/panel/terminy";
+  }
+
+  return null;
 }
 
 function PanelNavigationContent({
@@ -481,6 +537,7 @@ export function PanelLayout() {
   const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser?.id);
+  const organizerProfile = store.organizers.find((item) => item.userId === currentUser?.id);
   const pendingCommunityApprovals = store.trainingEvents.filter(
     (item) =>
       isCommunityBrandStatus(item.brandStatus) &&
@@ -492,6 +549,51 @@ export function PanelLayout() {
     currentUser?.role === "admin" ? pendingCommunityApprovals : 0,
   );
   const currentUserEmailOrPhone = currentUser?.email || currentUser?.phone || "Konto SMS";
+  const panelBackPath = getPanelBackPath(location.pathname, location.search);
+  const organizerCanCreateOfficialTraining =
+    currentUser?.role === "organizer" &&
+    Boolean(organizerProfile) &&
+    store.groups.some(
+      (group) => group.organizerId === organizerProfile?.id && group.status === "active",
+    );
+  const participantCanCreateOfficialTraining =
+    currentUser?.role === "participant" &&
+    Boolean(organizerProfile) &&
+    store.relations.some(
+      (relation) =>
+        relation.organizerId === organizerProfile?.id &&
+        relation.status === "approved",
+    );
+  const trainerCanCreateOfficialTraining = currentUser?.role === "trainer";
+  const canCreateOfficialTraining =
+    trainerCanCreateOfficialTraining ||
+    organizerCanCreateOfficialTraining ||
+    participantCanCreateOfficialTraining;
+  const canCreateCommunityEvent =
+    currentUser?.role === "participant" || currentUser?.role === "trainer";
+  const headerCreateShortcut =
+    location.pathname === "/panel/grupy" && currentUser.role === "organizer"
+      ? {
+          to: "/panel/grupy/utworz",
+          mobileLabel: "Utwórz",
+          desktopLabel: "Utwórz grupę",
+          ariaLabel: "Utwórz grupę",
+        }
+      : location.pathname === "/panel/szkolenia" && canCreateOfficialTraining
+        ? {
+            to: "/panel/szkolenia/utworz",
+            mobileLabel: "Utwórz",
+            desktopLabel: "Utwórz szkolenie",
+            ariaLabel: "Utwórz szkolenie",
+          }
+        : location.pathname === "/panel/wydarzenia-spolecznosci" && canCreateCommunityEvent
+          ? {
+              to: "/panel/wydarzenia-spolecznosci/utworz",
+              mobileLabel: "Utwórz",
+              desktopLabel: "Utwórz wydarzenie",
+              ariaLabel: "Utwórz wydarzenie",
+            }
+          : null;
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -547,15 +649,7 @@ export function PanelLayout() {
         <div className="min-w-0">
           <header className="sticky top-0 z-30 border-b border-brand-line/80 bg-white/90 backdrop-blur-xl">
             <div className="flex items-center justify-between gap-3 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:px-10">
-              <div className="flex items-center gap-2.5 sm:gap-3">
-                <button
-                  type="button"
-                  onClick={() => setIsMobileMenuOpen(true)}
-                  className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft lg:hidden"
-                  aria-label="Otwórz menu"
-                >
-                  <Menu size={22} />
-                </button>
+              <div className="min-w-0">
                 <div>
                   <p className="text-[10px] uppercase tracking-[0.28em] text-brand-muted sm:text-xs sm:tracking-[0.32em]">
                     {getRoleLabel(currentUser.role)}
@@ -565,14 +659,39 @@ export function PanelLayout() {
                   </h1>
                 </div>
               </div>
-              <div className="flex items-center gap-2 sm:gap-4">
-                <Link
-                  to="/kalendarz"
-                  className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold text-brand-navy sm:px-4 sm:text-sm"
+              <div className="flex shrink-0 items-center gap-2">
+                {panelBackPath ? (
+                  <Link
+                    to={panelBackPath}
+                    className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft lg:hidden"
+                    aria-label="Wróć"
+                  >
+                    <ArrowLeft size={20} />
+                  </Link>
+                ) : null}
+                {headerCreateShortcut ? (
+                  <Link
+                    to={headerCreateShortcut.to}
+                    className="inline-flex h-12 items-center justify-center gap-1.5 rounded-2xl border border-brand-line bg-white px-3 text-brand-navy shadow-soft sm:gap-2 sm:px-3.5"
+                    aria-label={headerCreateShortcut.ariaLabel}
+                  >
+                    <Plus size={18} />
+                    <span className="text-sm font-semibold sm:hidden">
+                      {headerCreateShortcut.mobileLabel}
+                    </span>
+                    <span className="hidden text-sm font-semibold sm:inline">
+                      {headerCreateShortcut.desktopLabel}
+                    </span>
+                  </Link>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setIsMobileMenuOpen(true)}
+                  className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft lg:hidden"
+                  aria-label="Otwórz menu"
                 >
-                  <span className="hidden sm:inline">Zobacz widok publiczny</span>
-                  <span className="sm:hidden">Publiczny</span>
-                </Link>
+                  <Menu size={22} />
+                </button>
               </div>
             </div>
           </header>
@@ -591,7 +710,7 @@ export function PanelLayout() {
             onClick={() => setIsMobileMenuOpen(false)}
             className="absolute inset-0 bg-brand-navy/45 backdrop-blur-sm"
           />
-          <aside className="absolute inset-y-0 left-0 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border-r border-brand-line/80 bg-brand-navy text-white shadow-2xl">
+          <aside className="absolute inset-y-0 right-0 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border-l border-brand-line/80 bg-brand-navy text-white shadow-2xl">
             <PanelNavigationContent
               availableRoles={availableRoles}
               currentRole={currentUser.role}

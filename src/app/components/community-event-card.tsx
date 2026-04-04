@@ -277,6 +277,7 @@ export function CommunityEventCard({
   const scheduleRangeLabel = getScheduleRangeLabel(event);
   const scheduleStartLabel = formatDate(getTrainingEventScheduleBounds(event).startsAt);
   const eventImages = event.eventImages ?? [];
+  const communityLeadMaxHeight = eventImages.length > 0 ? "544px" : "336px";
   const canManage = canManagePublicEvent(event, currentUser);
   const leadName = getPublicLeadName(event, trainer?.displayName);
   const leadAvatarUrl =
@@ -438,15 +439,16 @@ export function CommunityEventCard({
   return (
     <>
       {mobileCard}
-      <article className="hidden overflow-hidden rounded-[2rem] border border-brand-line bg-white shadow-soft md:block">
+      <article className="hidden rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft md:block">
         <div
-          className={`grid md:items-start ${
+          className={`grid gap-6 md:items-stretch ${
             showTrainerImage ? "md:grid-cols-[228px_minmax(0,1fr)]" : "grid-cols-1"
           }`}
         >
           {showTrainerImage && (
             <div
-              className="relative overflow-hidden bg-brand-shell md:self-start md:h-[21rem]"
+              className="relative overflow-hidden rounded-[1.75rem] bg-brand-shell md:h-full md:min-h-[336px]"
+              style={{ maxHeight: communityLeadMaxHeight }}
             >
               {leadAvatarUrl ? (
                 communityCoverImageIndex !== null ? (
@@ -485,7 +487,7 @@ export function CommunityEventCard({
             </div>
           )}
 
-          <div className="flex min-w-0 flex-col p-6">
+          <div className="flex min-w-0 flex-col">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <h3 className="break-words text-2xl font-semibold text-brand-navy md:text-[2.2rem]">

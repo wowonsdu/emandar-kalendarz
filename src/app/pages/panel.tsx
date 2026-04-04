@@ -56,10 +56,12 @@ import {
 import {
   aggregateEventCapacityStats,
   buildTrainerFreeDaySlices,
+  canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
   canModerateTrainingEvent,
   canUseOrganizerFunctions,
+  getEnrollmentIntentLabel,
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
@@ -77,6 +79,7 @@ import {
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
   isOrganizerFunctionsBlocked,
+  resolveEnrollmentIntent,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
@@ -90,6 +93,7 @@ import type {
   AvatarCropSettings,
   EmandarBrandStatus,
   EnrollmentFinalStatus,
+  EnrollmentIntent,
   EnrollmentRequest,
   Group,
   GroupEventType,
@@ -1029,7 +1033,12 @@ function isOperationalEnrollmentRequest(
 }
 
 function isEventFinished(event: TrainingEvent) {
-  return new Date(event.endsAt).getTime() < Date.now();
+  const bounds = getTrainingEventScheduleBounds(event);
+  return new Date(bounds.endsAt).getTime() < Date.now();
+}
+
+function isCommunityModerationPending(event: TrainingEvent) {
+  return event.publicationApprovalStatus === "pending";
 }
 
 function isParticipantEnrollmentArchived(
@@ -1715,6 +1724,88 @@ function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
   }
 }
 
+type EnrollmentIntentFilter = "all" | EnrollmentIntent;
+
+function matchesEnrollmentIntentFilter(
+  request: Pick<EnrollmentRequest, "intent">,
+  filter: EnrollmentIntentFilter,
+) {
+  if (filter === "all") {
+    return true;
+  }
+
+  return resolveEnrollmentIntent(request.intent) === filter;
+}
+
+function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
+  const contactRequests = requests.filter(
+    (request) => resolveEnrollmentIntent(request.intent) === "contact",
+  );
+  const participatingRequests = requests.filter(
+    (request) => resolveEnrollmentIntent(request.intent) === "participating",
+  );
+
+  return [
+    {
+      key: "contact",
+      title: "Proszą o kontakt",
+      requests: contactRequests,
+    },
+    {
+      key: "participating",
+      title: "Biorą udział",
+      requests: participatingRequests,
+    },
+  ].filter((section) => section.requests.length > 0);
+}
+
+function getEnrollmentIntentBadgeClass(intent: EnrollmentIntent | null | undefined) {
+  return resolveEnrollmentIntent(intent) === "participating"
+    ? "rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white"
+    : "rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy";
+}
+
+function EnrollmentIntentFilterSwitch({
+  requests,
+  value,
+  onChange,
+}: {
+  requests: EnrollmentRequest[];
+  value: EnrollmentIntentFilter;
+  onChange: (nextValue: EnrollmentIntentFilter) => void;
+}) {
+  const options: Array<{ value: EnrollmentIntentFilter; label: string }> = [
+    { value: "all", label: `Wszyscy (${requests.length})` },
+    {
+      value: "contact",
+      label: `Proszą o kontakt (${requests.filter((request) => resolveEnrollmentIntent(request.intent) === "contact").length})`,
+    },
+    {
+      value: "participating",
+      label: `Biorą udział (${requests.filter((request) => resolveEnrollmentIntent(request.intent) === "participating").length})`,
+    },
+  ];
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          className={
+            value === option.value
+              ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-2 text-sm font-semibold text-white"
+              : "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy"
+          }
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function isCommunityTrainerProfile(status: EmandarBrandStatus | undefined) {
   return isCommunityBrandStatus(status);
 }
@@ -1993,6 +2084,43 @@ function EventScopeSwitch({
         >
           {ownedLabel}
         </button>
+      </div>
+    </div>
+  );
+}
+
+type CommunityModerationTimelineScope = "pending" | "future" | "past";
+
+function CommunityModerationTimelineSwitch({
+  activeScope,
+  onChange,
+}: {
+  activeScope: CommunityModerationTimelineScope;
+  onChange: (scope: CommunityModerationTimelineScope) => void;
+}) {
+  const options: Array<{ scope: CommunityModerationTimelineScope; label: string }> = [
+    { scope: "pending", label: "Oczekujące" },
+    { scope: "future", label: "Przyszłe" },
+    { scope: "past", label: "Przeszłe" },
+  ];
+
+  return (
+    <div className="w-full max-w-[34rem]">
+      <div className="grid grid-cols-3 gap-1 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft">
+        {options.map((option) => (
+          <button
+            key={option.scope}
+            type="button"
+            onClick={() => onChange(option.scope)}
+            className={`min-w-0 rounded-[1.35rem] px-3 py-2.5 text-center text-sm font-semibold transition ${
+              activeScope === option.scope
+                ? "bg-brand-navy text-white"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -3819,6 +3947,7 @@ export function RequestsPage() {
     decideTrainerAccountApproval,
     store,
   } = useAppState();
+  const [intentFilter, setIntentFilter] = useState<EnrollmentIntentFilter>("all");
 
   if (!currentUser) {
     return null;
@@ -3850,6 +3979,10 @@ export function RequestsPage() {
   const requests = store.enrollmentRequests.filter((request) => {
     return manageableEventIds.has(request.eventId) && isOperationalEnrollmentRequest(request, store);
   });
+  const filteredRequests = requests.filter((request) =>
+    matchesEnrollmentIntentFilter(request, intentFilter),
+  );
+  const requestSections = splitEnrollmentRequestsByIntent(filteredRequests);
 
   return (
     <PanelSection
@@ -3858,13 +3991,36 @@ export function RequestsPage() {
       showLeadText={false}
     >
       <div className="space-y-4">
+        {requests.length > 0 && (
+          <EnrollmentIntentFilterSwitch
+            requests={requests}
+            value={intentFilter}
+            onChange={setIntentFilter}
+          />
+        )}
         {requests.length === 0 && (
           <EmptyPanelState
             title="Brak zgłoszeń"
             description="Nowe zgłoszenia do Twoich wydarzeń pojawią się tutaj."
           />
         )}
-        {requests.map((request) => {
+        {requests.length > 0 && requestSections.length === 0 && (
+          <EmptyPanelState
+            title="Brak zgłoszeń w tym widoku"
+            description="Zmień filtr, żeby zobaczyć pozostałe osoby."
+          />
+        )}
+        {requestSections.map((section) => (
+          <div key={section.key} className="space-y-4">
+            <SectionBlockHeading
+              title={section.title}
+              description={
+                section.key === "contact"
+                  ? "Osoby, które chcą najpierw porozmawiać i uzyskać odpowiedź na pytania."
+                  : "Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję managera."
+              }
+            />
+            {section.requests.map((request) => {
           const event = store.trainingEvents.find((item) => item.id === request.eventId);
           if (!event) {
             return null;
@@ -3894,9 +4050,14 @@ export function RequestsPage() {
                     <span>{formatDate(request.createdAt)}</span>
                   </div>
                 </div>
-                <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                  {request.finalStatus}
-                </span>
+                <div className="flex flex-wrap gap-2">
+                  <span className={getEnrollmentIntentBadgeClass(request.intent)}>
+                    {getEnrollmentIntentLabel(request.intent)}
+                  </span>
+                  <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
+                    {request.finalStatus}
+                  </span>
+                </div>
               </div>
 
               <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
@@ -3985,7 +4146,9 @@ export function RequestsPage() {
               )}
             </article>
           );
-        })}
+            })}
+          </div>
+        ))}
       </div>
 
       {(currentUser.role === "trainer" || currentUser.role === "admin") && (
@@ -6537,6 +6700,8 @@ export function EventsPage() {
   const [eventScope, setEventScope] = useState<"all" | "mine">(
     isCommunitySection ? "all" : hasOfficialManagementScope ? "mine" : "all",
   );
+  const [communityModerationScope, setCommunityModerationScope] =
+    useState<CommunityModerationTimelineScope>("pending");
   const participantRecords = useMemo(
     () => getParticipantEnrollmentRecords(currentUser.id, store),
     [currentUser.id, store],
@@ -6591,16 +6756,25 @@ export function EventsPage() {
   );
   const listedEvents = isCommunitySection
     ? isCommunityModerationSection
-      ? [...communityEvents].sort((left, right) => {
-          const leftPending = left.publicationApprovalStatus === "pending" ? 0 : 1;
-          const rightPending = right.publicationApprovalStatus === "pending" ? 0 : 1;
+      ? [...communityEvents]
+          .filter((event) => {
+            const isPendingEvent = isCommunityModerationPending(event);
+            if (communityModerationScope === "pending") {
+              return isPendingEvent;
+            }
+            if (isPendingEvent) {
+              return false;
+            }
+            const isPastEvent = isEventFinished(event);
+            return communityModerationScope === "past" ? isPastEvent : !isPastEvent;
+          })
+          .sort((left, right) => {
+            if (communityModerationScope === "past") {
+              return new Date(right.startsAt).getTime() - new Date(left.startsAt).getTime();
+            }
 
-          if (leftPending !== rightPending) {
-            return leftPending - rightPending;
-          }
-
-          return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
-        })
+            return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+          })
       : hasModerationScope
       ? communityEvents
       : ownCommunityEvents
@@ -6744,6 +6918,12 @@ export function EventsPage() {
     }
   }, [eventScope, hasModerationScope, hasOfficialManagementScope, isCommunitySection]);
 
+  useEffect(() => {
+    if (!isCommunityModerationSection && communityModerationScope !== "pending") {
+      setCommunityModerationScope("pending");
+    }
+  }, [communityModerationScope, isCommunityModerationSection]);
+
   if (isCommunityModerationSection && !hasModerationScope) {
     return <Navigate to="/panel/wydarzenia-spolecznosci" replace />;
   }
@@ -6869,6 +7049,15 @@ export function EventsPage() {
       description={sectionDescription}
       showLeadText={!isCommunityListView}
     >
+      {isCommunityModerationSection ? (
+        <div className="flex justify-start">
+          <CommunityModerationTimelineSwitch
+            activeScope={communityModerationScope}
+            onChange={setCommunityModerationScope}
+          />
+        </div>
+      ) : null}
+
       {shouldShowScopeSwitch ? (
         <div className="flex justify-start">
           <EventScopeSwitch
@@ -7696,8 +7885,20 @@ export function EventsPage() {
         <div className="space-y-4">
           {listedEvents.length === 0 ? (
             <EmptyPanelState
-              title="Brak wydarzeń do moderacji"
-              description="Community eventy pojawią się tutaj automatycznie, gdy tylko trafią do systemu."
+              title={
+                communityModerationScope === "pending"
+                  ? "Brak wydarzeń oczekujących"
+                  : communityModerationScope === "future"
+                    ? "Brak przyszłych wydarzeń"
+                    : "Brak przeszłych wydarzeń"
+              }
+              description={
+                communityModerationScope === "pending"
+                  ? "Community eventy pojawią się tutaj automatycznie, gdy tylko trafią do systemu."
+                  : communityModerationScope === "future"
+                    ? "Zaakceptowane albo odrzucone wydarzenia z przyszłymi terminami pojawią się tutaj."
+                    : "Wydarzenia po zakończeniu terminu pojawią się tutaj automatycznie."
+              }
             />
           ) : (
             listedEvents.map((event) => (
@@ -7778,7 +7979,7 @@ export function EventsPage() {
                               ? "Wyłączanie..."
                               : "Wyłącz z publikacji"}
                           </button>
-                        ) : event.publicationApprovalStatus === "accepted" ? (
+                        ) : canPublishTrainingEvent(event) ? (
                           <button
                             type="button"
                             disabled={togglingPublicationEventId === event.id}
@@ -8020,6 +8221,7 @@ export function EventManagementPage() {
   const [communityDetailTab, setCommunityDetailTab] = useState<
     "requests" | "participants" | "edit"
   >("requests");
+  const [requestIntentFilter, setRequestIntentFilter] = useState<EnrollmentIntentFilter>("all");
   const [publishingEvent, setPublishingEvent] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<EventManagementSettingsDraft>({
     status: "active" as TrainingEventStatus,
@@ -8119,6 +8321,7 @@ export function EventManagementPage() {
 
   const canManageEvent = canManageTrainingEvent(event, currentUser);
   const canModerateEvent = canModerateTrainingEvent(event, currentUser);
+  const canPublishEvent = canManageEvent && canPublishTrainingEvent(event);
   const eventIsArchived = isTrainingEventArchived(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const isEventOrganizerOwner =
@@ -8200,6 +8403,9 @@ export function EventManagementPage() {
   ).length;
   const communityParticipantRequests = requests.filter(
     (item) => item.finalStatus === "accepted" || item.finalStatus === "partial",
+  );
+  const filteredRequestSections = splitEnrollmentRequestsByIntent(
+    requests.filter((request) => matchesEnrollmentIntentFilter(request, requestIntentFilter)),
   );
 
   if (isCommunityEvent) {
@@ -8319,7 +8525,7 @@ export function EventManagementPage() {
 
           {(canManageEvent || canModerateEvent) ? (
             <div className="mt-5 flex flex-wrap gap-3">
-              {canManageEvent && !eventIsArchived && !event.isPublished && event.publicationApprovalStatus === "accepted" ? (
+              {canPublishEvent ? (
                 <button
                   type="button"
                   disabled={publishingEvent || unpublishingEvent || deletingEvent}
@@ -8580,108 +8786,135 @@ export function EventManagementPage() {
               title="Zgłoszenia do wydarzenia"
               description="Tutaj widzisz wszystkie prośby o dołączenie, a licznik na zakładce pokazuje te, które nie zostały jeszcze przeprocesowane."
             />
+            {requests.length > 0 ? (
+              <EnrollmentIntentFilterSwitch
+                requests={requests}
+                value={requestIntentFilter}
+                onChange={setRequestIntentFilter}
+              />
+            ) : null}
             {requests.length === 0 ? (
               <EmptyPanelState
                 title="Brak zgłoszeń"
                 description="Gdy pojawią się nowe prośby o dołączenie, zobaczysz je tutaj."
               />
+            ) : filteredRequestSections.length === 0 ? (
+              <EmptyPanelState
+                title="Brak zgłoszeń w tym widoku"
+                description="Zmień filtr, żeby zobaczyć pozostałe osoby."
+              />
             ) : (
-              requests.map((request) => (
-                <article
-                  key={request.id}
-                  className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                      <h3 className="text-2xl font-semibold text-brand-navy">
-                        {request.imieNazwisko}
-                      </h3>
-                      <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
-                        <span className="inline-flex items-center gap-2">
-                          <Phone size={14} />
-                          {request.telefon}
-                        </span>
-                        <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                        <span>{formatDate(request.createdAt)}</span>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-                        {request.finalStatus}
-                      </span>
-                      <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                        SMS:{" "}
-                        {resolveAttendanceConfirmationStatusLabel(
-                          request.attendanceConfirmationStatus,
-                        )}
-                      </span>
-                    </div>
-                  </div>
-
-                  <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                    {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                  </p>
-
-                  <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                    <EnrollmentPhotoCard request={request} />
-                    <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                        Stan zgłoszenia
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                          trener: {request.trainerDecision}
-                        </span>
-                        {request.requiresOrganizerApproval !== false ? (
-                          <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            organizator: {request.organizerDecision}
+              filteredRequestSections.map((section) => (
+                <div key={section.key} className="space-y-4">
+                  <SectionBlockHeading
+                    title={section.title}
+                    description={
+                      section.key === "contact"
+                        ? "Osoby, które czekają na odpowiedź i rozmowę z organizatorem."
+                        : "Osoby deklarujące gotowość udziału, ale nadal oczekujące na decyzję."
+                    }
+                  />
+                  {section.requests.map((request) => (
+                    <article
+                      key={request.id}
+                      className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <h3 className="text-2xl font-semibold text-brand-navy">
+                            {request.imieNazwisko}
+                          </h3>
+                          <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
+                            <span className="inline-flex items-center gap-2">
+                              <Phone size={14} />
+                              {request.telefon}
+                            </span>
+                            <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
+                            <span>{formatDate(request.createdAt)}</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <span className={getEnrollmentIntentBadgeClass(request.intent)}>
+                            {getEnrollmentIntentLabel(request.intent)}
                           </span>
-                        ) : null}
+                          <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
+                            {request.finalStatus}
+                          </span>
+                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                            SMS:{" "}
+                            {resolveAttendanceConfirmationStatusLabel(
+                              request.attendanceConfirmationStatus,
+                            )}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  </div>
 
-                  {canManageEvent && !eventIsArchived ? (
-                    <div className="mt-5 flex flex-wrap gap-3">
-                      {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                        <button
-                          key={decision}
-                          type="button"
-                          disabled={updatingRequestId === request.id}
-                          onClick={async () => {
-                            setUpdatingRequestId(request.id);
+                      <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                        {request.wiadomosc || "Brak dodatkowej wiadomości."}
+                      </p>
 
-                            try {
-                              await manageEnrollmentRequest(request.id, decision);
-                              toast.success("Zmieniono status osoby w wydarzeniu.");
-                            } catch (error) {
-                              toast.error(
-                                error instanceof Error
-                                  ? error.message
-                                  : "Nie udało się zmienić statusu osoby.",
-                              );
-                            } finally {
-                              setUpdatingRequestId(null);
-                            }
-                          }}
-                          className={
-                            decision === "accepted"
-                              ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                              : decision === "rejected"
-                                ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                          }
-                        >
-                          {decision === "accepted"
-                            ? "Zaakceptuj"
-                            : decision === "rejected"
-                              ? "Odrzuć"
-                              : "Ustaw oczekuje"}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </article>
+                      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+                        <EnrollmentPhotoCard request={request} />
+                        <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                            Stan zgłoszenia
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                              trener: {request.trainerDecision}
+                            </span>
+                            {request.requiresOrganizerApproval !== false ? (
+                              <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                                organizator: {request.organizerDecision}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+
+                      {canManageEvent && !eventIsArchived ? (
+                        <div className="mt-5 flex flex-wrap gap-3">
+                          {(["accepted", "pending", "rejected"] as const).map((decision) => (
+                            <button
+                              key={decision}
+                              type="button"
+                              disabled={updatingRequestId === request.id}
+                              onClick={async () => {
+                                setUpdatingRequestId(request.id);
+
+                                try {
+                                  await manageEnrollmentRequest(request.id, decision);
+                                  toast.success("Zmieniono status osoby w wydarzeniu.");
+                                } catch (error) {
+                                  toast.error(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Nie udało się zmienić statusu osoby.",
+                                  );
+                                } finally {
+                                  setUpdatingRequestId(null);
+                                }
+                              }}
+                              className={
+                                decision === "accepted"
+                                  ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                                  : decision === "rejected"
+                                    ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                                    : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                              }
+                            >
+                              {decision === "accepted"
+                                ? "Zaakceptuj"
+                                : decision === "rejected"
+                                  ? "Odrzuć"
+                                  : "Ustaw oczekuje"}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
               ))
             )}
           </div>
@@ -9510,6 +9743,13 @@ export function EventManagementPage() {
               : "Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy."
           }
         />
+        {requests.length > 0 && (
+          <EnrollmentIntentFilterSwitch
+            requests={requests}
+            value={requestIntentFilter}
+            onChange={setRequestIntentFilter}
+          />
+        )}
         {requests.length === 0 && (
           <EmptyPanelState
             title={event.groupId ? "Brak nowych zgłoszeń" : "Brak osob na liscie"}
@@ -9520,8 +9760,24 @@ export function EventManagementPage() {
             }
           />
         )}
+        {requests.length > 0 && filteredRequestSections.length === 0 && (
+          <EmptyPanelState
+            title="Brak zgłoszeń w tym widoku"
+            description="Zmień filtr, żeby zobaczyć pozostałe osoby."
+          />
+        )}
 
-        {requests.map((request) => {
+        {filteredRequestSections.map((section) => (
+          <div key={section.key} className="space-y-4">
+            <SectionBlockHeading
+              title={section.title}
+              description={
+                section.key === "contact"
+                  ? "Osoby, które chcą najpierw porozmawiać z organizatorem albo trenerem."
+                  : "Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
+              }
+            />
+            {section.requests.map((request) => {
           const transferTargetEventId = transferSelections[request.id] ?? "";
 
           return (
@@ -9544,6 +9800,9 @@ export function EventManagementPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <span className={getEnrollmentIntentBadgeClass(request.intent)}>
+                    {getEnrollmentIntentLabel(request.intent)}
+                  </span>
                   <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
                     {request.finalStatus}
                   </span>
@@ -9673,7 +9932,9 @@ export function EventManagementPage() {
               </div>
             </article>
           );
-        })}
+            })}
+          </div>
+        ))}
       </div>}
     </PanelSection>
   );

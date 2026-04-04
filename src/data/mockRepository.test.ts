@@ -4,6 +4,7 @@ import { resolveMockApiUrls } from "./mockRepository";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.resetModules();
 });
 
@@ -58,9 +59,12 @@ function createEvent(overrides: Partial<TrainingEvent> = {}): TrainingEvent {
   };
 }
 
-function createStore(eventOverrides: Partial<TrainingEvent> = {}): DemoStore {
+function createStore(
+  eventOverrides: Partial<TrainingEvent> = {},
+  userOverrides: Partial<AppUser> = {},
+): DemoStore {
   return {
-    users: [createActor()],
+    users: [createActor(userOverrides)],
     trainers: [],
     organizers: [],
     participantProfiles: [],
@@ -95,6 +99,28 @@ function createStore(eventOverrides: Partial<TrainingEvent> = {}): DemoStore {
       },
     },
   };
+}
+
+function mockSession(userId: string) {
+  const storage = new Map<string, string>();
+  storage.set("emandar:mock-auth-session", JSON.stringify({ userId }));
+
+  vi.stubGlobal("window", {
+    location: {
+      pathname: "/emandar/kalendarz",
+    },
+    localStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        storage.set(key, value);
+      },
+      removeItem: (key: string) => {
+        storage.delete(key);
+      },
+    },
+    setInterval: globalThis.setInterval.bind(globalThis),
+    clearInterval: globalThis.clearInterval.bind(globalThis),
+  });
 }
 
 function mockStoreFetch(initialStore: DemoStore) {
@@ -197,5 +223,128 @@ describe("publishTrainingEvent", () => {
     await expect(publishTrainingEvent("event-pending-review", actor)).rejects.toThrow(
       "To wydarzenie nie ma jeszcze akceptacji moderacji.",
     );
+  });
+
+  it("lets an active organizer publish official training without moderation and confirms trainer collaboration", async () => {
+    const { publishTrainingEvent } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      displayName: "Anita",
+      organizerProfileId: "organizer-1",
+    });
+    const store = createStore(
+      {
+        id: "event-official-pending",
+        brandStatus: "official",
+        publicationApprovalStatus: undefined,
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        createdByRole: "organizer",
+        creatorUserId: "user-organizer-1",
+        trainerCollaborationStatus: "pending",
+        organizerCollaborationStatus: "accepted",
+      },
+      actor,
+    );
+    store.relations = [
+      {
+        id: "relation-1",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        status: "approved",
+        requestedBy: "organizer",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(publishTrainingEvent("event-official-pending", actor)).resolves.toBeUndefined();
+
+    const publishedEvent = mockedApi.getStore().trainingEvents[0];
+    expect(publishedEvent?.isPublished).toBe(true);
+    expect(publishedEvent?.trainerCollaborationStatus).toBe("accepted");
+  });
+});
+
+describe("submitEnrollment", () => {
+  it("stores participating intent and keeps community request pending until decision", async () => {
+    const actorId = "user-participant";
+    const actor = createActor({
+      id: actorId,
+      role: "participant",
+      roles: ["participant"],
+      primaryRole: "participant",
+      displayName: "Grzegorz Emanowicz",
+      phone: "+48 600 200 300",
+    });
+    mockSession(actorId);
+    const mockedApi = mockStoreFetch(createStore({}, actor));
+    const { submitEnrollment } = await import("./mockRepository");
+
+    await expect(
+      submitEnrollment({
+        eventId: "event-community",
+        intent: "participating",
+        imieNazwisko: actor.displayName,
+        telefon: actor.phone,
+        polecenieOdKogo: "",
+        wiadomosc: "Chcę dołączyć.",
+        photoFile: null,
+      }),
+    ).resolves.toBeUndefined();
+
+    const request = mockedApi.getStore().enrollmentRequests[0];
+    expect(request?.intent).toBe("participating");
+    expect(request?.trainerDecision).toBe("pending");
+    expect(request?.organizerDecision).toBe("accepted");
+    expect(request?.finalStatus).toBe("pending");
+  });
+
+  it("defaults missing intent to contact for legacy submitters", async () => {
+    const actorId = "user-participant";
+    mockSession(actorId);
+    const mockedApi = mockStoreFetch(
+      createStore(
+        {
+          id: "event-official",
+          brandStatus: "official",
+          organizerId: "organizer-1",
+          organizerUserId: "user-organizer-1",
+          trainerId: "trainer-1",
+          trainerUserId: "user-trainer-1",
+        },
+        {
+          id: actorId,
+          role: "participant",
+          roles: ["participant"],
+          primaryRole: "participant",
+          displayName: "Ola Chotnicka",
+          phone: "+48 600 200 301",
+        },
+      ),
+    );
+    const { submitEnrollment } = await import("./mockRepository");
+
+    await expect(
+      submitEnrollment({
+        eventId: "event-official",
+        imieNazwisko: "Ola Chotnicka",
+        telefon: "+48 600 200 301",
+        polecenieOdKogo: "",
+        wiadomosc: "Mam kilka pytań.",
+        photoFile: null,
+      }),
+    ).resolves.toBeUndefined();
+
+    const request = mockedApi.getStore().enrollmentRequests[0];
+    expect(request?.intent).toBe("contact");
+    expect(request?.finalStatus).toBe("pending");
   });
 });

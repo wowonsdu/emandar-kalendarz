@@ -1083,7 +1083,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
     const trainer = findTrainer(store, event.trainerId);
     const organizer = findOrganizer(store, event.organizerId);
     const requiresOrganizerApproval = !isCommunityBrandStatus(event.brandStatus) && Boolean(event.organizerId);
-    const trainerDecision: DecisionStatus = isCommunityBrandStatus(event.brandStatus) ? "accepted" : "pending";
+    const trainerDecision: DecisionStatus = "pending";
     const organizerDecision: DecisionStatus = requiresOrganizerApproval ? "pending" : "accepted";
     const requestId = createId("enrollment");
 
@@ -1097,6 +1097,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       normalizedPhone: normalizePhoneLookupKey(input.telefon),
       trainerUserId: trainer?.userId ?? null,
       organizerUserId: organizer?.userId ?? null,
+      intent: input.intent === "participating" ? "participating" : "contact",
       imieNazwisko: input.imieNazwisko.trim(),
       telefon: input.telefon.trim(),
       polecenieOdKogo: input.polecenieOdKogo.trim(),
@@ -1311,6 +1312,7 @@ export async function manageOwnEnrollment(
       id: createId("enrollment"),
       eventId: input.transferTargetEventId,
       createdAt: nowIso(),
+      intent: request.intent ?? "participating",
       participantStatus: "active",
       trainerDecision: "pending",
       organizerDecision: request.requiresOrganizerApproval === false ? "accepted" : "pending",
@@ -1362,6 +1364,7 @@ export async function manageOwnGroupEventParticipation(
       normalizedPhone: normalizePhoneLookupKey(entry.participantPhone),
       trainerUserId: entry.trainerUserId,
       organizerUserId: entry.organizerUserId,
+      intent: "participating",
       imieNazwisko: entry.participantDisplayName,
       telefon: entry.participantPhone,
       polecenieOdKogo: "Transfer uczestnika",
@@ -2210,6 +2213,12 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
     }
 
     const base = createEventBase(store, actor, input);
+    const organizerHasActiveTrainerRelation =
+      actor.role === "organizer" &&
+      Boolean(base.organizerId) &&
+      Boolean(base.trainerId) &&
+      canOrganizerAccessTrainer(base.organizerId, base.trainerId, store.relations);
+
     store.trainingEvents.unshift({
       id: createId("event"),
       ...base,
@@ -2224,7 +2233,11 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
       eligibleGroupPriorities: cloneValue(input.eligibleGroupPriorities ?? ["stali", "regularni"]),
       confirmationLeadTimeDays: input.confirmationLeadTimeDays ?? 5,
       trainerCollaborationStatus:
-        actor.role === "organizer" && base.trainerId ? "pending" : "accepted",
+        actor.role === "organizer" && base.trainerId
+          ? organizerHasActiveTrainerRelation && !isCommunityBrandStatus(base.brandStatus)
+            ? "accepted"
+            : "pending"
+          : "accepted",
       organizerCollaborationStatus:
         actor.role === "trainer" && base.organizerId ? "pending" : resolveOrganizerCollaborationStatus(base),
       selfManagedByTrainer: input.selfManagedByTrainer === true || !base.organizerId,
@@ -2884,6 +2897,17 @@ export async function publishTrainingEvent(eventId: string, actor: AppUser) {
 
     if (isCommunityBrandStatus(event.brandStatus) && event.publicationApprovalStatus !== "accepted") {
       throw new Error("To wydarzenie nie ma jeszcze akceptacji moderacji.");
+    }
+
+    if (
+      !isCommunityBrandStatus(event.brandStatus) &&
+      actor.role === "organizer" &&
+      actor.organizerProfileId === event.organizerId &&
+      !isOrganizerFunctionsBlocked(actor) &&
+      event.trainerId &&
+      canOrganizerAccessTrainer(actor.organizerProfileId, event.trainerId, store.relations)
+    ) {
+      event.trainerCollaborationStatus = "accepted";
     }
 
     event.isPublished = true;

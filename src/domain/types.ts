@@ -9,6 +9,7 @@ export type EnrollmentFinalStatus =
   | "accepted"
   | "rejected"
   | "partial";
+export type EnrollmentIntent = "contact" | "participating";
 export type ParticipantEnrollmentStatus = "active" | "cancelled";
 export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
 export type AccountRequestStatus = "pending" | "approved" | "rejected";
@@ -470,6 +471,7 @@ export interface EnrollmentRequest {
   organizerContactPhone?: string | null;
   organizerContactEmail?: string | null;
   organizerContactName?: string | null;
+  intent?: EnrollmentIntent;
   imieNazwisko: string;
   telefon: string;
   polecenieOdKogo: string;
@@ -576,6 +578,7 @@ export interface AuthSession {
 
 export interface EnrollmentFormInput {
   eventId: string;
+  intent?: EnrollmentIntent;
   imieNazwisko: string;
   telefon: string;
   polecenieOdKogo: string;

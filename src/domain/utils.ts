@@ -4,6 +4,7 @@ import type {
   AppRole,
   DecisionStatus,
   EmandarBrandStatus,
+  EnrollmentIntent,
   ExternalBusyInterval,
   EventCollaborationStatus,
   EnrollmentFinalStatus,
@@ -87,6 +88,20 @@ export function getParticipantEnrollmentStatusLabel(
     default:
       return "oczekuje";
   }
+}
+
+export function resolveEnrollmentIntent(
+  value: EnrollmentIntent | null | undefined,
+): EnrollmentIntent {
+  return value === "participating" ? "participating" : "contact";
+}
+
+export function getEnrollmentIntentLabel(
+  value: EnrollmentIntent | null | undefined,
+) {
+  return resolveEnrollmentIntent(value) === "participating"
+    ? "Biorą udział"
+    : "Proszą o kontakt";
 }
 
 export function canOrganizerAccessTrainer(
@@ -190,6 +205,23 @@ export function isTrainingEventPubliclyVisible(
   }
 
   return isTrainingEventCollaborationAccepted(event);
+}
+
+export function canPublishTrainingEvent(
+  event: Pick<
+    TrainingEvent,
+    "archivedAt" | "brandStatus" | "isPublished" | "publicationApprovalStatus"
+  >,
+) {
+  if (event.isPublished || isTrainingEventArchived(event)) {
+    return false;
+  }
+
+  if (isCommunityBrandStatus(event.brandStatus)) {
+    return event.publicationApprovalStatus === "accepted";
+  }
+
+  return true;
 }
 
 export function canManageTrainingEvent(

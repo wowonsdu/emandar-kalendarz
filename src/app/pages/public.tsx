@@ -22,6 +22,7 @@ import type {
   AppUser,
   DemoStore,
   EmandarBrandStatus,
+  EnrollmentIntent,
   TrainingEvent,
   TrainingEventImage,
 } from "@/domain/types";
@@ -1001,6 +1002,12 @@ export function EventDetailsPage() {
   const event = publicEvents.find((item) => item.id === eventId);
   const trainer = store.trainers.find((item) => item.id === event?.trainerId);
   const organizer = store.organizers.find((item) => item.id === event?.organizerId);
+  const participantProfile =
+    store.participantProfiles?.find(
+      (item) =>
+        item.id === currentUser?.participantProfileId ||
+        item.linkedUserId === currentUser?.id,
+    ) ?? null;
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
@@ -1010,6 +1017,7 @@ export function EventDetailsPage() {
   const [smsDialogStage, setSmsDialogStage] = useState<"verify" | "success">("verify");
   const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
   const [form, setForm] = useState({
+    intent: "contact" as EnrollmentIntent,
     imieNazwisko: "",
     telefon: currentUser?.phone ?? getCurrentSessionPhone(),
     polecenieOdKogo: "",
@@ -1044,6 +1052,16 @@ export function EventDetailsPage() {
     ? `/panel/wydarzenia-spolecznosci/${event.id}`
     : `/panel/szkolenia/${event.id}`;
   const returnPath = "/panel/dashboard";
+  const isLoggedInEnrollmentFlow = Boolean(currentUser);
+  const loggedInEnrollmentName =
+    participantProfile?.displayName?.trim() ||
+    currentUser?.displayName?.trim() ||
+    "";
+  const loggedInEnrollmentPhone =
+    currentUser?.phone?.trim() ||
+    participantProfile?.phone?.trim() ||
+    getCurrentSessionPhone() ||
+    "";
 
   useEffect(() => {
     return () => {
@@ -1088,6 +1106,15 @@ export function EventDetailsPage() {
   }
 
   function validateEnrollmentForm() {
+    if (isLoggedInEnrollmentFlow) {
+      if (!loggedInEnrollmentName) {
+        throw new Error("Na koncie brakuje imienia i nazwiska potrzebnego do zgłoszenia.");
+      }
+
+      normalizePhoneNumberForSms(loggedInEnrollmentPhone);
+      return;
+    }
+
     if (!form.imieNazwisko.trim()) {
       throw new Error("Podaj imię i nazwisko.");
     }
@@ -1103,25 +1130,46 @@ export function EventDetailsPage() {
     setLoading(true);
 
     try {
-      const hasEnrollmentPhoto = enrollmentPhotoEnabled && Boolean(form.photoFile);
+      const submissionName = isLoggedInEnrollmentFlow ? loggedInEnrollmentName : form.imieNazwisko;
+      const submissionPhone = isLoggedInEnrollmentFlow
+        ? loggedInEnrollmentPhone
+        : phoneOverride ?? form.telefon;
+      const submissionPhotoFile = isLoggedInEnrollmentFlow
+        ? null
+        : enrollmentPhotoEnabled
+          ? form.photoFile
+          : null;
+      const hasEnrollmentPhoto =
+        !isLoggedInEnrollmentFlow && enrollmentPhotoEnabled && Boolean(form.photoFile);
+
       await submitEnrollment({
         eventId: event.id,
-        imieNazwisko: form.imieNazwisko,
-        telefon: phoneOverride ?? form.telefon,
-        polecenieOdKogo: form.polecenieOdKogo,
+        intent: form.intent,
+        imieNazwisko: submissionName,
+        telefon: submissionPhone,
+        polecenieOdKogo: isLoggedInEnrollmentFlow ? "" : form.polecenieOdKogo,
         wiadomosc: form.wiadomosc,
-        photoFile: enrollmentPhotoEnabled ? form.photoFile : null,
+        photoFile: submissionPhotoFile,
       });
-      toast.success(
-        hasEnrollmentPhoto
-          ? "Zgłoszenie i zdjęcie zostały zapisane."
-          : "Zgłoszenie zostało zapisane.",
-      );
+      if (isLoggedInEnrollmentFlow) {
+        toast.success(
+          form.intent === "participating"
+            ? "Zgłoszenie udziału zostało zapisane."
+            : "Prośba o kontakt została zapisana.",
+        );
+      } else {
+        toast.success(
+          hasEnrollmentPhoto
+            ? "Zgłoszenie i zdjęcie zostały zapisane."
+            : "Zgłoszenie zostało zapisane.",
+        );
+      }
       setVerificationCode("");
       setConfirmationResult(null);
       setSmsDialogStage("success");
       setIsSmsDialogOpen(true);
       setForm({
+        intent: "contact",
         imieNazwisko: "",
         telefon: currentUser?.phone ?? getCurrentSessionPhone(),
         polecenieOdKogo: "",
@@ -1213,6 +1261,12 @@ export function EventDetailsPage() {
       toast.error(
         error instanceof Error ? error.message : "Uzupełnij wymagane pola formularza.",
       );
+      return;
+    }
+
+    if (isLoggedInEnrollmentFlow) {
+      await ensurePhoneParticipantProfileForFlow(event.trainerId ?? undefined);
+      await submitEnrollmentRequest(loggedInEnrollmentPhone);
       return;
     }
 
@@ -1380,15 +1434,17 @@ export function EventDetailsPage() {
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
             Formularz dołączenia
           </p>
-          <p className="mt-3 text-brand-muted">
-            Zgłoszenie trafi do Przekazującego Wiedzę
-            {organizer ? " i organizatora." : "."}{" "}
-            {enrollmentPhotoMode === "required"
-              ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
-              : enrollmentPhotoMode === "optional"
-                ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
-                : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."}
-          </p>
+          {!isLoggedInEnrollmentFlow ? (
+            <p className="mt-3 text-brand-muted">
+              {`Zgłoszenie trafi do Przekazującego Wiedzę${organizer ? " i organizatora." : "."} ${
+                enrollmentPhotoMode === "required"
+                  ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
+                  : enrollmentPhotoMode === "optional"
+                    ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
+                    : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."
+              }`}
+            </p>
+          ) : null}
           {isCancelled && (
             <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
               Zapisy sa wstrzymane, bo to wydarzenie ma status anulowane.
@@ -1396,66 +1452,102 @@ export function EventDetailsPage() {
           )}
 
           <div className="mt-8 grid gap-4">
-            <input
-              required
-              value={form.imieNazwisko}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  imieNazwisko: event.target.value,
-                }))
-              }
-              placeholder="Imię i nazwisko"
-              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-            <input
-              required
-              value={form.telefon}
-              disabled={smsVerified}
-              onChange={(event) => {
-                setSmsDialogStage("verify");
-                setConfirmationResult(null);
-                setVerificationCode("");
-                setForm((current) => ({
-                  ...current,
-                  telefon: event.target.value,
-                }));
-              }}
-              placeholder="Numer telefonu"
-              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
-            />
-            <div id="enrollment-phone-recaptcha" className="sr-only" />
-            <input
-              value={form.polecenieOdKogo}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  polecenieOdKogo: event.target.value,
-                }))
-              }
-              placeholder="Czy jesteś z polecenia od kogoś?"
-              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-            {enrollmentPhotoEnabled && (
-              <label className="grid min-w-0 gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
-                <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                  <ImagePlus size={16} />
-                  Zdjęcie twarzy
-                </span>
+            {isLoggedInEnrollmentFlow ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {([
+                  { value: "contact" as const, message: "Proszę o kontakt" },
+                  { value: "participating" as const, message: "Biorę udział" },
+                ]).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() =>
+                      setForm((current) => ({
+                        ...current,
+                        intent: option.value,
+                      }))
+                    }
+                    className={
+                      form.intent === option.value
+                        ? "rounded-3xl border border-brand-navy bg-white px-5 py-5 text-left text-brand-navy shadow-soft"
+                        : "rounded-3xl border border-brand-line bg-white px-5 py-5 text-left text-brand-muted"
+                    }
+                  >
+                    <p className="text-sm font-semibold uppercase tracking-[0.2em]">
+                      {option.message}
+                    </p>
+                    <p className="mt-2 text-sm">
+                      {option.value === "contact"
+                        ? "Organizator skontaktuje się z Tobą, żeby odpowiedzieć na Twoje pytania."
+                        : "Organizator skontaktuje się z Tobą, żeby potwierdzić Twój udział w wydarzeniu."}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <>
                 <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={handleFileChange}
-                  className="block w-full min-w-0 max-w-full text-sm"
+                  required
+                  value={form.imieNazwisko}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      imieNazwisko: event.target.value,
+                    }))
+                  }
+                  placeholder="Imię i nazwisko"
+                  className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
-                <span className="text-sm text-brand-muted">
-                  {form.photoFile
-                    ? `Wybrany plik: ${form.photoFile.name}`
-                    : enrollmentPhotoRequired
-                      ? "Wymagane: JPG, PNG albo WEBP"
-                      : "Opcjonalne: JPG, PNG albo WEBP"}
-                </span>
-              </label>
+                <input
+                  required
+                  value={form.telefon}
+                  disabled={smsVerified}
+                  onChange={(event) => {
+                    setSmsDialogStage("verify");
+                    setConfirmationResult(null);
+                    setVerificationCode("");
+                    setForm((current) => ({
+                      ...current,
+                      telefon: event.target.value,
+                    }));
+                  }}
+                  placeholder="Numer telefonu"
+                  className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+                />
+                <div id="enrollment-phone-recaptcha" className="sr-only" />
+                <input
+                  value={form.polecenieOdKogo}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      polecenieOdKogo: event.target.value,
+                    }))
+                  }
+                  placeholder="Czy jesteś z polecenia od kogoś?"
+                  className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+                {enrollmentPhotoEnabled && (
+                  <label className="grid min-w-0 gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+                    <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                      <ImagePlus size={16} />
+                      Zdjęcie twarzy
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={handleFileChange}
+                      className="block w-full min-w-0 max-w-full text-sm"
+                    />
+                    <span className="text-sm text-brand-muted">
+                      {form.photoFile
+                        ? `Wybrany plik: ${form.photoFile.name}`
+                        : enrollmentPhotoRequired
+                          ? "Wymagane: JPG, PNG albo WEBP"
+                          : "Opcjonalne: JPG, PNG albo WEBP"}
+                    </span>
+                  </label>
+                )}
+              </>
             )}
             <textarea
               rows={5}
@@ -1467,9 +1559,11 @@ export function EventDetailsPage() {
                 }))
               }
               placeholder={
-                organizer
-                  ? "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
-                  : "Napisz wiadomość do osoby prowadzącej"
+                isLoggedInEnrollmentFlow
+                  ? "Opcjonalna notatka do organizatora"
+                  : organizer
+                    ? "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
+                    : "Napisz wiadomość do osoby prowadzącej"
               }
               className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
@@ -1489,7 +1583,13 @@ export function EventDetailsPage() {
               disabled={loading || isCancelled}
               className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60 sm:w-auto"
             >
-              {loading ? "Wysyłanie..." : "Poproś o kontakt"}
+              {loading
+                ? "Wysyłanie..."
+                : isLoggedInEnrollmentFlow
+                  ? form.intent === "participating"
+                    ? "Wyślij zgłoszenie udziału"
+                    : "Wyślij prośbę o kontakt"
+                  : "Poproś o kontakt"}
               <ArrowRight size={16} />
             </button>
           </div>

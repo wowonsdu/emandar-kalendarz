@@ -4,12 +4,14 @@ import {
   buildGoogleCalendarSubscribeUrl,
   buildSharedAvailabilityWindows,
   buildTrainerFreeDaySlices,
+  canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
   canOrganizerAccessTrainer,
   doesTrainingEventOverlapRange,
   doIntervalsOverlap,
   deriveEnrollmentFinalStatus,
+  getEnrollmentIntentLabel,
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
@@ -27,6 +29,7 @@ import {
   isTrainingEventCollaborationAccepted,
   isTrainingEventPubliclyVisible,
   resolveEnrollmentPhotoModeForEvent,
+  resolveEnrollmentIntent,
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveParticipantEnrollmentStatus,
@@ -95,6 +98,18 @@ describe("participant enrollment status", () => {
   });
 });
 
+describe("enrollment intent", () => {
+  it("defaults missing intent to contact", () => {
+    expect(resolveEnrollmentIntent(undefined)).toBe("contact");
+    expect(getEnrollmentIntentLabel(undefined)).toBe("Proszą o kontakt");
+  });
+
+  it("keeps participating intent explicit", () => {
+    expect(resolveEnrollmentIntent("participating")).toBe("participating");
+    expect(getEnrollmentIntentLabel("participating")).toBe("Biorą udział");
+  });
+});
+
 describe("photo mode resolution", () => {
   it("normalizes unsupported values to optional by default", () => {
     expect(resolvePhotoMode("required")).toBe("required");
@@ -149,6 +164,36 @@ describe("photo mode resolution", () => {
 });
 
 describe("permissions and sorting", () => {
+  it("allows publishing official trainings without moderation approval", () => {
+    expect(
+      canPublishTrainingEvent({
+        isPublished: false,
+        archivedAt: undefined,
+        brandStatus: "official",
+        publicationApprovalStatus: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps moderation approval requirement for community events", () => {
+    expect(
+      canPublishTrainingEvent({
+        isPublished: false,
+        archivedAt: undefined,
+        brandStatus: "supported",
+        publicationApprovalStatus: "pending",
+      }),
+    ).toBe(false);
+    expect(
+      canPublishTrainingEvent({
+        isPublished: false,
+        archivedAt: undefined,
+        brandStatus: "supported",
+        publicationApprovalStatus: "accepted",
+      }),
+    ).toBe(true);
+  });
+
   it("allows organizer only with approved relation", () => {
     expect(
       canOrganizerAccessTrainer("organizer-1", "trainer-1", [

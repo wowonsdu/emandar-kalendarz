@@ -1,7 +1,6 @@
 import type {
   EnrollmentAttendanceConfirmationStatus,
   NotificationSettings,
-  TrainingEvent,
 } from "./types";
 
 export const NOTIFICATION_TEMPLATE_PLACEHOLDERS = [
@@ -29,8 +28,12 @@ export function getDefaultNotificationSettings(): NotificationSettings {
 
 export function normalizeNotificationSettings(
   value: Partial<NotificationSettings> | null | undefined,
+  fallback: Partial<NotificationSettings> | null | undefined = undefined,
 ): NotificationSettings {
-  const defaults = getDefaultNotificationSettings();
+  const defaults = {
+    ...getDefaultNotificationSettings(),
+    ...(fallback ? getDefaultNotificationSettingsFromValue(fallback) : {}),
+  };
 
   return {
     reminderLeadDays:
@@ -79,13 +82,32 @@ export function resolveAttendanceConfirmationStatusLabel(
   }
 }
 
-export function resolveNotificationSettingsOwnerRole(event: Pick<
-  TrainingEvent,
-  "organizerId" | "brandStatus" | "selfManagedByTrainer"
->) {
-  if (event.organizerId && event.brandStatus !== "supported" && !event.selfManagedByTrainer) {
-    return "organizer" as const;
-  }
-
-  return "trainer" as const;
+function getDefaultNotificationSettingsFromValue(
+  value: Partial<NotificationSettings>,
+): Partial<NotificationSettings> {
+  return {
+    reminderLeadDays:
+      typeof value.reminderLeadDays === "number" && Number.isFinite(value.reminderLeadDays)
+        ? Math.max(1, Math.min(30, Math.round(value.reminderLeadDays)))
+        : undefined,
+    sendToTrainer:
+      typeof value.sendToTrainer === "boolean" ? value.sendToTrainer : undefined,
+    sendToOrganizer:
+      typeof value.sendToOrganizer === "boolean" ? value.sendToOrganizer : undefined,
+    sendToParticipants:
+      typeof value.sendToParticipants === "boolean" ? value.sendToParticipants : undefined,
+    requireParticipantSmsConfirmation:
+      typeof value.requireParticipantSmsConfirmation === "boolean"
+        ? value.requireParticipantSmsConfirmation
+        : undefined,
+    reminderSmsTemplate:
+      typeof value.reminderSmsTemplate === "string" && value.reminderSmsTemplate.trim()
+        ? value.reminderSmsTemplate.trim()
+        : undefined,
+    confirmationSmsTemplate:
+      typeof value.confirmationSmsTemplate === "string" && value.confirmationSmsTemplate.trim()
+        ? value.confirmationSmsTemplate.trim()
+        : undefined,
+  };
 }
+

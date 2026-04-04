@@ -1,60 +1,61 @@
 # Local Runbook
 
-- Use local Firebase CLI through npm scripts from `package.json`.
-- Default Firebase project for this repo is `emandar-prod`.
-- Firebase web config lives in `.env.local`.
-- Emulator-specific frontend env lives in `.env.emulators`.
+- This branch runs on the built-in mock JSON backend under `public/mock-data` and `public/api/mock`.
+- `public/mock-data/seed-store.json` is the repo-tracked bootstrap seed only.
+- Runtime app state must persist in a separate simulated database file, not back into the seed:
+  - local dev: `.local-state/emandar/runtime-store.json`
+  - production: `/opt/panel.ceo/emandar-data/runtime-store.json`
+- Normal browsing, editing, moderation, deletes, and config changes must write only to the runtime store.
+- Use `npm run mock:reset` only when an explicit reseed is requested. That command overwrites local runtime state from the current seed.
+- When promoting current local runtime back into `public/mock-data/seed-store.json`, use `npm run mock:seed:from-runtime`.
+- That export must preserve seeded trainer profiles and trainer-linked user records from the current seed, so demo reseeds do not overwrite trainer bios, avatars, sort order, or other curated trainer data.
+- Use `npm run dev` for local work, `npm test` for unit tests, and `npm run build` before deploy.
 
-## Npm scripts
+## Project Context
 
-- `npm run firebase -- --version` checks the local Firebase CLI version.
-- `npm run firebase:login` logs into Firebase CLI.
-- `npm run firebase:projects` lists available Firebase projects.
-- `npm run firebase:use` switches the repo to project `emandar-prod`.
-- `npm run firebase:deploy` deploys functions, Firestore rules, Firestore indexes, and Storage rules to `emandar-prod`.
-- `npm run emu:start` starts Firebase emulators for Auth, Firestore, Storage, and Functions.
-- `npm run emu:start:data` starts the same emulators with import/export persistence in `.firebase-emulator-data`.
-- `npm run dev` starts the normal Vite app against live Firebase config from `.env.local`.
-- `npm run dev:emu` starts the Vite app in emulator mode using `.env.emulators`.
+- This project is a training and events management system for Emandar.
+- The system covers:
+  - official `Szkolenia Emandar`
+  - `Wydarzenia społeczności`
+  - groups
+  - trainer-organizer relations
+  - participant enrollments and follow-up communication
+- The role model is hierarchical and cumulative, not flat:
+  - `participant` is the base role
+  - `moderator` is an additional moderation capability that can be granted by admin to any participant-level account without moving it up the organizer/trainer/admin hierarchy
+  - `organizer` includes everything from `participant` and adds organizer capabilities
+  - `trainer` includes everything from `participant` and `organizer` and adds trainer capabilities
+  - `admin` includes everything from lower roles and adds full administration capabilities
+- Higher roles must retain all lower-role capabilities. Do not model the UI as mutually exclusive role silos.
+- `moderator` is not a linear hierarchy step. Treat it as participant baseline plus event moderation capabilities:
+  - review community events
+  - browse official Emandar trainings
+  - unpublish official/community events
+  - delete official/community events permanently
+  - block organizer functions on a user account without detaching trainer relations
+- `Wydarzenia społeczności` are part of the base participant flow, so they remain available to organizer, trainer, and admin as inherited participant capabilities.
+- `Szkolenia Emandar`, groups, and trainer-organizer coordination are organizer/trainer/admin extensions on top of the participant layer.
+- Trainers can additionally organize their own official Emandar trainings and their own community events.
+- Admin is the top-level role with full access plus moderation and trainer/system management.
+- When changing permissions, navigation, or views, prefer cumulative capability logic over direct `role === ...` branching.
 
 ## Production web deploy
 
 - Preferred public web target for this repo is `https://panel.ceo/emandar/`.
 - Live files for that path are served from `/opt/panel.ceo/emandar` on `root@51.68.143.29`.
+- Persistent mock runtime data for that app must live outside the deployed build at `/opt/panel.ceo/emandar-data/runtime-store.json`.
 - Before replacing live files, create a timestamped backup next to the app directory, for example `/opt/panel.ceo/emandar-backup-YYYYMMDD-HHMMSS`.
 - Standard deploy flow for the static frontend:
   1. Run `npm run build`
   2. Copy `dist/` to `root@51.68.143.29:/opt/panel.ceo/emandar/` with `rsync -az --delete`
-  3. Verify `https://panel.ceo/emandar/` and the current hashed asset URL both return `200`
-- The legacy FTP deploy script is deprecated for this repo; use the `panel.ceo` deploy flow instead.
+  3. Never overwrite or delete `/opt/panel.ceo/emandar-data/runtime-store.json` during deploy
+  4. If a full reseed is explicitly requested, overwrite the runtime store from the current seed and then continue configuration through the browser
+  5. Verify `https://panel.ceo/emandar/` and the current hashed asset URL both return `200`
 
-## Local startup
+## Backend reference
 
-- For full local Firebase development:
-  1. Run `npm run emu:start`
-  2. In a second terminal run `npm run dev:emu`
-- Emulator ports from `firebase.json`:
-  - Auth: `9099`
-  - Firestore: `8080`
-  - Functions: `5001`
-  - Storage: `9199`
-  - Emulator UI: `4000`
-
-## Notes
-
-- The frontend already connects to Firebase emulators when `VITE_USE_FIREBASE_EMULATORS=true`.
-- Tests use a separate temporary Firebase emulator config and different ports, so do not change them casually.
-- If `firebase` is not available globally, always use the npm scripts above or `npx firebase`.
-- `trainerExternalBusyMonths` is a legacy intermediate cache of trainer busy intervals. For the trainer iCal preview, do not treat it as the source of truth; the current direction is a live 1:1 read from imported `.ics` feeds. Keep the old cache code for now, but plan a later cleanup/removal pass once the live path is stable.
-
-## Firebase Functions Deploy Rule
-
-- Before any production Functions deploy, first inspect which Firebase Functions were actually affected by the current code changes.
-- Do not default to `npm run firebase -- deploy --only functions --project emandar-prod`, because full backend redeploys in this project frequently waste rollout time and hit Cloud Run CPU quota.
-- Prefer partial deploys that name only the changed exports, for example:
-  - `npm run firebase -- deploy --only functions:createUnifiedTrainingEvent,functions:reviewCommunityEvent --project emandar-prod`
-- When changes are in `functions/index.js`, map the diff to the exported function names that really depend on those edits. If a shared helper changed, include every exported function that uses that helper, but still keep the deploy list as narrow as practical.
-- Use a full `--only functions` deploy only when the user explicitly asks for a full backend rollout or when the changes are broad enough that a safe partial deploy cannot be justified.
+- Keep `functions/` as a raw reference snapshot for the future backend rewrite.
+- Do not wire the active frontend, npm scripts, tests, or release process back to `functions/` unless the user explicitly asks for that migration work.
 
 ## Git Flow Rules
 
@@ -67,18 +68,3 @@
 - When multiple agents work in parallel, each agent must use a separate branch and avoid sharing a working branch.
 - Before starting work, verify the current branch and create a new Git Flow branch if needed.
 - Before finishing work, merge into the correct long-lived branch instead of leaving changes only on an agent branch.
-
-## Prototype Rules Mode
-
-- On 2026-03-26 production Firebase rules were intentionally opened for fast UX/UI prototyping.
-- Backups of the pre-prototype production rules are stored in:
-  - `backups/firebase-rules/firestore.rules.2026-03-26-prototype-backup`
-  - `backups/firebase-rules/storage.rules.2026-03-26-prototype-backup`
-- When the prototyping phase ends, restore those backups before tightening security and resuming normal permission work.
-- Until the user explicitly asks to restore them, treat the open rules as temporary but intentional.
-
-## Pending Backend Migration Plan
-
-- A pending implementation plan for moving `emandar-kalendarz` off Cloud Functions and onto the VPS is stored in `BACK END PLAN.md`.
-- Treat that document as the current source of truth for the planned backend/API + worker + SMS scheduler migration until the user explicitly replaces it.
-- The plan is approved conceptually but not implemented yet; do not assume the VPS backend exists until the user asks for execution and live verification completes.

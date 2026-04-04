@@ -1,0 +1,1713 @@
+{
+  "users": [
+    {
+      "id": "user-admin-dariusz",
+      "role": "admin",
+      "roles": [
+        "admin",
+        "trainer"
+      ],
+      "primaryRole": "admin",
+      "displayName": "Dariusz",
+      "email": "dariusz@emandar.pl",
+      "phone": "+48 601 100 100",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
+      "status": "active",
+      "trainerProfileId": "trainer-11",
+      "password": "kocham"
+    },
+    {
+      "id": "user-trainer-jacek",
+      "role": "trainer",
+      "roles": [
+        "trainer"
+      ],
+      "primaryRole": "trainer",
+      "displayName": "Jacek",
+      "email": "jacek@emandar.pl",
+      "phone": "+48 601 100 101",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/jacek.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/jacek.jpg",
+      "status": "active",
+      "trainerProfileId": "trainer-1",
+      "password": "kocham"
+    },
+    {
+      "id": "user-trainer-marcin",
+      "role": "trainer",
+      "roles": [
+        "trainer"
+      ],
+      "primaryRole": "trainer",
+      "displayName": "Marcin",
+      "email": "marcin@emandar.pl",
+      "phone": "+48 601 100 102",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/marcin.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/marcin.jpg",
+      "status": "active",
+      "trainerProfileId": "trainer-2",
+      "password": "kocham"
+    },
+    {
+      "id": "user-trainer-dorota",
+      "role": "trainer",
+      "roles": [
+        "trainer"
+      ],
+      "primaryRole": "trainer",
+      "displayName": "Dorota",
+      "email": "dorota@emandar.pl",
+      "phone": "+48 601 909 808",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/dorota.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/dorota.jpg",
+      "status": "active",
+      "trainerProfileId": "trainer-10",
+      "password": "kocham"
+    },
+    {
+      "id": "user-trainer-asia",
+      "role": "trainer",
+      "roles": [
+        "trainer"
+      ],
+      "primaryRole": "trainer",
+      "displayName": "Asia",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/asia.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/asia.jpg",
+      "email": "asia@emandar.pl",
+      "phone": "+48 601 100 104",
+      "status": "active",
+      "trainerProfileId": "trainer-4",
+      "password": "kocham"
+    },
+    {
+      "id": "user-trainer-krzysiu",
+      "role": "trainer",
+      "roles": [
+        "trainer"
+      ],
+      "primaryRole": "trainer",
+      "displayName": "Krzysiu",
+      "email": "krzysiu@emandar.pl",
+      "phone": "+48 601 100 105",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
+      "status": "active",
+      "trainerProfileId": "trainer-5",
+      "password": "kocham"
+    },
+    {
+      "id": "user-trainer-klaudia",
+      "role": "trainer",
+      "roles": [
+        "trainer"
+      ],
+      "primaryRole": "trainer",
+      "displayName": "Klaudia",
+      "email": "klaudia@emandar.pl",
+      "phone": "+48 601 100 106",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
+      "status": "active",
+      "trainerProfileId": "trainer-6",
+      "password": "kocham"
+    },
+    {
+      "id": "user-trainer-beata",
+      "role": "trainer",
+      "roles": [
+        "trainer"
+      ],
+      "primaryRole": "trainer",
+      "displayName": "Beata",
+      "email": "beata@emandar.pl",
+      "phone": "+48 601 100 103",
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/beata.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/beata.jpg",
+      "status": "active",
+      "trainerProfileId": "trainer-3",
+      "password": "kocham"
+    },
+    {
+      "id": "user-organizer-anita",
+      "role": "organizer",
+      "roles": [
+        "organizer"
+      ],
+      "primaryRole": "organizer",
+      "displayName": "Anita",
+      "email": "anita@emandar.pl",
+      "phone": "+48 602 100 204",
+      "status": "active",
+      "organizerProfileId": "organizer-anita",
+      "password": "kocham"
+    },
+    {
+      "id": "user-organizer-karolina",
+      "role": "organizer",
+      "roles": [
+        "organizer"
+      ],
+      "primaryRole": "organizer",
+      "displayName": "Karolina",
+      "email": "karolina@emandar.pl",
+      "phone": "+48 602 100 201",
+      "status": "active",
+      "organizerProfileId": "organizer-karolina",
+      "password": "kocham"
+    },
+    {
+      "id": "user-organizer-marek",
+      "role": "organizer",
+      "roles": [
+        "organizer"
+      ],
+      "primaryRole": "organizer",
+      "displayName": "Marek",
+      "email": "marek@emandar.pl",
+      "phone": "+48 602 100 202",
+      "status": "active",
+      "organizerProfileId": "organizer-marek",
+      "password": "kocham"
+    },
+    {
+      "id": "user-organizer-demo",
+      "role": "organizer",
+      "roles": [
+        "organizer"
+      ],
+      "primaryRole": "organizer",
+      "displayName": "Organizator Demo",
+      "email": "organizator-demo@emandar.pl",
+      "phone": "+48 602 100 203",
+      "status": "active",
+      "organizerProfileId": "organizer-demo",
+      "password": "kocham"
+    },
+    {
+      "id": "user-participant-grzegorz-e",
+      "role": "participant",
+      "roles": [
+        "participant",
+        "moderator"
+      ],
+      "primaryRole": "participant",
+      "displayName": "Grzegorz Emanowicz",
+      "email": "grzegorz.emanowicz@emandar.pl",
+      "phone": "+48 605 100 301",
+      "status": "active",
+      "participantProfileId": "participant-48605100301",
+      "participantOnboardingCompletedAt": "2026-03-10T08:00:00.000Z",
+      "password": "kocham"
+    },
+    {
+      "id": "user-participant-grzegorz-c",
+      "role": "participant",
+      "roles": [
+        "participant"
+      ],
+      "primaryRole": "participant",
+      "displayName": "Grzegorz Chotnicki",
+      "email": "grzegorz.chotnicki@emandar.pl",
+      "phone": "+48 605 100 302",
+      "status": "active",
+      "participantProfileId": "participant-48605100302",
+      "participantOnboardingCompletedAt": "2026-03-11T08:00:00.000Z",
+      "password": "kocham"
+    },
+    {
+      "id": "user-participant-ola",
+      "role": "participant",
+      "roles": [
+        "participant"
+      ],
+      "primaryRole": "participant",
+      "displayName": "Ola Chotnicka",
+      "email": "ola.chotnicka@emandar.pl",
+      "phone": "+48 605 100 303",
+      "status": "active",
+      "participantProfileId": "participant-48605100303",
+      "participantOnboardingCompletedAt": "2026-03-12T08:00:00.000Z",
+      "password": "kocham"
+    }
+  ],
+  "trainers": [
+    {
+      "id": "trainer-11",
+      "userId": "user-admin-dariusz",
+      "slug": "dariusz",
+      "displayName": "Dariusz",
+      "sortOrder": 1,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
+      "bio": "Opiekuje się prototypem i całym układem demonstracyjnym.",
+      "specialties": [
+        "architektura",
+        "prototypy"
+      ],
+      "locations": [
+        "Warszawa",
+        "online"
+      ],
+      "isVisible": true,
+      "heroNote": "Prowadzi część sieciową i dba o porządek w strukturze demo.",
+      "brandStatus": "official",
+      "authorizationCodeConfigured": true,
+      "authorizationCodeUpdatedAt": "2026-03-01T09:00:00.000Z"
+    },
+    {
+      "id": "trainer-1",
+      "userId": "user-trainer-jacek",
+      "slug": "jacek",
+      "displayName": "Jacek",
+      "sortOrder": 2,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/jacek.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/jacek.jpg",
+      "bio": "Pracuje z oddechem, rytmem grupy i regularną praktyką.",
+      "specialties": [
+        "oddech",
+        "regeneracja",
+        "grupa"
+      ],
+      "locations": [
+        "Warszawa",
+        "Łódź"
+      ],
+      "isVisible": true,
+      "heroNote": "Najlepiej czuje się w długofalowej pracy z grupami.",
+      "brandStatus": "official",
+      "authorizationCodeConfigured": true,
+      "authorizationCodeUpdatedAt": "2026-03-02T09:00:00.000Z"
+    },
+    {
+      "id": "trainer-2",
+      "userId": "user-trainer-marcin",
+      "slug": "marcin",
+      "displayName": "Marcin",
+      "sortOrder": 3,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/marcin.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/marcin.jpg",
+      "bio": "Łączy szkolenia regeneracyjne z prostą, uporządkowaną organizacją.",
+      "specialties": [
+        "regeneracja",
+        "uważność"
+      ],
+      "locations": [
+        "Kraków",
+        "Katowice"
+      ],
+      "isVisible": true,
+      "heroNote": "Pilnuje jasnych procesów i stabilnego rytmu wydarzeń.",
+      "brandStatus": "official",
+      "authorizationCodeConfigured": true,
+      "authorizationCodeUpdatedAt": "2026-03-03T09:00:00.000Z"
+    },
+    {
+      "id": "trainer-10",
+      "userId": "user-trainer-dorota",
+      "slug": "dorota",
+      "displayName": "Dorota",
+      "sortOrder": 90,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/dorota.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/dorota.jpg",
+      "bio": "Prowadzi wydarzenia społecznościowe i formaty online.",
+      "specialties": [
+        "online",
+        "post",
+        "uważność"
+      ],
+      "locations": [
+        "Lublin",
+        "online"
+      ],
+      "isVisible": true,
+      "heroNote": "Dobrze czuje lekkie, community-driven formaty.",
+      "brandStatus": "official",
+      "authorizationCodeConfigured": true,
+      "authorizationCodeUpdatedAt": "2026-03-04T09:00:00.000Z"
+    },
+    {
+      "id": "trainer-4",
+      "userId": "user-trainer-asia",
+      "slug": "asia",
+      "displayName": "Asia",
+      "sortOrder": 4,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/asia.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/asia.jpg",
+      "bio": "Profil demo do szybkiego logowania.",
+      "specialties": [
+        "demo"
+      ],
+      "locations": [
+        "Wrocław"
+      ],
+      "isVisible": true,
+      "heroNote": "Konto demonstracyjne.",
+      "brandStatus": "official"
+    },
+    {
+      "id": "trainer-5",
+      "userId": "user-trainer-krzysiu",
+      "slug": "krzysiu",
+      "displayName": "Krzysiu",
+      "sortOrder": 5,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
+      "bio": "Profil demo do szybkiego logowania.",
+      "specialties": [
+        "demo"
+      ],
+      "locations": [
+        "Poznań"
+      ],
+      "isVisible": true,
+      "heroNote": "Konto demonstracyjne.",
+      "brandStatus": "official"
+    },
+    {
+      "id": "trainer-6",
+      "userId": "user-trainer-klaudia",
+      "slug": "klaudia",
+      "displayName": "Klaudia",
+      "sortOrder": 6,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
+      "bio": "Profil demo do szybkiego logowania.",
+      "specialties": [
+        "demo"
+      ],
+      "locations": [
+        "Gdańsk"
+      ],
+      "isVisible": true,
+      "heroNote": "Konto demonstracyjne.",
+      "brandStatus": "official"
+    },
+    {
+      "id": "trainer-3",
+      "userId": "user-trainer-beata",
+      "slug": "beata",
+      "displayName": "Beata",
+      "sortOrder": 7,
+      "avatarUrl": "/emandar/mock-data/trainer-avatars/beata.jpg",
+      "avatarPath": "/emandar/mock-data/trainer-avatars/beata.jpg",
+      "bio": "Profil demo do szybkiego logowania.",
+      "specialties": [
+        "demo"
+      ],
+      "locations": [
+        "Łódź"
+      ],
+      "isVisible": true,
+      "heroNote": "Konto demonstracyjne.",
+      "brandStatus": "official"
+    }
+  ],
+  "organizers": [
+    {
+      "id": "organizer-anita",
+      "userId": "user-organizer-anita",
+      "displayName": "Anita",
+      "description": "Koordynuje większą siatkę wydarzeń i draftów organizatorskich.",
+      "isVisible": true,
+      "contactName": "Anita",
+      "location": "Warszawa",
+      "trainingIntent": "Rozwój regularnych grup i wydarzeń objazdowych."
+    },
+    {
+      "id": "organizer-karolina",
+      "userId": "user-organizer-karolina",
+      "displayName": "Karolina",
+      "description": "Prowadzi regularną grupę w Warszawie i obsługuje zapisy.",
+      "isVisible": true,
+      "contactName": "Karolina",
+      "location": "Warszawa",
+      "trainingIntent": "Stabilna, lokalna grupa warsztatowa."
+    },
+    {
+      "id": "organizer-marek",
+      "userId": "user-organizer-marek",
+      "displayName": "Marek",
+      "description": "Pilnuje wydarzeń regeneracyjnych na południu Polski.",
+      "isVisible": true,
+      "contactName": "Marek",
+      "location": "Kraków",
+      "trainingIntent": "Rozwój wydarzeń regeneracyjnych i wyjazdowych."
+    },
+    {
+      "id": "organizer-demo",
+      "userId": "user-organizer-demo",
+      "displayName": "Organizator Demo",
+      "description": "Profil testowy do flow draftów i relacji oczekujących.",
+      "isVisible": true,
+      "contactName": "Organizator Demo",
+      "location": "Online",
+      "trainingIntent": "Szybkie prototypowanie i testowanie relacji."
+    }
+  ],
+  "participantProfiles": [
+    {
+      "id": "participant-48605100301",
+      "linkedUserId": "user-participant-grzegorz-e",
+      "displayName": "Grzegorz Emanowicz",
+      "firstName": "Grzegorz",
+      "lastName": "Emanowicz",
+      "phone": "+48 605 100 301",
+      "phoneLookupKey": "48605100301",
+      "email": "grzegorz.emanowicz@emandar.pl",
+      "confirmationStatus": "confirmed",
+      "status": "active",
+      "createdAt": "2026-03-10T08:00:00.000Z"
+    },
+    {
+      "id": "participant-48605100302",
+      "linkedUserId": "user-participant-grzegorz-c",
+      "displayName": "Grzegorz Chotnicki",
+      "firstName": "Grzegorz",
+      "lastName": "Chotnicki",
+      "phone": "+48 605 100 302",
+      "phoneLookupKey": "48605100302",
+      "email": "grzegorz.chotnicki@emandar.pl",
+      "confirmationStatus": "confirmed",
+      "status": "active",
+      "createdAt": "2026-03-11T08:00:00.000Z"
+    },
+    {
+      "id": "participant-48605100303",
+      "linkedUserId": "user-participant-ola",
+      "displayName": "Ola Chotnicka",
+      "firstName": "Ola",
+      "lastName": "Chotnicka",
+      "phone": "+48 605 100 303",
+      "phoneLookupKey": "48605100303",
+      "email": "ola.chotnicka@emandar.pl",
+      "confirmationStatus": "confirmed",
+      "status": "active",
+      "createdAt": "2026-03-12T08:00:00.000Z"
+    },
+    {
+      "id": "participant-48605100304",
+      "linkedUserId": null,
+      "displayName": "Anna Nowak",
+      "firstName": "Anna",
+      "lastName": "Nowak",
+      "phone": "+48 605 100 304",
+      "phoneLookupKey": "48605100304",
+      "confirmationStatus": "unconfirmed",
+      "status": "active",
+      "notes": "Profil dodany przez organizatora.",
+      "createdAt": "2026-03-15T08:00:00.000Z"
+    },
+    {
+      "id": "participant-48605100305",
+      "linkedUserId": null,
+      "displayName": "Tomasz Lis",
+      "firstName": "Tomasz",
+      "lastName": "Lis",
+      "phone": "+48 605 100 305",
+      "phoneLookupKey": "48605100305",
+      "confirmationStatus": "unconfirmed",
+      "status": "active",
+      "notes": "Profil testowy do rosteru.",
+      "createdAt": "2026-03-16T08:00:00.000Z"
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-warszawa-oddech",
+      "name": "Warszawa • Krąg Oddechu",
+      "organizerId": "organizer-karolina",
+      "organizerUserId": "user-organizer-karolina",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "status": "active",
+      "notes": "Stała grupa warszawska z klasycznym flow organizator-trener.",
+      "defaultLocation": "Warszawa / Praga",
+      "defaultEventType": "training",
+      "defaultCapacity": 16,
+      "defaultTags": [
+        "warszawa",
+        "oddech",
+        "grupa"
+      ],
+      "defaultConfirmationLeadTimeDays": 5,
+      "createdAt": "2026-03-01T11:00:00.000Z"
+    },
+    {
+      "id": "group-krakow-regeneracja",
+      "name": "Kraków • Regeneracja",
+      "organizerId": "organizer-marek",
+      "organizerUserId": "user-organizer-marek",
+      "trainerId": "trainer-2",
+      "trainerUserId": "user-trainer-marcin",
+      "status": "active",
+      "notes": "Grupa do demo draftów oczekujących i zaakceptowanych przez trenera.",
+      "defaultLocation": "Kraków / Kazimierz",
+      "defaultEventType": "training",
+      "defaultCapacity": 14,
+      "defaultTags": [
+        "kraków",
+        "regeneracja"
+      ],
+      "defaultConfirmationLeadTimeDays": 7,
+      "createdAt": "2026-03-02T11:00:00.000Z"
+    },
+    {
+      "id": "group-online-post",
+      "name": "Online • Post i Uważność",
+      "organizerId": "organizer-demo",
+      "organizerUserId": "user-organizer-demo",
+      "trainerId": "trainer-10",
+      "trainerUserId": "user-trainer-dorota",
+      "status": "active",
+      "notes": "Grupa pod posty, wydarzenia online i scenariusze community.",
+      "defaultLocation": "Online / Zoom",
+      "defaultEventType": "post",
+      "defaultCapacity": 20,
+      "defaultTags": [
+        "online",
+        "post",
+        "uważność"
+      ],
+      "defaultConfirmationLeadTimeDays": 3,
+      "createdAt": "2026-03-03T11:00:00.000Z"
+    },
+    {
+      "id": "group-anita-warszawa-krag",
+      "name": "Warszawa • Krąg Anity",
+      "organizerId": "organizer-anita",
+      "organizerUserId": "user-organizer-anita",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "status": "active",
+      "notes": "Grupa Anity pod warszawskie szkolenia i wydarzenia społeczności z Jackiem.",
+      "defaultLocation": "Warszawa / Żoliborz",
+      "defaultEventType": "training",
+      "defaultCapacity": 18,
+      "defaultTags": [
+        "warszawa",
+        "krąg",
+        "anita"
+      ],
+      "defaultConfirmationLeadTimeDays": 6,
+      "createdAt": "2026-03-07T10:00:00.000Z"
+    },
+    {
+      "id": "group-anita-praktyka-centralna",
+      "name": "Centralna • Praktyka Anity",
+      "organizerId": "organizer-anita",
+      "organizerUserId": "user-organizer-anita",
+      "trainerId": "trainer-4",
+      "trainerUserId": "user-trainer-asia",
+      "status": "active",
+      "notes": "Druga relacja Anity, pokazująca nową grupę pod oficjalne szkolenia i lżejsze community.",
+      "defaultLocation": "Łódź / Centrum",
+      "defaultEventType": "training",
+      "defaultCapacity": 20,
+      "defaultTags": [
+        "łódź",
+        "praktyka",
+        "anita"
+      ],
+      "defaultConfirmationLeadTimeDays": 7,
+      "createdAt": "2026-03-07T10:15:00.000Z"
+    }
+  ],
+  "groupMembers": [
+    {
+      "id": "group-warszawa-oddech__participant-48605100301",
+      "groupId": "group-warszawa-oddech",
+      "organizerId": "organizer-karolina",
+      "organizerUserId": "user-organizer-karolina",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "participantProfileId": "participant-48605100301",
+      "participantUserId": "user-participant-grzegorz-e",
+      "participantDisplayName": "Grzegorz Emanowicz",
+      "participantPhone": "+48 605 100 301",
+      "priority": "stali",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-10T11:00:00.000Z"
+    },
+    {
+      "id": "group-warszawa-oddech__participant-48605100303",
+      "groupId": "group-warszawa-oddech",
+      "organizerId": "organizer-karolina",
+      "organizerUserId": "user-organizer-karolina",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "participantProfileId": "participant-48605100303",
+      "participantUserId": "user-participant-ola",
+      "participantDisplayName": "Ola Chotnicka",
+      "participantPhone": "+48 605 100 303",
+      "priority": "stali",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-12T11:00:00.000Z"
+    },
+    {
+      "id": "group-warszawa-oddech__participant-48605100304",
+      "groupId": "group-warszawa-oddech",
+      "organizerId": "organizer-karolina",
+      "organizerUserId": "user-organizer-karolina",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "participantProfileId": "participant-48605100304",
+      "participantUserId": null,
+      "participantDisplayName": "Anna Nowak",
+      "participantPhone": "+48 605 100 304",
+      "priority": "rezerwowi",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-15T11:00:00.000Z"
+    },
+    {
+      "id": "group-krakow-regeneracja__participant-48605100302",
+      "groupId": "group-krakow-regeneracja",
+      "organizerId": "organizer-marek",
+      "organizerUserId": "user-organizer-marek",
+      "trainerId": "trainer-2",
+      "trainerUserId": "user-trainer-marcin",
+      "participantProfileId": "participant-48605100302",
+      "participantUserId": "user-participant-grzegorz-c",
+      "participantDisplayName": "Grzegorz Chotnicki",
+      "participantPhone": "+48 605 100 302",
+      "priority": "stali",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-11T11:00:00.000Z"
+    },
+    {
+      "id": "group-krakow-regeneracja__participant-48605100305",
+      "groupId": "group-krakow-regeneracja",
+      "organizerId": "organizer-marek",
+      "organizerUserId": "user-organizer-marek",
+      "trainerId": "trainer-2",
+      "trainerUserId": "user-trainer-marcin",
+      "participantProfileId": "participant-48605100305",
+      "participantUserId": null,
+      "participantDisplayName": "Tomasz Lis",
+      "participantPhone": "+48 605 100 305",
+      "priority": "regularni",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-16T11:00:00.000Z"
+    },
+    {
+      "id": "group-online-post__participant-48605100303",
+      "groupId": "group-online-post",
+      "organizerId": "organizer-demo",
+      "organizerUserId": "user-organizer-demo",
+      "trainerId": "trainer-10",
+      "trainerUserId": "user-trainer-dorota",
+      "participantProfileId": "participant-48605100303",
+      "participantUserId": "user-participant-ola",
+      "participantDisplayName": "Ola Chotnicka",
+      "participantPhone": "+48 605 100 303",
+      "priority": "stali",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-12T11:00:00.000Z"
+    },
+    {
+      "id": "group-anita-warszawa-krag__participant-48605100301",
+      "groupId": "group-anita-warszawa-krag",
+      "organizerId": "organizer-anita",
+      "organizerUserId": "user-organizer-anita",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "participantProfileId": "participant-48605100301",
+      "participantUserId": "user-participant-grzegorz-e",
+      "participantDisplayName": "Grzegorz Emanowicz",
+      "participantPhone": "+48 605 100 301",
+      "priority": "stali",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-20T11:00:00.000Z"
+    },
+    {
+      "id": "group-anita-warszawa-krag__participant-48605100304",
+      "groupId": "group-anita-warszawa-krag",
+      "organizerId": "organizer-anita",
+      "organizerUserId": "user-organizer-anita",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "participantProfileId": "participant-48605100304",
+      "participantUserId": null,
+      "participantDisplayName": "Anna Nowak",
+      "participantPhone": "+48 605 100 304",
+      "priority": "regularni",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-22T11:00:00.000Z"
+    },
+    {
+      "id": "group-anita-praktyka-centralna__participant-48605100302",
+      "groupId": "group-anita-praktyka-centralna",
+      "organizerId": "organizer-anita",
+      "organizerUserId": "user-organizer-anita",
+      "trainerId": "trainer-4",
+      "trainerUserId": "user-trainer-asia",
+      "participantProfileId": "participant-48605100302",
+      "participantUserId": "user-participant-grzegorz-c",
+      "participantDisplayName": "Grzegorz Chotnicki",
+      "participantPhone": "+48 605 100 302",
+      "priority": "stali",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-24T11:00:00.000Z"
+    },
+    {
+      "id": "group-anita-praktyka-centralna__participant-48605100305",
+      "groupId": "group-anita-praktyka-centralna",
+      "organizerId": "organizer-anita",
+      "organizerUserId": "user-organizer-anita",
+      "trainerId": "trainer-4",
+      "trainerUserId": "user-trainer-asia",
+      "participantProfileId": "participant-48605100305",
+      "participantUserId": null,
+      "participantDisplayName": "Tomasz Lis",
+      "participantPhone": "+48 605 100 305",
+      "priority": "regularni",
+      "membershipStatus": "active",
+      "joinedAt": "2026-03-26T11:00:00.000Z"
+    }
+  ],
+  "eventParticipants": [
+    {
+      "id": "event-warszawa-kwiecien__participant-48605100301",
+      "eventId": "event-warszawa-kwiecien",
+      "eventTitle": "Warszawa • Krąg Oddechu",
+      "groupId": "group-warszawa-oddech",
+      "groupName": "Warszawa • Krąg Oddechu",
+      "organizerId": "organizer-karolina",
+      "organizerUserId": "user-organizer-karolina",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "participantProfileId": "participant-48605100301",
+      "participantDisplayName": "Grzegorz Emanowicz",
+      "participantPhone": "+48 605 100 301",
+      "participantUserId": "user-participant-grzegorz-e",
+      "priority": "stali",
+      "status": "confirmed",
+      "source": "auto-core",
+      "invitedAt": "2026-04-01T07:00:00.000Z",
+      "confirmedAt": "2026-04-03T08:00:00.000Z"
+    },
+    {
+      "id": "event-warszawa-kwiecien__participant-48605100303",
+      "eventId": "event-warszawa-kwiecien",
+      "eventTitle": "Warszawa • Krąg Oddechu",
+      "groupId": "group-warszawa-oddech",
+      "groupName": "Warszawa • Krąg Oddechu",
+      "organizerId": "organizer-karolina",
+      "organizerUserId": "user-organizer-karolina",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "participantProfileId": "participant-48605100303",
+      "participantDisplayName": "Ola Chotnicka",
+      "participantPhone": "+48 605 100 303",
+      "participantUserId": "user-participant-ola",
+      "priority": "stali",
+      "status": "invited",
+      "source": "auto-core",
+      "invitedAt": "2026-04-01T07:30:00.000Z"
+    }
+  ],
+  "relations": [
+    {
+      "id": "trainer-1__organizer-karolina",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-karolina",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-karolina",
+      "status": "approved",
+      "requestedBy": "organizer",
+      "createdAt": "2026-03-05T11:00:00.000Z"
+    },
+    {
+      "id": "trainer-2__organizer-marek",
+      "trainerId": "trainer-2",
+      "organizerId": "organizer-marek",
+      "trainerUserId": "user-trainer-marcin",
+      "organizerUserId": "user-organizer-marek",
+      "status": "approved",
+      "requestedBy": "trainer",
+      "createdAt": "2026-03-05T12:00:00.000Z"
+    },
+    {
+      "id": "trainer-10__organizer-demo",
+      "trainerId": "trainer-10",
+      "organizerId": "organizer-demo",
+      "trainerUserId": "user-trainer-dorota",
+      "organizerUserId": "user-organizer-demo",
+      "status": "approved",
+      "requestedBy": "organizer",
+      "createdAt": "2026-03-05T13:00:00.000Z"
+    },
+    {
+      "id": "trainer-1__organizer-anita",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "status": "approved",
+      "requestedBy": "organizer",
+      "createdAt": "2026-03-07T09:00:00.000Z"
+    },
+    {
+      "id": "trainer-4__organizer-anita",
+      "trainerId": "trainer-4",
+      "organizerId": "organizer-anita",
+      "trainerUserId": "user-trainer-asia",
+      "organizerUserId": "user-organizer-anita",
+      "status": "approved",
+      "requestedBy": "organizer",
+      "createdAt": "2026-03-07T09:10:00.000Z"
+    },
+    {
+      "id": "trainer-1__organizer-demo",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-demo",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-demo",
+      "status": "approved",
+      "requestedBy": "organizer",
+      "createdAt": "2026-03-06T08:00:00.000Z"
+    }
+  ],
+  "trainingEvents": [
+    {
+      "id": "event-warszawa-kwiecien",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-karolina",
+      "groupId": "group-warszawa-oddech",
+      "groupName": "Warszawa • Krąg Oddechu",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-karolina",
+      "creatorUserId": "user-organizer-karolina",
+      "creatorDisplayName": "Karolina",
+      "title": "Warszawa • Krąg Oddechu",
+      "summary": "Dwudniowe spotkanie dla stałej grupy i nowych osób z polecenia.",
+      "description": "Pracujemy z oddechem, regulacją i kontaktem w małej grupie.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-04-18T07:00:00.000Z",
+      "endsAt": "2026-04-19T15:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-04-18T07:00:00.000Z",
+          "endsAt": "2026-04-18T15:00:00.000Z"
+        },
+        {
+          "startsAt": "2026-04-19T07:00:00.000Z",
+          "endsAt": "2026-04-19T15:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Praga",
+      "tags": [
+        "warszawa",
+        "oddech",
+        "grupa"
+      ],
+      "capacity": 16,
+      "enrolledCount": 2,
+      "isPublished": true,
+      "imageHint": "breath workshop",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni",
+        "rezerwowi"
+      ],
+      "confirmationLeadTimeDays": 5,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-krakow-maj",
+      "trainerId": "trainer-2",
+      "organizerId": "organizer-marek",
+      "groupId": "group-krakow-regeneracja",
+      "groupName": "Kraków • Regeneracja",
+      "trainerUserId": "user-trainer-marcin",
+      "organizerUserId": "user-organizer-marek",
+      "creatorUserId": "user-trainer-marcin",
+      "creatorDisplayName": "Marcin",
+      "title": "Kraków • Regeneracja",
+      "summary": "Mocniejsze wejście w regenerację i uważność dla grupy lokalnej.",
+      "description": "Spotkanie dla osób regularnie pracujących z praktyką regeneracyjną.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-05-09T08:00:00.000Z",
+      "endsAt": "2026-05-10T15:30:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-05-09T08:00:00.000Z",
+          "endsAt": "2026-05-09T15:30:00.000Z"
+        },
+        {
+          "startsAt": "2026-05-10T08:00:00.000Z",
+          "endsAt": "2026-05-10T15:30:00.000Z"
+        }
+      ],
+      "location": "Kraków / Kazimierz",
+      "tags": [
+        "kraków",
+        "regeneracja"
+      ],
+      "capacity": 14,
+      "enrolledCount": 1,
+      "isPublished": true,
+      "imageHint": "regeneration training",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 6,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni"
+      ],
+      "confirmationLeadTimeDays": 7,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "trainer",
+      "enrollmentPhotoRequirement": "required"
+    },
+    {
+      "id": "event-community-online",
+      "trainerId": "trainer-10",
+      "organizerId": "organizer-demo",
+      "groupId": "group-online-post",
+      "groupName": "Online • Post i Uważność",
+      "trainerUserId": "user-trainer-dorota",
+      "organizerUserId": "user-organizer-demo",
+      "creatorUserId": "user-trainer-dorota",
+      "creatorDisplayName": "Dorota",
+      "creatorPhone": "+48 601 909 808",
+      "title": "Online • Wieczór społeczności",
+      "summary": "Lekki format społecznościowy z miejscem na rozmowę i praktykę.",
+      "description": "Otwarte wydarzenie społeczności z prostym wejściem dla nowych osób.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-04-24T17:00:00.000Z",
+      "endsAt": "2026-04-24T19:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-04-24T17:00:00.000Z",
+          "endsAt": "2026-04-24T19:00:00.000Z"
+        }
+      ],
+      "location": "Online / Zoom",
+      "tags": [
+        "online",
+        "społeczność",
+        "uważność"
+      ],
+      "capacity": 30,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "online community event",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer",
+      "publicationApprovalStatus": "accepted",
+      "publicationReviewedAt": "2026-03-20T11:00:00.000Z",
+      "publicationReviewedByUserId": "user-admin-dariusz",
+      "publicationReviewMessage": "Opublikowane jako wzorcowe wydarzenie community.",
+      "eventImages": [
+        {
+          "id": "image-community-1",
+          "url": "/emandar/demo-community-cover.svg",
+          "storagePath": "mock://event-community-online/community-1",
+          "width": 1200,
+          "height": 800
+        }
+      ],
+      "useEventImageAsCover": true,
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-draft-online",
+      "trainerId": "trainer-10",
+      "organizerId": "organizer-demo",
+      "groupId": "group-online-post",
+      "groupName": "Online • Post i Uważność",
+      "trainerUserId": "user-trainer-dorota",
+      "organizerUserId": "user-organizer-demo",
+      "creatorUserId": "user-organizer-demo",
+      "creatorDisplayName": "Organizator Demo",
+      "title": "Online • Draft do decyzji",
+      "summary": "Szkic nowego wydarzenia czekającego na decyzję.",
+      "description": "To wydarzenie służy do testowania akceptacji draftu przez trenera.",
+      "type": "Draft wydarzenia",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-05-22T16:00:00.000Z",
+      "endsAt": "2026-05-22T18:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-05-22T16:00:00.000Z",
+          "endsAt": "2026-05-22T18:00:00.000Z"
+        }
+      ],
+      "location": "Online / Zoom",
+      "tags": [
+        "draft",
+        "online"
+      ],
+      "capacity": 20,
+      "enrolledCount": 0,
+      "isPublished": false,
+      "imageHint": "draft event",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "draft-requested",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "trainerCollaborationStatus": "pending",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "publicationApprovalStatus": "pending",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-warszawa-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "groupId": "group-anita-warszawa-krag",
+      "groupName": "Warszawa • Krąg Anity",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "title": "Warszawa • Letni Krąg",
+      "summary": "Dwudniowe szkolenie Emandar dla osób, które chcą wejść głębiej w rytm grupy i regularność praktyki.",
+      "description": "Format oficjalnego szkolenia Emandar z wyraźnym prowadzeniem, progiem uczestników i klasycznym trybem współpracy trener-organizator.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-06-20T08:00:00.000Z",
+      "endsAt": "2026-06-21T15:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-20T08:00:00.000Z",
+          "endsAt": "2026-06-20T15:00:00.000Z"
+        },
+        {
+          "startsAt": "2026-06-21T08:00:00.000Z",
+          "endsAt": "2026-06-21T15:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Żoliborz",
+      "tags": [
+        "warszawa",
+        "oddech",
+        "lato"
+      ],
+      "capacity": 18,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "summer breath workshop",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni",
+        "rezerwowi"
+      ],
+      "confirmationLeadTimeDays": 6,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-lodz-lipiec",
+      "trainerId": "trainer-4",
+      "organizerId": "organizer-anita",
+      "groupId": "group-anita-praktyka-centralna",
+      "groupName": "Centralna • Praktyka Anity",
+      "trainerUserId": "user-trainer-asia",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "title": "Łódź • Jesienna Praktyka",
+      "summary": "Oficjalne szkolenie Emandar dla nowej grupy w Łodzi, gotowe do zapisów i kontaktu.",
+      "description": "Drugi przykład oficjalnego szkolenia: klasyczny format Emandar, współpraca trener-organizator i pełna widoczność na publicznym kalendarzu.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-07-11T08:30:00.000Z",
+      "endsAt": "2026-07-12T15:30:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-07-11T08:30:00.000Z",
+          "endsAt": "2026-07-11T15:30:00.000Z"
+        },
+        {
+          "startsAt": "2026-07-12T08:30:00.000Z",
+          "endsAt": "2026-07-12T15:30:00.000Z"
+        }
+      ],
+      "location": "Łódź / Centrum",
+      "tags": [
+        "łódź",
+        "praktyka",
+        "grupa"
+      ],
+      "capacity": 20,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "practice training",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 10,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni"
+      ],
+      "confirmationLeadTimeDays": 7,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "required"
+    },
+    {
+      "id": "event-anita-community-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "groupId": "group-anita-warszawa-krag",
+      "groupName": "Warszawa • Krąg Anity",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "creatorPhone": "+48 602 100 204",
+      "title": "Warszawa • Krąg społeczności",
+      "summary": "Lżejszy format community z krótszym wejściem, rozmową i otwartym zaproszeniem dla nowych osób.",
+      "description": "To przykład wydarzenia społeczności: krótszy format, prostszy opis, brak klasycznego progu współpracy i publikacja zależna od moderacji admina.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-06-26T17:30:00.000Z",
+      "endsAt": "2026-06-26T20:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-26T17:30:00.000Z",
+          "endsAt": "2026-06-26T20:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Saska Kępa",
+      "tags": [
+        "społeczność",
+        "warszawa",
+        "krąg"
+      ],
+      "capacity": 24,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "community circle",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "publicationApprovalStatus": "accepted",
+      "publicationApprovalRequestedAt": "2026-05-30T10:00:00.000Z",
+      "publicationReviewedAt": "2026-05-31T09:00:00.000Z",
+      "publicationReviewedByUserId": "user-admin-dariusz",
+      "publicationReviewMessage": "Dobre wydarzenie pokazujące community flow.",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-community-sierpien",
+      "trainerId": "trainer-4",
+      "organizerId": "organizer-anita",
+      "groupId": "group-anita-praktyka-centralna",
+      "groupName": "Centralna • Praktyka Anity",
+      "trainerUserId": "user-trainer-asia",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "creatorPhone": "+48 602 100 204",
+      "title": "Warszawa • Poranek społeczności",
+      "summary": "Drugi przykład community, nadal przed decyzją moderacyjną, więc jeszcze niewidoczny publicznie.",
+      "description": "To przykład wydarzenia społeczności oczekującego na publikację. Na liście panelowej widać jego status moderacji i różnicę względem oficjalnego szkolenia.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-08-09T08:00:00.000Z",
+      "endsAt": "2026-08-09T10:30:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-08-09T08:00:00.000Z",
+          "endsAt": "2026-08-09T10:30:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Mokotów",
+      "tags": [
+        "społeczność",
+        "poranek",
+        "warszawa"
+      ],
+      "capacity": 18,
+      "enrolledCount": 0,
+      "isPublished": false,
+      "imageHint": "community morning event",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "publicationApprovalStatus": "pending",
+      "publicationApprovalRequestedAt": "2026-06-15T11:00:00.000Z",
+      "enrollmentPhotoRequirement": "optional"
+    }
+  ],
+  "publicTrainingEvents": [
+    {
+      "id": "event-warszawa-kwiecien",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-karolina",
+      "groupId": "group-warszawa-oddech",
+      "groupName": "Warszawa • Krąg Oddechu",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-karolina",
+      "creatorUserId": "user-organizer-karolina",
+      "creatorDisplayName": "Karolina",
+      "title": "Warszawa • Krąg Oddechu",
+      "summary": "Dwudniowe spotkanie dla stałej grupy i nowych osób z polecenia.",
+      "description": "Pracujemy z oddechem, regulacją i kontaktem w małej grupie.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-04-18T07:00:00.000Z",
+      "endsAt": "2026-04-19T15:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-04-18T07:00:00.000Z",
+          "endsAt": "2026-04-18T15:00:00.000Z"
+        },
+        {
+          "startsAt": "2026-04-19T07:00:00.000Z",
+          "endsAt": "2026-04-19T15:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Praga",
+      "tags": [
+        "warszawa",
+        "oddech",
+        "grupa"
+      ],
+      "capacity": 16,
+      "enrolledCount": 2,
+      "isPublished": true,
+      "imageHint": "breath workshop",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni",
+        "rezerwowi"
+      ],
+      "confirmationLeadTimeDays": 5,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-krakow-maj",
+      "trainerId": "trainer-2",
+      "organizerId": "organizer-marek",
+      "groupId": "group-krakow-regeneracja",
+      "groupName": "Kraków • Regeneracja",
+      "trainerUserId": "user-trainer-marcin",
+      "organizerUserId": "user-organizer-marek",
+      "creatorUserId": "user-trainer-marcin",
+      "creatorDisplayName": "Marcin",
+      "title": "Kraków • Regeneracja",
+      "summary": "Mocniejsze wejście w regenerację i uważność dla grupy lokalnej.",
+      "description": "Spotkanie dla osób regularnie pracujących z praktyką regeneracyjną.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-05-09T08:00:00.000Z",
+      "endsAt": "2026-05-10T15:30:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-05-09T08:00:00.000Z",
+          "endsAt": "2026-05-09T15:30:00.000Z"
+        },
+        {
+          "startsAt": "2026-05-10T08:00:00.000Z",
+          "endsAt": "2026-05-10T15:30:00.000Z"
+        }
+      ],
+      "location": "Kraków / Kazimierz",
+      "tags": [
+        "kraków",
+        "regeneracja"
+      ],
+      "capacity": 14,
+      "enrolledCount": 1,
+      "isPublished": true,
+      "imageHint": "regeneration training",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 6,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni"
+      ],
+      "confirmationLeadTimeDays": 7,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "trainer",
+      "enrollmentPhotoRequirement": "required"
+    },
+    {
+      "id": "event-community-online",
+      "trainerId": "trainer-10",
+      "organizerId": "organizer-demo",
+      "groupId": "group-online-post",
+      "groupName": "Online • Post i Uważność",
+      "trainerUserId": "user-trainer-dorota",
+      "organizerUserId": "user-organizer-demo",
+      "creatorUserId": "user-trainer-dorota",
+      "creatorDisplayName": "Dorota",
+      "creatorPhone": "+48 601 909 808",
+      "title": "Online • Wieczór społeczności",
+      "summary": "Lekki format społecznościowy z miejscem na rozmowę i praktykę.",
+      "description": "Otwarte wydarzenie społeczności z prostym wejściem dla nowych osób.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-04-24T17:00:00.000Z",
+      "endsAt": "2026-04-24T19:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-04-24T17:00:00.000Z",
+          "endsAt": "2026-04-24T19:00:00.000Z"
+        }
+      ],
+      "location": "Online / Zoom",
+      "tags": [
+        "online",
+        "społeczność",
+        "uważność"
+      ],
+      "capacity": 30,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "online community event",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "selfManagedByTrainer": true,
+      "createdByRole": "trainer",
+      "publicationApprovalStatus": "accepted",
+      "publicationReviewedAt": "2026-03-20T11:00:00.000Z",
+      "publicationReviewedByUserId": "user-admin-dariusz",
+      "publicationReviewMessage": "Opublikowane jako wzorcowe wydarzenie community.",
+      "eventImages": [
+        {
+          "id": "image-community-1",
+          "url": "/emandar/demo-community-cover.svg",
+          "storagePath": "mock://event-community-online/community-1",
+          "width": 1200,
+          "height": 800
+        }
+      ],
+      "useEventImageAsCover": true,
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-warszawa-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "groupId": "group-anita-warszawa-krag",
+      "groupName": "Warszawa • Krąg Anity",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "title": "Warszawa • Letni Krąg",
+      "summary": "Dwudniowe szkolenie Emandar dla osób, które chcą wejść głębiej w rytm grupy i regularność praktyki.",
+      "description": "Format oficjalnego szkolenia Emandar z wyraźnym prowadzeniem, progiem uczestników i klasycznym trybem współpracy trener-organizator.",
+      "type": "Szkolenie",
+      "eventTypeSystem": "training",
+      "startsAt": "2026-06-20T08:00:00.000Z",
+      "endsAt": "2026-06-21T15:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-20T08:00:00.000Z",
+          "endsAt": "2026-06-20T15:00:00.000Z"
+        },
+        {
+          "startsAt": "2026-06-21T08:00:00.000Z",
+          "endsAt": "2026-06-21T15:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Żoliborz",
+      "tags": [
+        "warszawa",
+        "oddech",
+        "lato"
+      ],
+      "capacity": 18,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "summer breath workshop",
+      "brandStatus": "official",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 8,
+      "requiresOrganizerApproval": true,
+      "eligibleGroupPriorities": [
+        "stali",
+        "regularni",
+        "rezerwowi"
+      ],
+      "confirmationLeadTimeDays": 6,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "enrollmentPhotoRequirement": "optional"
+    },
+    {
+      "id": "event-anita-community-czerwiec",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-anita",
+      "groupId": "group-anita-warszawa-krag",
+      "groupName": "Warszawa • Krąg Anity",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-anita",
+      "creatorUserId": "user-organizer-anita",
+      "creatorDisplayName": "Anita",
+      "creatorPhone": "+48 602 100 204",
+      "title": "Warszawa • Krąg społeczności",
+      "summary": "Lżejszy format community z krótszym wejściem, rozmową i otwartym zaproszeniem dla nowych osób.",
+      "description": "To przykład wydarzenia społeczności: krótszy format, prostszy opis, brak klasycznego progu współpracy i publikacja zależna od moderacji admina.",
+      "type": "Wydarzenie społeczności",
+      "eventTypeSystem": "post",
+      "startsAt": "2026-06-26T17:30:00.000Z",
+      "endsAt": "2026-06-26T20:00:00.000Z",
+      "scheduleDays": [
+        {
+          "startsAt": "2026-06-26T17:30:00.000Z",
+          "endsAt": "2026-06-26T20:00:00.000Z"
+        }
+      ],
+      "location": "Warszawa / Saska Kępa",
+      "tags": [
+        "społeczność",
+        "warszawa",
+        "krąg"
+      ],
+      "capacity": 24,
+      "enrolledCount": 0,
+      "isPublished": true,
+      "imageHint": "community circle",
+      "brandStatus": "supported",
+      "status": "active",
+      "workflowStatus": "published",
+      "minimumParticipants": 1,
+      "requiresOrganizerApproval": false,
+      "confirmationLeadTimeDays": 2,
+      "trainerCollaborationStatus": "accepted",
+      "organizerCollaborationStatus": "accepted",
+      "createdByRole": "organizer",
+      "publicationApprovalStatus": "accepted",
+      "publicationApprovalRequestedAt": "2026-05-30T10:00:00.000Z",
+      "publicationReviewedAt": "2026-05-31T09:00:00.000Z",
+      "publicationReviewedByUserId": "user-admin-dariusz",
+      "publicationReviewMessage": "Dobre wydarzenie pokazujące community flow.",
+      "enrollmentPhotoRequirement": "optional"
+    }
+  ],
+  "availabilitySlots": [
+    {
+      "id": "availability-jacek-1",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "startsAt": "2026-04-26T07:00:00.000Z",
+      "endsAt": "2026-04-26T15:00:00.000Z",
+      "location": "Warszawa / Praga",
+      "notes": "Dostępne dla zatwierdzonych organizatorów.",
+      "visibility": "approved-organizers",
+      "visibleToOrganizerIds": [
+        "organizer-karolina"
+      ]
+    }
+  ],
+  "trainerSharedSlots": [
+    {
+      "id": "shared-slot-jacek-1",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "startsAt": "2026-04-26T07:00:00.000Z",
+      "endsAt": "2026-04-26T15:00:00.000Z",
+      "location": "Warszawa / Praga",
+      "notes": "Termin do draftów organizatorskich.",
+      "source": "manual",
+      "status": "active",
+      "createdAt": "2026-04-01T06:00:00.000Z"
+    },
+    {
+      "id": "shared-slot-marcin-1",
+      "trainerId": "trainer-2",
+      "trainerUserId": "user-trainer-marcin",
+      "startsAt": "2026-05-17T08:00:00.000Z",
+      "endsAt": "2026-05-17T14:00:00.000Z",
+      "location": "Kraków / Kazimierz",
+      "notes": "Termin do nowych wydarzeń w Krakowie.",
+      "source": "manual",
+      "status": "active",
+      "createdAt": "2026-04-02T06:00:00.000Z"
+    }
+  ],
+  "trainerCalendarFeeds": [
+    {
+      "id": "trainer-feed-jacek",
+      "trainerId": "trainer-1",
+      "trainerUserId": "user-trainer-jacek",
+      "provider": "ical",
+      "url": "https://panel.ceo/emandar/demo-ical/jacek-private-demo.ics",
+      "enabled": true,
+      "createdAt": "2026-03-10T09:00:00.000Z",
+      "updatedAt": "2026-03-10T09:00:00.000Z"
+    }
+  ],
+  "organizerCalendarFeeds": [
+    {
+      "id": "organizer-feed-karolina",
+      "organizerId": "organizer-karolina",
+      "organizerUserId": "user-organizer-karolina",
+      "provider": "ical",
+      "url": "https://panel.ceo/emandar/demo-ical/karolina-busy-demo.ics",
+      "enabled": true,
+      "createdAt": "2026-03-10T10:00:00.000Z",
+      "updatedAt": "2026-03-10T10:00:00.000Z"
+    }
+  ],
+  "organizerExternalBusyMonths": [],
+  "trainerOrganizerCalendarFeeds": [
+    {
+      "id": "trainer-1__organizer-karolina",
+      "relationId": "trainer-1__organizer-karolina",
+      "trainerId": "trainer-1",
+      "organizerId": "organizer-karolina",
+      "trainerUserId": "user-trainer-jacek",
+      "organizerUserId": "user-organizer-karolina",
+      "token": "trainer-1__organizer-karolina",
+      "publicFeedUrl": "https://panel.ceo/emandar/api/ical/trainer-organizer/trainer-1__organizer-karolina.ics",
+      "createdAt": "2026-03-12T10:00:00.000Z",
+      "updatedAt": "2026-03-12T10:00:00.000Z"
+    }
+  ],
+  "trainerExternalBusyMonths": [],
+  "enrollmentRequests": [
+    {
+      "id": "enrollment-krakow-grzegorz",
+      "eventId": "event-krakow-maj",
+      "trainerId": "trainer-2",
+      "organizerId": "organizer-marek",
+      "submitterUid": "user-participant-grzegorz-c",
+      "participantProfileId": "participant-48605100302",
+      "normalizedPhone": "48605100302",
+      "trainerUserId": "user-trainer-marcin",
+      "organizerUserId": "user-organizer-marek",
+      "imieNazwisko": "Grzegorz Chotnicki",
+      "telefon": "+48 605 100 302",
+      "polecenieOdKogo": "Z grupy krakowskiej",
+      "wiadomosc": "Chcę wrócić na majowy termin.",
+      "photoStatus": "ready",
+      "photoMode": "required",
+      "photoPath": "mock://enrollment-krakow-grzegorz/photo",
+      "trainerDecision": "accepted",
+      "organizerDecision": "pending",
+      "finalStatus": "partial",
+      "participantStatus": "active",
+      "createdAt": "2026-04-01T13:00:00.000Z",
+      "requiresOrganizerApproval": true
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notification-1",
+      "userId": "user-organizer-karolina",
+      "title": "Nowe zgłoszenie uczestnika",
+      "body": "Grzegorz Chotnicki czeka na ostateczną decyzję dla terminu krakowskiego.",
+      "createdAt": "2026-04-01T13:05:00.000Z",
+      "entityType": "request"
+    },
+    {
+      "id": "notification-2",
+      "userId": "user-admin-dariusz",
+      "title": "Wydarzenie społeczności gotowe do publikacji",
+      "body": "Online • Wieczór społeczności został już zaakceptowany i jest widoczny publicznie.",
+      "createdAt": "2026-03-20T11:05:00.000Z",
+      "entityType": "event"
+    }
+  ],
+  "accountRequests": [
+    {
+      "id": "account-request-anna",
+      "displayName": "Anna Nowak",
+      "phone": "+48 605 100 304",
+      "requestedRoles": [
+        "participant"
+      ],
+      "notes": "Chcę dołączyć do grupy warszawskiej.",
+      "status": "pending",
+      "createdAt": "2026-03-20T09:00:00.000Z",
+      "authProvider": "phone",
+      "selectedTrainerIds": [
+        "trainer-1"
+      ]
+    }
+  ],
+  "trainerAccountApprovals": [
+    {
+      "id": "approval-anna-jacek",
+      "requesterUserId": "user-organizer-karolina",
+      "requesterDisplayName": "Karolina",
+      "requesterPhone": "+48 602 100 201",
+      "targetTrainerId": "trainer-1",
+      "targetTrainerUserId": "user-trainer-jacek",
+      "requestedRoles": [
+        "organizer"
+      ],
+      "status": "pending",
+      "createdAt": "2026-03-25T08:00:00.000Z"
+    }
+  ],
+  "appSettings": {
+    "signupPhotoMode": "optional",
+    "enrollmentPhotoMode": "optional"
+  }
+}

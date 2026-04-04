@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" fill="none">
+  <rect width="1200" height="800" fill="#F4F8FB"/>
+  <circle cx="235" cy="196" r="170" fill="#D7E9F7"/>
+  <circle cx="1010" cy="116" r="116" fill="#E8DCC7"/>
+  <circle cx="955" cy="670" r="186" fill="#D4E5D3"/>
+  <rect x="118" y="164" width="964" height="472" rx="42" fill="white" stroke="#C8D7E6" stroke-width="4"/>
+  <rect x="182" y="248" width="308" height="228" rx="28" fill="#153469"/>
+  <path d="M248 390C278 332 312 302 360 302C408 302 444 332 476 390" stroke="#F4F8FB" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="361" cy="266" r="42" fill="#F4F8FB"/>
+  <rect x="560" y="256" width="330" height="28" rx="14" fill="#153469"/>
+  <rect x="560" y="318" width="420" height="18" rx="9" fill="#6A7F98"/>
+  <rect x="560" y="358" width="358" height="18" rx="9" fill="#6A7F98"/>
+  <rect x="560" y="398" width="288" height="18" rx="9" fill="#6A7F98"/>
+  <rect x="560" y="476" width="164" height="52" rx="26" fill="#153469"/>
+  <text x="610" y="510" fill="#F4F8FB" font-family="Georgia, serif" font-size="22" font-weight="700">EMANDAR</text>
+</svg>

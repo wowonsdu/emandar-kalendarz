@@ -1,6 +1,6 @@
-import type { FirebaseError } from "firebase/app";
+type AppErrorWithCode = Error & { code: string };
 
-function isFirebaseError(error: unknown): error is FirebaseError {
+function isCodedAppError(error: unknown): error is AppErrorWithCode {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -9,12 +9,12 @@ function isFirebaseError(error: unknown): error is FirebaseError {
   );
 }
 
-function normalizeFirebaseErrorCode(code: string) {
-  return code.startsWith("functions/") ? code.slice("functions/".length) : code;
+function normalizeAppErrorCode(code: string) {
+  return code.startsWith("backend/") ? code.slice("backend/".length) : code;
 }
 
 export function mapAppError(error: unknown) {
-  if (!isFirebaseError(error)) {
+  if (!isCodedAppError(error)) {
     if (error instanceof Error) {
       return error;
     }
@@ -22,10 +22,10 @@ export function mapAppError(error: unknown) {
     return new Error("Nie udalo sie wykonac tej operacji.");
   }
 
-  switch (normalizeFirebaseErrorCode(error.code)) {
+  switch (normalizeAppErrorCode(error.code)) {
     case "auth/operation-not-allowed":
       return new Error(
-        "Na tym projekcie Firebase nie jest wlaczone logowanie email/haslo. Po migracji trzeba domknac konfiguracje providerow Auth.",
+        "Na tym prototypie ten sposob logowania nie jest dostepny.",
       );
     case "auth/invalid-credential":
     case "auth/invalid-login-credentials":
@@ -54,13 +54,13 @@ export function mapAppError(error: unknown) {
       return new Error("Nie udalo sie zsynchronizowac feedow iCal. Sprobuj ponownie za chwile.");
     case "unavailable":
       return new Error("Usluga jest chwilowo niedostepna. Sprobuj ponownie za chwile.");
-    case "storage/unauthorized":
+    case "file/unauthorized":
       return new Error("Nie masz uprawnien do tego pliku.");
-    case "storage/canceled":
+    case "file/canceled":
       return new Error("Wysylanie pliku zostalo przerwane.");
-    case "storage/object-not-found":
+    case "file/object-not-found":
       return new Error("Nie znaleziono pliku.");
-    case "storage/retry-limit-exceeded":
+    case "file/retry-limit-exceeded":
       return new Error("Nie udalo sie przeslac pliku. Sprobuj ponownie.");
     default:
       return new Error(error.message || "Nie udalo sie wykonac tej operacji.");

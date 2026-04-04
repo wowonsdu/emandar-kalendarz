@@ -2,6 +2,7 @@
 import {
   ArrowRight,
   CalendarDays,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ImagePlus,
@@ -15,11 +16,6 @@ import {
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import {
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
-  type ConfirmationResult,
-} from "firebase/auth";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import type {
@@ -29,9 +25,14 @@ import type {
   TrainingEvent,
   TrainingEventImage,
 } from "@/domain/types";
-import { updateActiveRole as updateActiveRoleAction } from "@/data/firebaseRepository";
-import { fetchAppUser } from "@/data/firebaseRepository";
 import {
+  confirmSmsCode,
+  fetchAppUser,
+  getCurrentSessionPhone,
+  requestSmsCode,
+} from "@/data/mockRepository";
+import {
+  canManageTrainingEvent,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   isPhotoModeEnabled,
@@ -46,7 +47,6 @@ import {
   resolveTrainingEventStatus,
   sortEventsByDate,
 } from "@/domain/utils";
-import { firebaseAuth } from "@/lib/firebase";
 import {
   Dialog,
   DialogClose,
@@ -57,7 +57,24 @@ import {
   DialogPortal,
   DialogTitle,
 } from "@/app/components/ui/dialog";
+import { AvatarMedia } from "@/app/components/avatar-media";
+import { CommunityEventCard } from "@/app/components/community-event-card";
 import { useAppState } from "../providers/AppProviders";
+
+const emandarCalendarLogoUrl = `${import.meta.env.BASE_URL}brand-assets/emandar-logo.png`;
+
+type ConfirmationResult = {
+  confirm: (code: string) => Promise<{
+    user: {
+      uid: string;
+      phoneNumber: string | null;
+    };
+  }>;
+};
+
+class RecaptchaVerifier {
+  clear() {}
+}
 
 function formatDate(date: string) {
   return new Intl.DateTimeFormat("pl-PL", {
@@ -91,6 +108,37 @@ function getScheduleRangeLabel(event: TrainingEvent) {
   }
 
   return `od ${formatDate(bounds.startsAt)} do ${formatDate(bounds.endsAt)}`;
+}
+
+function getEventDurationDaysLabel(event: TrainingEvent) {
+  const bounds = getTrainingEventScheduleBounds(event);
+  return bounds.dayCount === 1 ? "1 dzień" : `${bounds.dayCount} dni`;
+}
+
+function getCompactLocationTitle(location: string) {
+  const [primary = location] = location.split("/");
+  return primary.trim();
+}
+
+function getCompactCommunityEventTitle(title: string | null | undefined, location: string) {
+  const normalizedTitle = title?.trim();
+  if (!normalizedTitle) {
+    return location;
+  }
+
+  const [primaryLocation = ""] = location.split("/");
+  const normalizedLocation = primaryLocation.trim();
+  if (!normalizedLocation) {
+    return normalizedTitle;
+  }
+
+  const escapedLocation = normalizedLocation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const withoutDuplicatedLocation = normalizedTitle.replace(
+    new RegExp(`^${escapedLocation}\\s*[•\\-:]\\s*`, "i"),
+    "",
+  );
+
+  return withoutDuplicatedLocation.trim() || normalizedTitle;
 }
 
 function firstName(value?: string) {
@@ -198,31 +246,7 @@ function getEventTags(event: TrainingEvent) {
 }
 
 function canManagePublicEvent(event: TrainingEvent, currentUser: AppUser | null) {
-  if (!currentUser) {
-    return false;
-  }
-
-  if (currentUser.role === "admin") {
-    return true;
-  }
-
-  if (currentUser.role === "trainer") {
-    return currentUser.trainerProfileId === event.trainerId;
-  }
-
-  if (currentUser.role === "organizer") {
-    return (
-      Boolean(event.organizerId) &&
-      currentUser.organizerProfileId === event.organizerId &&
-      !isTrainingEventArchived(event)
-    );
-  }
-
-  if (currentUser.role === "participant") {
-    return currentUser.id === event.creatorUserId;
-  }
-
-  return false;
+  return currentUser ? canManageTrainingEvent(event, currentUser) : false;
 }
 
 function isOfficialTrainerProfile(
@@ -247,6 +271,16 @@ function EmptyState({
       <h3 className="text-2xl font-semibold text-brand-navy">{title}</h3>
       <p className="mt-3 text-brand-muted">{description}</p>
     </article>
+  );
+}
+
+function EmandarTrainingBadge({ className = "" }: { className?: string }) {
+  return (
+    <img
+      src={emandarCalendarLogoUrl}
+      alt="Emandar"
+      className={["h-11 w-11 object-contain drop-shadow-[0_8px_18px_rgba(12,63,128,0.35)]", className].join(" ")}
+    />
   );
 }
 
@@ -506,9 +540,9 @@ function EventCard({
   const eventTags = getEventTags(event);
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
+  const scheduleStartLabel = formatDate(getTrainingEventScheduleBounds(event).startsAt);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventImages = event.eventImages ?? [];
-  const communityLeadMaxHeight = eventImages.length > 0 ? "544px" : "336px";
   const canManage = canManagePublicEvent(event, currentUser);
   const leadName = getPublicLeadName(event, trainer?.displayName);
   const leadAvatarUrl = isCommunityEvent
@@ -516,179 +550,181 @@ function EventCard({
       ? eventImages[0]?.url || event.creatorAvatarUrl
       : event.creatorAvatarUrl
     : trainer?.avatarUrl;
-  const communityEventTitle = event.title || event.location;
-  const communityCoverImageIndex = isCommunityEvent ? getCommunityEventCoverImageIndex(event) : null;
   const managementPath = isCommunityEvent
     ? `/panel/wydarzenia-spolecznosci/${event.id}`
     : `/panel/szkolenia/${event.id}`;
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [isMobileExpanded, setIsMobileExpanded] = useState(false);
+  const compactTitle = isCommunityEvent
+    ? getCompactCommunityEventTitle(event.title, event.location)
+    : getCompactLocationTitle(event.location);
+  const compactLocation = event.location;
+  const durationDaysLabel = getEventDurationDaysLabel(event);
+  const mobileSummarySchedule = scheduleRows.slice(0, 2);
+  const compactTags = eventTags.slice(0, 2);
+  const hasMoreCompactTags = eventTags.length > compactTags.length;
+  const shouldShowExpandedTagsIndicator = hasMoreCompactTags || isMobileExpanded;
 
-  if (isCommunityEvent) {
-    return (
-      <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-        <div
-          className={`grid gap-6 md:items-stretch ${
-            showTrainerImage ? "md:grid-cols-[228px_minmax(0,1fr)]" : "grid-cols-1"
-          }`}
-        >
-          {showTrainerImage && (
-            <div
-              className="relative overflow-hidden rounded-[1.75rem] bg-brand-shell md:h-full md:min-h-[336px]"
-              style={{ maxHeight: communityLeadMaxHeight }}
-            >
-              {leadAvatarUrl ? (
-                communityCoverImageIndex !== null ? (
-                  <button
-                    type="button"
-                    onClick={() => setLightboxIndex(communityCoverImageIndex)}
-                    aria-label="Otwórz galerię wydarzenia"
-                    className="group h-full w-full cursor-zoom-in text-left"
-                  >
-                    <img
-                      src={leadAvatarUrl}
-                      alt={leadName}
-                      className="h-full w-full object-cover object-top transition duration-300 group-hover:scale-[1.02]"
-                    />
-                    <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
-                    <span className="pointer-events-none absolute right-4 top-4 inline-flex items-center gap-2 rounded-full bg-white/92 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy shadow-soft">
-                      <Images size={14} />
-                      Otwórz galerię
-                    </span>
-                  </button>
-                ) : (
-                  <img
-                    src={leadAvatarUrl}
-                    alt={leadName}
-                    className="h-full w-full object-cover object-top"
-                  />
-                )
-              ) : (
-                <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand-sky/40 to-white text-4xl font-semibold text-brand-navy">
-                  {leadName.slice(0, 1)}
-                </div>
-              )}
-              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/45 to-transparent px-5 py-5 text-white">
-                <p className="text-lg font-semibold">{leadName}</p>
-              </div>
-            </div>
-          )}
-
-          <div className="flex min-w-0 flex-col">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <h3 className="text-2xl font-semibold text-brand-navy md:text-[2.2rem]">
-                  {event.title || event.location}
-                </h3>
-                <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                  {event.location}
-                </p>
-                <p className="mt-3 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                  {scheduleRangeLabel}
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3">
-                {canManage && (
-                  <Link
-                    to={managementPath}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
-                  >
-                    Edytuj wydarzenie
-                  </Link>
-                )}
-                <Link
-                  to={`/kalendarz/${event.id}`}
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-                >
-                  Poproś o kontakt
-                  <ArrowRight size={16} />
-                </Link>
-              </div>
-            </div>
-
-            <p className="mt-5 max-w-3xl text-brand-muted">{event.summary}</p>
-
-            <div
-              className="mt-6 grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]"
-            >
-              {scheduleRows.map((row) => (
-                <div
-                  key={row.key}
-                  className="rounded-2xl bg-brand-shell px-4 py-3 text-sm text-brand-muted"
-                >
-                  <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
-                    <CalendarDays size={16} />
-                    {row.title}
-                  </div>
-                  <p>{row.label}</p>
-                  <p>{row.range}</p>
-                </div>
-              ))}
-            </div>
-
-            {eventTags.length > 0 && (
-              <div className="mt-5 flex flex-wrap gap-2">
-                {eventTags.map((tag) => (
-                  <span
-                    key={`${event.id}-${tag}`}
-                    className="rounded-full bg-brand-sky/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy"
-                  >
-                    {tag}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {eventImages.length > 0 && (
-              <div className="mt-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
-                    Galeria wydarzenia
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setLightboxIndex(0)}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft"
-                  >
-                    <Images size={16} />
-                    Zobacz {eventImages.length} zdjęć
-                  </button>
-                </div>
-                <div className="mt-3 flex gap-4 overflow-x-auto pb-1 pr-2">
-                  {eventImages.map((image, index) => (
-                    <CommunityEventGalleryThumbnail
-                      key={image.id}
-                      image={image}
-                      alt={getCommunityEventImageAlt(communityEventTitle, index)}
-                      onClick={() => setLightboxIndex(index)}
-                    />
-                  ))}
-                </div>
+  const mobileCard = (
+    <article className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft md:hidden">
+      <button
+        type="button"
+        onClick={() => setIsMobileExpanded((value) => !value)}
+        className="flex w-full items-stretch text-left"
+        aria-expanded={isMobileExpanded}
+      >
+        <div className="relative w-[6.1rem] shrink-0 self-stretch overflow-hidden bg-brand-shell">
+          <div className="absolute inset-0 flex items-center justify-center">
+            {leadAvatarUrl ? (
+              <img
+                src={leadAvatarUrl}
+                alt={leadName}
+                className="h-full w-full object-cover object-top"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-2xl font-semibold text-brand-navy">
+                {leadName.slice(0, 1)}
               </div>
             )}
           </div>
+          {!isCommunityEvent ? (
+            <EmandarTrainingBadge className="absolute right-2 top-2 z-10" />
+          ) : null}
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/88 via-brand-navy/52 to-transparent px-2.5 py-2.5 text-white">
+            <p className="line-clamp-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/95">
+              {leadName}
+            </p>
+          </div>
         </div>
-        {eventImages.length > 0 && (
-          <CommunityEventGalleryLightbox
-            eventTitle={communityEventTitle}
-            images={eventImages}
-            openIndex={lightboxIndex}
-            onOpenIndexChange={setLightboxIndex}
-          />
-        )}
-      </article>
-    );
+        <div className="min-w-0 flex-1 px-3.5 py-3">
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <h3 className="break-words pr-1 text-[1.52rem] font-semibold leading-[1.08] text-brand-navy">
+                {compactTitle}
+              </h3>
+            </div>
+            <span
+              className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-brand-line bg-brand-shell text-brand-navy transition-transform ${
+                isMobileExpanded ? "rotate-180" : ""
+              }`}
+            >
+              <ChevronDown size={16} />
+            </span>
+          </div>
+          <div className="mt-2.5 grid gap-1.5 text-sm text-brand-muted">
+            <div className="flex items-center gap-2">
+              <MapPin size={14} className="shrink-0 text-brand-sky-deep" />
+              <span className="min-w-0 truncate">{compactLocation}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium text-brand-navy">{scheduleStartLabel}</span>
+              <span className="rounded-full bg-brand-shell px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-muted">
+                {durationDaysLabel}
+              </span>
+            </div>
+          </div>
+          {compactTags.length > 0 && !isMobileExpanded && (
+            <div className="mt-3 flex flex-nowrap gap-2 overflow-hidden">
+              {compactTags.map((tag) => (
+                <span
+                  key={`${event.id}-compact-${tag}`}
+                  className="truncate rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy"
+                >
+                  {tag}
+                </span>
+              ))}
+              {shouldShowExpandedTagsIndicator ? (
+                <span className="shrink-0 rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+                  {isMobileExpanded ? `${eventTags.length} tagów` : "..."}
+                </span>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </button>
+
+      {isMobileExpanded ? (
+        <div className="border-t border-brand-line px-3.5 pb-4 pt-4">
+          <p className="text-sm leading-6 text-brand-muted">{event.summary}</p>
+          <div
+            className={`mt-4 grid gap-2 ${
+              mobileSummarySchedule.length > 1 ? "grid-cols-2" : "grid-cols-1"
+            }`}
+          >
+            {mobileSummarySchedule.map((row) => (
+              <div
+                key={`${event.id}-mobile-${row.key}`}
+                className="min-w-0 rounded-2xl bg-brand-shell px-3 py-3 text-sm text-brand-muted"
+              >
+                <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
+                  <CalendarDays size={15} />
+                  {row.title}
+                </div>
+                <p>{row.label}</p>
+                <p>{row.range}</p>
+              </div>
+            ))}
+          </div>
+          {eventTags.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {eventTags.map((tag) => (
+                <span
+                  key={`${event.id}-mobile-expanded-${tag}`}
+                  className="rounded-full bg-brand-sky/20 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-navy"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+          {!(isCommunityEvent || isSelfManagedTrainingEvent(event)) && (
+            <p className="mt-4 text-sm text-brand-muted">
+              Organizator:{" "}
+              <span className="font-semibold text-brand-navy">
+                {getPublicOrganizerName(event, undefined, trainer?.displayName)}
+              </span>
+            </p>
+          )}
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            {canManage && (
+              <Link
+                to={managementPath}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+              >
+                Edytuj
+              </Link>
+            )}
+            <Link
+              to={`/kalendarz/${event.id}`}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
+            >
+              Poproś o kontakt
+              <ArrowRight size={16} />
+            </Link>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+
+  if (isCommunityEvent) {
+    return <CommunityEventCard event={event} showTrainerImage={showTrainerImage} />;
   }
 
   return (
-    <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+    <>
+      {mobileCard}
+      <article className="hidden overflow-hidden rounded-[2rem] border border-brand-line bg-white shadow-soft md:block">
       <div
-        className={`grid gap-6 md:items-stretch ${
-          showTrainerImage ? "md:grid-cols-[228px_minmax(0,1fr)]" : "md:grid-cols-1"
+        className={`grid md:items-stretch ${
+          showTrainerImage
+            ? isCommunityEvent
+              ? "md:grid-cols-[228px_minmax(0,1fr)]"
+              : "md:grid-cols-[252px_minmax(0,1fr)]"
+            : "md:grid-cols-1"
         }`}
       >
         {showTrainerImage && (
-          <div className="relative h-full min-h-[21rem] overflow-hidden rounded-[1.75rem] bg-brand-shell">
+          <div className="relative h-full min-h-[21rem] overflow-hidden bg-brand-shell">
             {leadAvatarUrl ? (
               <img
                 src={leadAvatarUrl}
@@ -700,6 +736,9 @@ function EventCard({
                 {leadName.slice(0, 1)}
               </div>
             )}
+            {!isCommunityEvent ? (
+              <EmandarTrainingBadge className="absolute right-3 top-3 z-10" />
+            ) : null}
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/45 to-transparent px-4 py-5 text-white">
               <p className="text-sm uppercase tracking-[0.2em] text-white/75">
                 {isCommunityEvent ? "Gospodarz wydarzenia" : "Przekazujący Wiedzę"}
@@ -709,7 +748,7 @@ function EventCard({
           </div>
         )}
 
-        <div className="flex h-full flex-col">
+        <div className="flex h-full flex-col p-6">
           <div>
             <h3 className="text-2xl font-semibold text-brand-navy">
               {isCommunityEvent ? event.title || event.location : event.location}
@@ -726,7 +765,9 @@ function EventCard({
           </div>
           <div
             className={`mt-6 grid gap-3 ${
-              scheduleRows.length > 1 ? "sm:grid-cols-2" : "sm:grid-cols-1"
+              scheduleRows.length > 1
+                ? "grid-cols-2 xl:[grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]"
+                : "grid-cols-1"
             }`}
           >
             {scheduleRows.map((row) => (
@@ -804,18 +845,19 @@ function EventCard({
           </div>
         </div>
       </div>
-    </article>
+      </article>
+    </>
   );
 }
 
 export function LandingPage() {
   return (
     <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
-      <div className="grid gap-10 lg:grid-cols-[1.15fr_0.85fr] lg:items-center">
+      <div className="grid gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-center">
         <div>
           <div className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
             <Sparkles size={16} />
-            Kalendarz i panel Emandar na Firebase
+            Kalendarz i panel Emandar w trybie prototypowym
           </div>
           <h1 className="mt-6 max-w-4xl text-5xl font-semibold leading-tight text-brand-navy sm:text-6xl">
             Publiczny kalendarz szkoleń i panel współpracy dla Przekazujących
@@ -823,7 +865,7 @@ export function LandingPage() {
           </h1>
           <p className="mt-6 max-w-3xl text-lg text-brand-muted">
             W tej wersji dane publiczne, logowanie, zgłoszenia i zdjęcia trafiają
-            już do Firebase. Możesz przejść do kalendarza, sprawdzić
+            do współdzielonego mock backendu opartego o JSON-y. Możesz przejść do kalendarza, sprawdzić
             Przekazujących Wiedzę albo zalogować się do panelu.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
@@ -868,7 +910,7 @@ export function LandingPage() {
             {
               title: "Panel",
               description:
-                "Osobny obszar dla admina, Przekazującego Wiedzę i organizatora oparty o Firebase Auth.",
+                "Osobny obszar dla admina, Przekazującego Wiedzę i organizatora oparty o mock auth SMS i współdzielony store.",
               icon: ShieldCheck,
               to: "/login",
             },
@@ -913,9 +955,8 @@ export function CalendarPage() {
 
   return (
     <EventFeedSection
-      eyebrow="Kalendarz"
-      title="Najblizsze grupy Emandar"
-      description="Znajdz wydarzenie dla siebie i popros o kontakt z osoba prowadzaca lub organizatorem."
+      eyebrow="Szkolenia Emandar"
+      title="Spotkania z Przekazującymi wiedzę"
       emptyTitle="Brak opublikowanych szkoleń"
       emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
       events={events}
@@ -940,7 +981,7 @@ export function CommunityEventsPage() {
 
   return (
     <EventFeedSection
-      eyebrow="Społeczność"
+      eyebrow="Wydarzenia społeczności"
       title="Wydarzenia społeczności"
       description="Przeglądaj otwarte wydarzenia społeczności i poproś o kontakt z osobą prowadzącą."
       emptyTitle="Brak wydarzeń społeczności"
@@ -967,12 +1008,10 @@ export function EventDetailsPage() {
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [smsDialogStage, setSmsDialogStage] = useState<"verify" | "success">("verify");
-  const [smsVerified, setSmsVerified] = useState(
-    Boolean(firebaseAuth?.currentUser?.phoneNumber),
-  );
+  const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
   const [form, setForm] = useState({
     imieNazwisko: "",
-    telefon: firebaseAuth?.currentUser?.phoneNumber ?? "",
+    telefon: currentUser?.phone ?? getCurrentSessionPhone(),
     polecenieOdKogo: "",
     wiadomosc: "",
     photoFile: null as File | null,
@@ -1084,7 +1123,7 @@ export function EventDetailsPage() {
       setIsSmsDialogOpen(true);
       setForm({
         imieNazwisko: "",
-        telefon: firebaseAuth?.currentUser?.phoneNumber ?? "",
+        telefon: currentUser?.phone ?? getCurrentSessionPhone(),
         polecenieOdKogo: "",
         wiadomosc: "",
         photoFile: null,
@@ -1101,11 +1140,6 @@ export function EventDetailsPage() {
   }
 
   async function handleSendCode() {
-    if (!firebaseAuth) {
-      toast.error("Firebase Auth nie jest skonfigurowany.");
-      return;
-    }
-
     setSendingCode(true);
 
     try {
@@ -1114,10 +1148,9 @@ export function EventDetailsPage() {
         recaptchaRef.current = createRecaptchaVerifier("enrollment-phone-recaptcha");
       }
 
-      const result = await signInWithPhoneNumber(
-        firebaseAuth,
+      const { code, result } = await createConfirmationResult(
         normalizedPhone,
-        recaptchaRef.current,
+        event.trainerId ?? undefined,
       );
 
       setForm((current) => ({
@@ -1129,7 +1162,7 @@ export function EventDetailsPage() {
       setConfirmationResult(result);
       setSmsVerified(false);
       setIsSmsDialogOpen(true);
-      toast.success("Kod SMS został wysłany.");
+      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
@@ -1194,13 +1227,13 @@ export function EventDetailsPage() {
   }
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="grid gap-8 lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
+    <section className="mx-auto max-w-7xl overflow-x-clip px-4 py-14 sm:px-6 lg:px-8">
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+        <div className="min-w-0 overflow-hidden rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
             {event.type}
           </p>
-          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
+          <h1 className="mt-4 break-words text-3xl font-semibold text-brand-navy sm:text-4xl">
             {isCommunityBrandStatus(event.brandStatus)
               ? event.title || event.location
               : event.location}
@@ -1274,7 +1307,7 @@ export function EventDetailsPage() {
 
           <div
             className={`mt-8 grid gap-4 ${
-              scheduleRows.length > 1 ? "sm:grid-cols-2" : "sm:grid-cols-1"
+              scheduleRows.length > 1 ? "grid-cols-2 xl:grid-cols-4" : "grid-cols-1"
             }`}
           >
             {scheduleRows.map((row) => (
@@ -1294,22 +1327,22 @@ export function EventDetailsPage() {
           </p>
 
           <div className="mt-8 grid gap-4 md:grid-cols-2">
-            <div className="rounded-3xl border border-brand-line bg-white p-5">
+            <div className="min-w-0 rounded-3xl border border-brand-line bg-white p-5">
               <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
                 {isCommunityBrandStatus(event.brandStatus)
                   ? "Gospodarz wydarzenia"
                   : "Przekazujący Wiedzę"}
               </p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+              <p className="mt-2 break-words text-2xl font-semibold text-brand-navy">
                 {leadName}
               </p>
               <p className="mt-2 text-brand-muted">{leadDescription}</p>
             </div>
-            <div className="rounded-3xl border border-brand-line bg-white p-5">
+            <div className="min-w-0 rounded-3xl border border-brand-line bg-white p-5">
               <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
                 Organizator
               </p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
+              <p className="mt-2 break-words text-2xl font-semibold text-brand-navy">
                 {getPublicOrganizerName(event, organizer?.displayName, leadName)}
               </p>
               <p className="mt-2 text-brand-muted">
@@ -1342,7 +1375,7 @@ export function EventDetailsPage() {
 
         <form
           onSubmit={handleSubmit}
-          className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft"
+          className="min-w-0 overflow-hidden rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft"
         >
           <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
             Formularz dołączenia
@@ -1351,7 +1384,7 @@ export function EventDetailsPage() {
             Zgłoszenie trafi do Przekazującego Wiedzę
             {organizer ? " i organizatora." : "."}{" "}
             {enrollmentPhotoMode === "required"
-              ? "Zdjęcie jest wymagane i trafia do Firebase Storage tylko dla uprawnionych osób."
+              ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
               : enrollmentPhotoMode === "optional"
                 ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
                 : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."}
@@ -1373,7 +1406,7 @@ export function EventDetailsPage() {
                 }))
               }
               placeholder="Imię i nazwisko"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
             <input
               required
@@ -1389,7 +1422,7 @@ export function EventDetailsPage() {
                 }));
               }}
               placeholder="Numer telefonu"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
             />
             <div id="enrollment-phone-recaptcha" className="sr-only" />
             <input
@@ -1401,10 +1434,10 @@ export function EventDetailsPage() {
                 }))
               }
               placeholder="Czy jesteś z polecenia od kogoś?"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
             {enrollmentPhotoEnabled && (
-              <label className="grid gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+              <label className="grid min-w-0 gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
                 <span className="inline-flex items-center gap-2 text-sm font-semibold">
                   <ImagePlus size={16} />
                   Zdjęcie twarzy
@@ -1413,7 +1446,7 @@ export function EventDetailsPage() {
                   type="file"
                   accept="image/png,image/jpeg,image/webp"
                   onChange={handleFileChange}
-                  className="text-sm"
+                  className="block w-full min-w-0 max-w-full text-sm"
                 />
                 <span className="text-sm text-brand-muted">
                   {form.photoFile
@@ -1438,15 +1471,15 @@ export function EventDetailsPage() {
                   ? "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
                   : "Napisz wiadomość do osoby prowadzącej"
               }
-              className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+              className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
           </div>
 
-          <div className="mt-6 flex flex-wrap items-center gap-3">
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
             {canManage && (
               <Link
                 to={managementPath}
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy shadow-soft"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy shadow-soft sm:w-auto"
               >
                 {isCommunityEvent ? "Edytuj wydarzenie" : "Edytuj szkolenie"}
               </Link>
@@ -1454,7 +1487,7 @@ export function EventDetailsPage() {
             <button
               type="submit"
               disabled={loading || isCancelled}
-              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60 sm:w-auto"
             >
               {loading ? "Wysyłanie..." : "Poproś o kontakt"}
               <ArrowRight size={16} />
@@ -1521,7 +1554,7 @@ export function EventDetailsPage() {
                   value={verificationCode}
                   onChange={(event) => setVerificationCode(event.target.value)}
                   placeholder="Kod z SMS"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
               ) : (
                 <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-6 text-sm text-brand-muted">
@@ -1667,13 +1700,13 @@ export function CommunityEventReviewPage() {
   const scheduleRows = getScheduleRows(reviewLoaded.event);
 
   return (
-    <section className="mx-auto max-w-5xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-        <article className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
+    <section className="mx-auto max-w-5xl overflow-x-clip px-4 py-14 sm:px-6 lg:px-8">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+        <article className="min-w-0 overflow-hidden rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
           <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
             Moderacja wydarzenia społeczności
           </p>
-          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
+          <h1 className="mt-4 break-words text-3xl font-semibold text-brand-navy sm:text-4xl">
             {reviewLoaded.event.title || reviewLoaded.event.location}
           </h1>
           <p className="mt-3 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
@@ -1699,7 +1732,7 @@ export function CommunityEventReviewPage() {
           </div>
         </article>
 
-        <article className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
+        <article className="min-w-0 rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
           <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
             Decyzja admina
           </p>
@@ -1792,14 +1825,16 @@ export function TrainersPage() {
             return (
               <article
                 key={trainer.id}
-                className="group relative h-[33rem] overflow-hidden rounded-[1.8rem] border border-brand-line bg-brand-shell shadow-soft"
+                className="group relative h-[28.05rem] overflow-hidden rounded-[1.8rem] border border-brand-line bg-brand-shell shadow-soft"
               >
                 <div className="h-full w-full">
                   {trainer.avatarUrl ? (
-                    <img
+                    <AvatarMedia
                       src={trainer.avatarUrl}
                       alt={trainer.displayName}
-                      className="h-full w-full object-cover object-top transition-transform duration-500 group-hover:scale-[1.04]"
+                      crop={trainer.avatarCrop}
+                      className="h-full w-full"
+                      imageClassName="transition-transform duration-500 group-hover:scale-[1.04]"
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand-sky/45 via-brand-shell to-brand-navy/35 text-6xl font-semibold text-brand-navy/70">
@@ -1810,7 +1845,7 @@ export function TrainersPage() {
 
                 <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-brand-navy/55 via-brand-navy/10 to-transparent" />
 
-                <div className="absolute inset-x-4 bottom-4 rounded-[1.35rem] bg-white/90 p-5 shadow-soft backdrop-blur-md">
+                <div className="absolute inset-x-0 bottom-0 z-10 rounded-t-[1.6rem] bg-white p-5 shadow-soft">
                   <h2 className="text-2xl font-semibold leading-tight text-brand-navy">
                     {trainer.displayName}
                   </h2>
@@ -1855,55 +1890,58 @@ export function TrainerDetailsPage() {
   );
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
-        <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
-          <div className="mb-6 overflow-hidden rounded-[1.8rem] border border-brand-line bg-brand-shell">
+    <section className="mx-auto max-w-7xl overflow-x-clip px-4 py-14 sm:px-6 lg:px-8">
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="min-w-0 overflow-hidden rounded-[2.5rem] border border-brand-line bg-white shadow-soft">
+          <div className="bg-brand-shell">
             {trainer.avatarUrl ? (
-              <img
+              <AvatarMedia
                 src={trainer.avatarUrl}
                 alt={trainer.displayName}
-                className="h-[42rem] w-full object-cover object-top"
+                crop={trainer.avatarCrop}
+                className="h-[20rem] w-full sm:h-[24rem] lg:h-[30rem]"
               />
             ) : (
-              <div className="flex h-[42rem] items-center justify-center bg-gradient-to-br from-brand-sky/45 via-brand-shell to-brand-navy/35 text-7xl font-semibold text-brand-navy/70">
+              <div className="flex h-[20rem] items-center justify-center bg-gradient-to-br from-brand-sky/45 via-brand-shell to-brand-navy/35 text-7xl font-semibold text-brand-navy/70 sm:h-[24rem] lg:h-[30rem]">
                 {trainer.displayName.slice(0, 1)}
               </div>
             )}
           </div>
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
-            Profil Przekazującego Wiedzę
-          </p>
-          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
-            {trainer.displayName}
-          </h1>
-          <p className="mt-4 text-lg font-medium text-brand-sky-deep">
-            {trainer.heroNote}
-          </p>
-          <p className="mt-4 text-brand-muted">{trainer.bio}</p>
-          <div className="mt-6 flex flex-wrap gap-2">
-            {trainer.specialties.map((specialty) => (
-              <span
-                key={specialty}
-                className="rounded-full border border-brand-line px-3 py-1 text-sm text-brand-muted"
-              >
-                {specialty}
-              </span>
-            ))}
-          </div>
-          <div className="mt-6 space-y-3 text-brand-muted">
-            <div className="flex items-center gap-2">
-              <MapPin size={16} />
-              {trainer.locations.join(" • ")}
+          <div className="p-6 sm:p-8">
+            <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
+              Profil Przekazującego Wiedzę
+            </p>
+            <h1 className="mt-4 break-words text-3xl font-semibold text-brand-navy sm:text-4xl">
+              {trainer.displayName}
+            </h1>
+            <p className="mt-4 text-lg font-medium text-brand-sky-deep">
+              {trainer.heroNote}
+            </p>
+            <p className="mt-4 text-brand-muted">{trainer.bio}</p>
+            <div className="mt-6 flex flex-wrap gap-2">
+              {trainer.specialties.map((specialty) => (
+                <span
+                  key={specialty}
+                  className="rounded-full border border-brand-line px-3 py-1 text-sm text-brand-muted"
+                >
+                  {specialty}
+                </span>
+              ))}
             </div>
-            <div className="flex items-center gap-2">
-              <Users size={16} />
-              {publicEvents.length} publicznych szkoleń
+            <div className="mt-6 space-y-3 text-brand-muted">
+              <div className="flex items-center gap-2">
+                <MapPin size={16} />
+                {trainer.locations.join(" • ")}
+              </div>
+              <div className="flex items-center gap-2">
+                <Users size={16} />
+                {publicEvents.length} publicznych szkoleń
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           {publicEvents.length === 0 ? (
             <EmptyState
               title="Brak publicznych wydarzeń"
@@ -1956,19 +1994,115 @@ function normalizePhoneNumberForSms(value: string) {
   throw new Error("Podaj poprawny numer telefonu.");
 }
 
-function createRecaptchaVerifier(containerId: string) {
-  if (!firebaseAuth) {
-    throw new Error("Firebase Auth nie jest skonfigurowany.");
-  }
+function createRecaptchaVerifier(_containerId: string) {
+  return new RecaptchaVerifier();
+}
 
-  return new RecaptchaVerifier(firebaseAuth, containerId, {
-    size: "invisible",
-  });
+async function createConfirmationResult(phone: string, seedTrainerId?: string) {
+  const { normalizedPhone, code } = await requestSmsCode(phone);
+
+  return {
+    normalizedPhone,
+    code,
+    result: {
+      confirm: async (submittedCode: string) => {
+        const confirmed = await confirmSmsCode(normalizedPhone, submittedCode, seedTrainerId);
+
+        return {
+          user: {
+            uid: confirmed.userId,
+            phoneNumber: confirmed.phone,
+          },
+        };
+      },
+    } satisfies ConfirmationResult,
+  };
+}
+
+type SmsConfirmationDialogCopy = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  pendingLabel: string;
+};
+
+function SmsConfirmationDialog({
+  open,
+  onOpenChange,
+  phone,
+  verificationCode,
+  onVerificationCodeChange,
+  onConfirm,
+  disabled,
+  copy,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  phone: string;
+  verificationCode: string;
+  onVerificationCodeChange: (value: string) => void;
+  onConfirm: () => void;
+  disabled: boolean;
+  copy: SmsConfirmationDialogCopy;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
+        <div className="grid gap-5 p-6 sm:p-8">
+          <DialogHeader className="text-left">
+            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
+              Potwierdzenie SMS
+            </p>
+            <DialogTitle className="text-2xl font-semibold text-brand-navy">
+              {copy.title}
+            </DialogTitle>
+            <DialogDescription className="text-sm leading-6 text-brand-muted">
+              Wysłaliśmy kod SMS na numer <strong className="text-brand-navy">{phone}</strong>.{" "}
+              {copy.description}
+            </DialogDescription>
+          </DialogHeader>
+
+          <input
+            required
+            inputMode="numeric"
+            value={verificationCode}
+            onChange={(event) => onVerificationCodeChange(event.target.value)}
+            placeholder="Kod z SMS"
+            className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+
+          <div className="flex flex-wrap justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+            >
+              Zamknij
+            </button>
+            <button
+              type="button"
+              disabled={disabled || !verificationCode.trim()}
+              onClick={onConfirm}
+              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+            >
+              {disabled ? copy.pendingLabel : copy.confirmLabel}
+              <Phone size={16} />
+            </button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function SmsLoginScreen() {
-  const { authReady, currentUser, ensurePhoneParticipantProfileForFlow, getRoleHomePath, signIn } =
-    useAppState();
+  const {
+    authReady,
+    currentUser,
+    ensurePhoneParticipantProfileForFlow,
+    getPublicSignedInPath,
+    signIn,
+  } = useAppState();
   const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const [phone, setPhone] = useState("");
@@ -1976,6 +2110,7 @@ function SmsLoginScreen() {
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
+  const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [quickLoginEmail, setQuickLoginEmail] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1986,16 +2121,11 @@ function SmsLoginScreen() {
   }, []);
 
   if (currentUser) {
-    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
+    return <Navigate to={getPublicSignedInPath()} replace />;
   }
 
   async function handleSendCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
-    if (!firebaseAuth) {
-      toast.error("Firebase Auth nie jest skonfigurowany.");
-      return;
-    }
 
     setSendingCode(true);
 
@@ -2005,15 +2135,13 @@ function SmsLoginScreen() {
         recaptchaRef.current = createRecaptchaVerifier("login-phone-recaptcha");
       }
 
-      const result = await signInWithPhoneNumber(
-        firebaseAuth,
-        normalizedPhone,
-        recaptchaRef.current,
-      );
+      const { code, result } = await createConfirmationResult(normalizedPhone);
 
       setPhone(normalizedPhone);
+      setVerificationCode("");
       setConfirmationResult(result);
-      toast.success("Kod SMS został wysłany.");
+      setIsSmsDialogOpen(true);
+      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
@@ -2025,9 +2153,7 @@ function SmsLoginScreen() {
     }
   }
 
-  async function handleConfirmCode(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  async function handleConfirmCode() {
     if (!confirmationResult) {
       toast.error("Najpierw wyślij kod SMS.");
       return;
@@ -2037,36 +2163,17 @@ function SmsLoginScreen() {
 
     try {
       const result = await confirmationResult.confirm(verificationCode.trim());
-      let appUser;
-      try {
-        appUser = await fetchAppUser(result.user.uid);
-      } catch {
+      let appUser = await fetchAppUser(result.user.uid);
+      if (!appUser.participantProfileId) {
         await ensurePhoneParticipantProfileForFlow();
         appUser = await fetchAppUser(result.user.uid);
       }
-      toast.success("Zalogowano do panelu.");
-      navigate(getRoleHomePath(appUser.role));
+      setVerificationCode("");
+      setConfirmationResult(null);
+      setIsSmsDialogOpen(false);
+      toast.success("Zalogowano.");
+      navigate(getPublicSignedInPath());
     } catch (error) {
-      if (firebaseAuth?.currentUser?.uid) {
-        try {
-          const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
-          toast.success("Zalogowano do panelu.");
-          navigate(getRoleHomePath(appUser.role));
-          return;
-        } catch {
-          try {
-            await ensurePhoneParticipantProfileForFlow();
-            const appUser = await fetchAppUser(firebaseAuth.currentUser.uid);
-            toast.success("Utworzono konto uczestnika i zalogowano do panelu.");
-            navigate(getRoleHomePath(appUser.role));
-            return;
-          } catch {
-            toast.error("Nie udało się dokończyć tworzenia konta uczestnika.");
-            return;
-          }
-        }
-      }
-
       toast.error(
         error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
       );
@@ -2077,20 +2184,13 @@ function SmsLoginScreen() {
 
   async function handleQuickLogin(
     emailToUse: string,
-    targetRole: "admin" | "trainer" | "organizer" | "participant",
   ) {
     setQuickLoginEmail(emailToUse);
 
     try {
-      const user = await signIn(emailToUse, demoLoginPassword);
-      const nextRole =
-        user.role !== targetRole && user.roles.includes(targetRole) ? targetRole : user.role;
-
-      if (user.role !== targetRole && user.roles.includes(targetRole)) {
-        await updateActiveRoleAction(user, targetRole);
-      }
+      await signIn(emailToUse, demoLoginPassword);
       toast.success(`Zalogowano jako ${emailToUse}.`);
-      navigate(getRoleHomePath(nextRole));
+      navigate(getPublicSignedInPath());
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zalogować kontem demo.",
@@ -2101,21 +2201,14 @@ function SmsLoginScreen() {
   }
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_24rem]">
-        <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
+    <section className="mx-auto max-w-7xl overflow-x-clip px-4 py-8 sm:px-6 sm:py-14 lg:px-8">
+      <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
+        <div className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:rounded-[2.5rem] sm:p-8">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-sky-deep sm:text-sm sm:tracking-[0.3em]">
             Logowanie SMS
           </p>
-          <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
-            Wejście do aplikacji tylko numerem telefonu
-          </h1>
-          <p className="mt-4 max-w-2xl text-lg text-brand-muted">
-            Podaj numer telefonu, potwierdź kod SMS i gotowe. To jest główny sposób
-            logowania dla wszystkich zwykłych użytkowników.
-          </p>
 
-          <form onSubmit={handleSendCode} className="mt-8 grid gap-4">
+          <form onSubmit={handleSendCode} className="mt-4 grid gap-4 sm:mt-6">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">Numer telefonu</span>
               <input
@@ -2138,40 +2231,9 @@ function SmsLoginScreen() {
             </button>
           </form>
 
-          <div id="login-phone-recaptcha" />
+          <div id="login-phone-recaptcha" className="sr-only" />
 
-          <form onSubmit={handleConfirmCode} className="mt-6 grid gap-4">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Kod z SMS</span>
-              <input
-                required
-                inputMode="numeric"
-                value={verificationCode}
-                onChange={(event) => setVerificationCode(event.target.value)}
-                placeholder="123456"
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
-
-            <div className="flex flex-wrap gap-3">
-              <button
-                type="submit"
-                disabled={!confirmationResult || confirmingCode}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-              >
-                {confirmingCode ? "Potwierdzanie..." : "Potwierdź i wejdź"}
-                <ArrowRight size={16} />
-              </button>
-              <Link
-                to="/rejestracja"
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
-              >
-                Załóż nowe konto
-              </Link>
-            </div>
-          </form>
-
-          <div className="mt-8 rounded-3xl border border-brand-line bg-brand-shell p-5 text-sm text-brand-muted">
+          <div className="mt-8 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted sm:p-5">
             <div className="flex items-center gap-2 font-semibold text-brand-navy">
               <ShieldCheck size={16} />
               Konta demo
@@ -2183,7 +2245,7 @@ function SmsLoginScreen() {
           </div>
         </div>
 
-        <aside className="rounded-[2.5rem] border border-brand-line bg-white p-6 shadow-soft">
+        <aside className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:rounded-[2.5rem] sm:p-6">
           <div className="flex items-center gap-2 text-brand-navy">
             <Sparkles size={18} />
             <p className="text-sm font-semibold uppercase tracking-[0.25em]">
@@ -2210,7 +2272,7 @@ function SmsLoginScreen() {
                       key={account.email}
                       type="button"
                       disabled={!authReady || sendingCode || quickLoginEmail !== null}
-                      onClick={() => void handleQuickLogin(account.email, account.role)}
+                      onClick={() => void handleQuickLogin(account.email)}
                       className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-3 py-2 text-sm font-semibold text-brand-navy transition hover:border-brand-navy disabled:opacity-60"
                     >
                       <span>{account.label}</span>
@@ -2225,6 +2287,22 @@ function SmsLoginScreen() {
           </div>
         </aside>
       </div>
+
+      <SmsConfirmationDialog
+        open={isSmsDialogOpen}
+        onOpenChange={setIsSmsDialogOpen}
+        phone={phone}
+        verificationCode={verificationCode}
+        onVerificationCodeChange={setVerificationCode}
+        onConfirm={() => void handleConfirmCode()}
+        disabled={!confirmationResult || confirmingCode}
+        copy={{
+          title: "Potwierdź logowanie",
+          description: "Wpisz go, żeby się zalogować.",
+          confirmLabel: "Potwierdź logowanie",
+          pendingLabel: "Potwierdzanie...",
+        }}
+      />
     </section>
   );
 }
@@ -2233,10 +2311,11 @@ function SmsRegisterScreen() {
   const {
     authReady,
     currentUser,
-    getRoleHomePath,
+    getPublicSignedInPath,
+    registerParticipant,
     store,
-    submitAccountRequest,
   } = useAppState();
+  const navigate = useNavigate();
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
   const searchParams =
     typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
@@ -2249,36 +2328,33 @@ function SmsRegisterScreen() {
   const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [smsVerified, setSmsVerified] = useState(
-    Boolean(firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous),
-  );
+  const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
   const [form, setForm] = useState({
     displayName: "",
-    phone: prefetchedPhone,
-    trainerAuthorizationCode: "",
+    phone: prefetchedPhone || currentUser?.phone || getCurrentSessionPhone(),
     notes: "",
     avatarFile: null as File | null,
+    trainingDataConsentAccepted: false,
   });
   const signupPhotoMode = store.appSettings.signupPhotoMode;
   const signupPhotoRequired = isPhotoModeRequired(signupPhotoMode);
   const signupPhotoEnabled = isPhotoModeEnabled(signupPhotoMode);
 
   useEffect(() => {
-    if (firebaseAuth?.currentUser && !firebaseAuth.currentUser.isAnonymous) {
+    const sessionPhone = currentUser?.phone || getCurrentSessionPhone();
+    if (sessionPhone) {
       setSmsVerified(true);
-      if (firebaseAuth.currentUser.phoneNumber) {
-        setForm((current) => ({
-          ...current,
-          phone: firebaseAuth.currentUser?.phoneNumber ?? current.phone,
-        }));
-      }
+      setForm((current) => ({
+        ...current,
+        phone: sessionPhone || current.phone,
+      }));
     }
 
     return () => {
       recaptchaRef.current?.clear();
       recaptchaRef.current = null;
     };
-  }, []);
+  }, [currentUser?.phone]);
 
   useEffect(() => {
     if (!signupPhotoEnabled && form.avatarFile) {
@@ -2290,7 +2366,7 @@ function SmsRegisterScreen() {
   }, [signupPhotoEnabled, form.avatarFile]);
 
   if (hasCompletedParticipantRegistration(currentUser)) {
-    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
+    return <Navigate to={getPublicSignedInPath()} replace />;
   }
 
   function resetSmsVerification() {
@@ -2306,10 +2382,6 @@ function SmsRegisterScreen() {
 
     normalizePhoneNumberForSms(form.phone);
 
-    if (!form.trainerAuthorizationCode.trim()) {
-      throw new Error("Konto można założyć tylko posiadając ważny kod trenera.");
-    }
-
     if (signupPhotoRequired && !form.avatarFile) {
       throw new Error("Dodaj zdjęcie profilowe.");
     }
@@ -2317,20 +2389,27 @@ function SmsRegisterScreen() {
     if (!form.notes.trim()) {
       throw new Error("Napisz kilka słów o sobie.");
     }
+
+    if (!form.trainingDataConsentAccepted) {
+      throw new Error(
+        "Zaznacz zgodę na przetwarzanie danych osobowych do celów organizacji szkoleń.",
+      );
+    }
   }
 
   async function finalizeRegistration(phoneOverride?: string) {
     setLoading(true);
 
     try {
-      await submitAccountRequest({
+      await registerParticipant({
         displayName: form.displayName,
         phone: phoneOverride ?? form.phone,
-        trainerAuthorizationCode: form.trainerAuthorizationCode,
         notes: form.notes,
         avatarFile: signupPhotoEnabled ? form.avatarFile : null,
+        trainingDataConsentAccepted: form.trainingDataConsentAccepted,
       });
       toast.success("Konto uczestnika zostało utworzone.");
+      navigate(getPublicSignedInPath());
       return true;
     } catch (error) {
       toast.error(
@@ -2343,11 +2422,6 @@ function SmsRegisterScreen() {
   }
 
   async function handleSendCode() {
-    if (!firebaseAuth) {
-      toast.error("Firebase Auth nie jest skonfigurowany.");
-      return;
-    }
-
     setSendingCode(true);
 
     try {
@@ -2356,11 +2430,7 @@ function SmsRegisterScreen() {
         recaptchaRef.current = createRecaptchaVerifier("register-phone-recaptcha");
       }
 
-      const result = await signInWithPhoneNumber(
-        firebaseAuth,
-        normalizedPhone,
-        recaptchaRef.current,
-      );
+      const { code, result } = await createConfirmationResult(normalizedPhone);
 
       setForm((current) => ({
         ...current,
@@ -2369,7 +2439,7 @@ function SmsRegisterScreen() {
       setVerificationCode("");
       setConfirmationResult(result);
       setIsSmsDialogOpen(true);
-      toast.success("Kod SMS został wysłany.");
+      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
@@ -2437,13 +2507,13 @@ function SmsRegisterScreen() {
   }
 
   return (
-    <section className="mx-auto max-w-5xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
+    <section className="mx-auto max-w-5xl overflow-x-clip px-4 py-14 sm:px-6 lg:px-8">
+      <div className="min-w-0 overflow-hidden rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
           Rejestracja
         </p>
         <p className="mt-4 max-w-3xl text-lg text-brand-muted">
-          Konto założysz tylko potwierdzając swój numer telefonu SMS-kodem.
+          Zakładasz konto uczestnika, potwierdzając numer telefonu SMS-kodem.
         </p>
         {enrollmentSource && (
           <p className="mt-3 max-w-3xl rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-sm text-brand-muted">
@@ -2464,7 +2534,7 @@ function SmsRegisterScreen() {
               }))
             }
             placeholder="Imię i nazwisko"
-            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
           />
 
           <input
@@ -2482,25 +2552,11 @@ function SmsRegisterScreen() {
               }));
             }}
             placeholder="Numer telefonu"
-            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
           />
 
-          <label className="grid gap-2">
-            <input
-              value={form.trainerAuthorizationCode}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  trainerAuthorizationCode: event.target.value,
-                }))
-              }
-              placeholder="Kod trenera"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-          </label>
-
           {signupPhotoEnabled && (
-            <label className="grid gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+            <label className="grid min-w-0 gap-3 rounded-[2rem] border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
               <span className="inline-flex items-center gap-2 text-sm font-semibold">
                 <ImagePlus size={16} />
                 Zdjęcie profilowe {signupPhotoRequired ? "(wymagane)" : "(opcjonalne)"}
@@ -2514,7 +2570,7 @@ function SmsRegisterScreen() {
                     avatarFile: event.target.files?.[0] ?? null,
                   }))
                 }
-                className="text-sm"
+                className="block w-full min-w-0 max-w-full text-sm"
               />
               <span className="text-sm text-brand-muted">
                 {form.avatarFile
@@ -2524,7 +2580,7 @@ function SmsRegisterScreen() {
             </label>
           )}
 
-          <label className="grid gap-2">
+          <label className="grid min-w-0 gap-2">
             <span className="text-sm font-semibold text-brand-navy">Kilka słów o sobie</span>
             <textarea
               required
@@ -2537,14 +2593,38 @@ function SmsRegisterScreen() {
                 }))
               }
               placeholder="Napisz kilka słów o sobie i czego szukasz w grupie lub najbliższych szkoleniach."
-              className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+              className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
             />
+          </label>
+
+          <label className="flex items-start gap-3 rounded-[1.75rem] border border-brand-line bg-brand-shell px-4 py-4 text-sm text-brand-muted">
+            <input
+              type="checkbox"
+              checked={form.trainingDataConsentAccepted}
+              onChange={(event) =>
+                setForm((current) => ({
+                  ...current,
+                  trainingDataConsentAccepted: event.target.checked,
+                }))
+              }
+              className="mt-1"
+            />
+            <span>
+              Wyrażam zgodę na przetwarzanie moich danych osobowych zgodnie z RODO do
+              celów organizacji szkoleń.
+            </span>
           </label>
 
           <button
             type="submit"
-            disabled={loading || sendingCode || confirmingCode || !authReady}
-            className="mt-2 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+            disabled={
+              loading ||
+              sendingCode ||
+              confirmingCode ||
+              !authReady ||
+              !form.trainingDataConsentAccepted
+            }
+            className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60 sm:w-auto"
           >
             {loading
               ? "Tworzenie konta..."
@@ -2565,52 +2645,21 @@ function SmsRegisterScreen() {
         </form>
       </div>
 
-      <Dialog open={isSmsDialogOpen} onOpenChange={setIsSmsDialogOpen}>
-        <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
-          <div className="grid gap-5 p-6 sm:p-8">
-            <DialogHeader className="text-left">
-              <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
-                Potwierdzenie SMS
-              </p>
-              <DialogTitle className="text-2xl font-semibold text-brand-navy">
-                Potwierdź numer telefonu
-              </DialogTitle>
-              <DialogDescription className="text-sm leading-6 text-brand-muted">
-                Wysłaliśmy kod SMS na numer <strong className="text-brand-navy">{form.phone}</strong>.
-                Wpisz go, żeby dokończyć tworzenie konta.
-              </DialogDescription>
-            </DialogHeader>
-
-            <input
-              required
-              inputMode="numeric"
-              value={verificationCode}
-              onChange={(event) => setVerificationCode(event.target.value)}
-              placeholder="Kod z SMS"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-
-            <div className="flex flex-wrap justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setIsSmsDialogOpen(false)}
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-              >
-                Zamknij
-              </button>
-              <button
-                type="button"
-                disabled={!confirmationResult || !verificationCode.trim() || confirmingCode || loading}
-                onClick={() => void handleConfirmCode()}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-              >
-                {confirmingCode || loading ? "Potwierdzanie..." : "Potwierdź kod i utwórz konto"}
-                <Phone size={16} />
-              </button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <SmsConfirmationDialog
+        open={isSmsDialogOpen}
+        onOpenChange={setIsSmsDialogOpen}
+        phone={form.phone}
+        verificationCode={verificationCode}
+        onVerificationCodeChange={setVerificationCode}
+        onConfirm={() => void handleConfirmCode()}
+        disabled={!confirmationResult || confirmingCode || loading}
+        copy={{
+          title: "Potwierdź numer telefonu",
+          description: "Wpisz go, żeby dokończyć tworzenie konta.",
+          confirmLabel: "Potwierdź kod i utwórz konto",
+          pendingLabel: "Potwierdzanie...",
+        }}
+      />
     </section>
   );
 }
@@ -2620,7 +2669,7 @@ export function LoginPage() {
 }
 
 function LoginPageLegacyUnused() {
-  const { authReady, currentUser, getRoleHomePath, signIn } = useAppState();
+  const { authReady, currentUser, getPublicSignedInPath, signIn } = useAppState();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -2628,7 +2677,7 @@ function LoginPageLegacyUnused() {
   const [quickLoginEmail, setQuickLoginEmail] = useState<string | null>(null);
 
   if (currentUser) {
-    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
+    return <Navigate to={getPublicSignedInPath()} replace />;
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2636,9 +2685,9 @@ function LoginPageLegacyUnused() {
     setLoading(true);
 
     try {
-      const user = await signIn(email, password);
-      toast.success("Zalogowano do panelu.");
-      navigate(getRoleHomePath(user.role));
+      await signIn(email, password);
+      toast.success("Zalogowano.");
+      navigate(getPublicSignedInPath());
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zalogować.",
@@ -2650,20 +2699,13 @@ function LoginPageLegacyUnused() {
 
   async function handleQuickLogin(
     emailToUse: string,
-    targetRole: "admin" | "trainer" | "organizer" | "participant",
   ) {
     setQuickLoginEmail(emailToUse);
 
     try {
-      const user = await signIn(emailToUse, demoLoginPassword);
-      const nextRole =
-        user.role !== targetRole && user.roles.includes(targetRole) ? targetRole : user.role;
-
-      if (user.role !== targetRole && user.roles.includes(targetRole)) {
-        await updateActiveRoleAction(user, targetRole);
-      }
+      await signIn(emailToUse, demoLoginPassword);
       toast.success(`Zalogowano jako ${emailToUse}.`);
-      navigate(getRoleHomePath(nextRole));
+      navigate(getPublicSignedInPath());
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zalogować kontem demo.",
@@ -2674,11 +2716,11 @@ function LoginPageLegacyUnused() {
   }
 
   return (
-    <section className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_24rem]">
+    <section className="mx-auto max-w-7xl overflow-x-clip px-4 py-14 sm:px-6 lg:px-8">
+      <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
         <form
           onSubmit={handleSubmit}
-          className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft"
+          className="min-w-0 rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft"
         >
           <div className="grid gap-4">
             <label className="grid gap-2">
@@ -2721,8 +2763,8 @@ function LoginPageLegacyUnused() {
               Dostęp do panelu
             </div>
             <p className="mt-2">
-              Potwierdź numer telefonu, wybierz trenerów, do których chodzisz na grupę,
-              i załóż konto uczestnika, organizatora albo społeczności.
+              Potwierdź numer telefonu i załóż konto uczestnika. Dostęp organizatora
+              aktywujesz później z panelu.
             </p>
             <Link
               to="/rejestracja"
@@ -2734,7 +2776,7 @@ function LoginPageLegacyUnused() {
           </div>
         </form>
 
-        <aside className="rounded-[2.5rem] border border-brand-line bg-white p-6 shadow-soft">
+        <aside className="min-w-0 rounded-[2.5rem] border border-brand-line bg-white p-6 shadow-soft">
           <div className="flex items-center gap-2 text-brand-navy">
             <Sparkles size={18} />
             <p className="text-sm font-semibold uppercase tracking-[0.25em]">
@@ -2761,7 +2803,7 @@ function LoginPageLegacyUnused() {
                       key={account.email}
                       type="button"
                       disabled={!authReady || loading || quickLoginEmail !== null}
-                      onClick={() => void handleQuickLogin(account.email, account.role)}
+                      onClick={() => void handleQuickLogin(account.email)}
                       className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-3 py-2 text-sm font-semibold text-brand-navy transition hover:border-brand-navy disabled:opacity-60"
                     >
                       <span>{account.label}</span>
@@ -2782,268 +2824,4 @@ function LoginPageLegacyUnused() {
 
 export function RegisterPage() {
   return <SmsRegisterScreen />;
-}
-
-function RegisterPageLegacyUnused() {
-  const { currentUser, getRoleHomePath, submitAccountRequest } = useAppState();
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState({
-    displayName: "",
-    email: "",
-    phone: "",
-    requestedRoles: ["organizer"] as Array<"trainer" | "organizer">,
-    notes: "",
-    password: "",
-    confirmPassword: "",
-  });
-
-  if (currentUser) {
-    return <Navigate to={getRoleHomePath(currentUser.role)} replace />;
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading(true);
-
-    try {
-      if (form.requestedRoles.length === 0) {
-        toast.error("Wybierz przynajmniej jeden zakres działania.");
-        return;
-      }
-
-      if (form.password.length < 6) {
-        toast.error("Hasło musi mieć przynajmniej 6 znaków.");
-        return;
-      }
-
-      if (form.password !== form.confirmPassword) {
-        toast.error("Hasła muszą być identyczne.");
-        return;
-      }
-
-      await submitAccountRequest({
-        displayName: form.displayName,
-        phone: form.phone,
-        trainerAuthorizationCode: form.password,
-        notes: form.notes,
-      });
-      toast.success("Konto zostało utworzone. Możesz się zalogować.");
-      navigate("/login");
-    } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "Nie udało się wysłać zgłoszenia rejestracyjnego.",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <section className="mx-auto max-w-4xl px-4 py-14 sm:px-6 lg:px-8">
-      <div className="rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
-        <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
-          Rejestracja
-        </p>
-        <h1 className="mt-4 text-4xl font-semibold text-brand-navy">
-          Zgłoszenie nowego konta
-        </h1>
-        <p className="mt-4 max-w-2xl text-lg text-brand-muted">
-          Wypełnij formularz, a po akceptacji przez admina konto może działać
-          jako organizator grup Emandar, osoba prowadząca wydarzenia dla
-          społeczności albo w obu tych trybach naraz.
-        </p>
-
-        <form onSubmit={handleSubmit} className="mt-8 grid gap-4">
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">
-              Imię i nazwisko
-            </span>
-            <input
-              required
-              name="name"
-              autoComplete="name"
-              value={form.displayName}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  displayName: event.target.value,
-                }))
-              }
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-          </label>
-
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Email</span>
-            <input
-              required
-              type="email"
-              name="email"
-              autoComplete="email"
-              value={form.email}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  email: event.target.value,
-                }))
-              }
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-          </label>
-
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">
-              Numer telefonu
-            </span>
-            <input
-              required
-              name="tel"
-              autoComplete="tel"
-              value={form.phone}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  phone: event.target.value,
-                }))
-              }
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-          </label>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Hasło</span>
-              <input
-                required
-                type="password"
-                name="password"
-                autoComplete="new-password"
-                minLength={6}
-                value={form.password}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    password: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Powtórz hasło</span>
-              <input
-                required
-                type="password"
-                name="confirmPassword"
-                autoComplete="new-password"
-                minLength={6}
-                value={form.confirmPassword}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    confirmPassword: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
-          </div>
-
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">
-              Chcę działać jako
-            </span>
-            <div className="grid gap-3 rounded-3xl border border-brand-line bg-brand-shell p-4">
-              <label className="flex items-start gap-3 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("organizer")}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      requestedRoles: event.target.checked
-                        ? Array.from(new Set([...current.requestedRoles, "organizer"]))
-                        : current.requestedRoles.filter((role) => role !== "organizer"),
-                    }))
-                  }
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Organizator grup Emandar</span>
-                  <span className="text-sm text-brand-muted">
-                    Organizujesz normalne szkolenia z Przekazującym Wiedzę na podstawie
-                    zatwierdzonej relacji.
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-3 text-brand-navy">
-                <input
-                  type="checkbox"
-                  checked={form.requestedRoles.includes("trainer")}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      requestedRoles: event.target.checked
-                        ? Array.from(new Set([...current.requestedRoles, "trainer"]))
-                        : current.requestedRoles.filter((role) => role !== "trainer"),
-                    }))
-                  }
-                  className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-                />
-                <span className="grid gap-1">
-                  <span className="text-sm font-semibold">Wydarzenia dla społeczności</span>
-                  <span className="text-sm text-brand-muted">
-                    Prowadzisz własne zgłoszenia i wydarzenia społeczności bez przypinania
-                    ich do trenera.
-                  </span>
-                </span>
-              </label>
-            </div>
-            <p className="text-sm text-brand-muted">
-              Możesz zaznaczyć oba warianty, jeśli chcesz działać jednocześnie w obu
-              obszarach.
-            </p>
-          </label>
-
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">
-              Kilka słów o sobie
-            </span>
-            <textarea
-              rows={5}
-              value={form.notes}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  notes: event.target.value,
-                }))
-              }
-              className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-          </label>
-
-          <div className="mt-2 flex flex-wrap gap-3">
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-            >
-              {loading ? "Wysyłanie..." : "Wyślij zgłoszenie"}
-              <ArrowRight size={16} />
-            </button>
-            <Link
-              to="/login"
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
-            >
-              Wróć do logowania
-            </Link>
-          </div>
-        </form>
-      </div>
-    </section>
-  );
 }

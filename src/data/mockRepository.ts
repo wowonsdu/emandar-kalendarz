@@ -1670,11 +1670,23 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
       throw new Error("Nie znaleziono grupy.");
     }
 
+    if (group.organizerUserId !== actor.id && actor.role !== "admin") {
+      throw new Error("Nie możesz dodawać członków do tej grupy.");
+    }
+
     if (group.organizerUserId === actor.id && actor.role !== "admin") {
       ensureOrganizerFunctionsActive(actor);
     }
 
-    let participantProfileId = input.participantProfileId;
+    let participantProfileId = input.participantProfileId?.trim() || undefined;
+    let profile = participantProfileId
+      ? store.participantProfiles.find((item) => item.id === participantProfileId)
+      : undefined;
+
+    if (participantProfileId && !profile) {
+      throw new Error("Nie znaleziono profilu uczestnika.");
+    }
+
     if (!participantProfileId) {
       if (!input.displayName?.trim() || !input.phone?.trim()) {
         throw new Error("Podaj imię i nazwisko oraz numer telefonu.");
@@ -1682,7 +1694,9 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
 
       participantProfileId = buildParticipantProfileId(input.phone);
       const existingProfile = store.participantProfiles.find((item) => item.id === participantProfileId);
-      if (!existingProfile) {
+      if (existingProfile) {
+        profile = existingProfile;
+      } else {
         const split = splitDisplayName(input.displayName);
         store.participantProfiles.unshift({
           id: participantProfileId,
@@ -1700,10 +1714,10 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
           createdByOrganizerId: group.organizerId,
           createdByUserId: actor.id,
         });
+        profile = store.participantProfiles[0];
       }
     }
 
-    const profile = store.participantProfiles.find((item) => item.id === participantProfileId);
     if (!profile) {
       throw new Error("Nie znaleziono profilu uczestnika.");
     }
@@ -1712,7 +1726,11 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
     const existingMember = store.groupMembers.find((item) => item.id === memberId);
     if (existingMember) {
       existingMember.membershipStatus = "active";
+      existingMember.participantUserId = profile.linkedUserId ?? null;
+      existingMember.participantDisplayName = profile.displayName;
+      existingMember.participantPhone = profile.phone;
       existingMember.priority = asParticipantPriority(input.priority);
+      existingMember.notes = input.notes?.trim();
       existingMember.updatedAt = nowIso();
       return {
         ok: true as const,

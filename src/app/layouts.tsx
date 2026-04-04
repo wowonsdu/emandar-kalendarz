@@ -2,14 +2,12 @@ import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   Bell,
-  CalendarDays,
   LayoutDashboard,
   LogOut,
   Menu,
   Plus,
   ShieldCheck,
   Sparkles,
-  Users,
   X,
 } from "lucide-react";
 import {
@@ -20,14 +18,15 @@ import {
   useLocation,
 } from "react-router";
 import { useAppState } from "./providers/AppProviders";
-import type { AppRole, AppUser } from "@/domain/types";
+import type { AppNavigationSection } from "./navigation";
+import {
+  buildAuthenticatedNavigationSections,
+  buildPublicNavigationSections,
+  publicNavItems,
+} from "./navigation";
 import {
   canUseOrganizerFunctions,
-  getHighestRole,
-  getRoleLabel,
-  hasModeratorAccess,
   hasInheritedRole,
-  isCommunityBrandStatus,
 } from "@/domain/utils";
 
 function brandNavLinkClass({ isActive }: { isActive: boolean }) {
@@ -42,12 +41,6 @@ function brandNavLinkClass({ isActive }: { isActive: boolean }) {
 function exactNavLinkClass(currentPath: string, targetPath: string) {
   return brandNavLinkClass({ isActive: currentPath === targetPath });
 }
-
-const publicNavItems = [
-  { to: "/kalendarz", label: "Kalendarz", icon: CalendarDays },
-  { to: "/trenerzy", label: "Przekazujacy Wiedze", icon: Users },
-  { to: "/wydarzenia-spolecznosci", label: "Wydarzenia społeczności", icon: Bell },
-] as const;
 
 function BrandMark({ inverted = false }: { inverted?: boolean }) {
   return (
@@ -83,12 +76,23 @@ function BrandMark({ inverted = false }: { inverted?: boolean }) {
 }
 
 export function PublicLayout() {
-  const { currentUser, hasAuthenticatedSession, getPanelHomePath } = useAppState();
+  const {
+    currentUser,
+    hasAuthenticatedSession,
+    getPanelHomePath,
+    notificationsCount,
+    signOut,
+    store,
+  } = useAppState();
   const location = useLocation();
   const userHomePath = hasAuthenticatedSession
     ? getPanelHomePath(currentUser?.role ?? "participant")
     : "/login";
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const authenticatedSections = currentUser
+    ? buildAuthenticatedNavigationSections(currentUser, store)
+    : [];
+  const publicSections = buildPublicNavigationSections();
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -153,7 +157,7 @@ export function PublicLayout() {
                 className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-2 text-xs font-semibold text-white shadow-soft sm:px-5 sm:py-2.5 sm:text-sm"
               >
                 <LayoutDashboard size={16} />
-                <span className="hidden sm:inline">Moja Przestrzen</span>
+                <span className="hidden sm:inline">Moja Przestrzeń</span>
                 <span className="sm:hidden">Panel</span>
               </Link>
             ) : (
@@ -213,40 +217,32 @@ export function PublicLayout() {
                 </button>
               </div>
 
-              <nav className="space-y-2">
-                {publicNavItems.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = location.pathname === item.to;
-
-                  return (
-                    <NavLink
-                      key={item.to}
-                      to={item.to}
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className={[
-                        "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors",
-                        isActive
-                          ? "bg-white text-brand-navy"
-                          : "text-white/75 hover:bg-white/10 hover:text-white",
-                      ].join(" ")}
-                    >
-                      <Icon size={18} />
-                      {item.label}
-                    </NavLink>
-                  );
-                })}
-              </nav>
+              <NavigationSectionList
+                sections={hasAuthenticatedSession ? authenticatedSections : publicSections}
+                onItemClick={() => setIsMobileMenuOpen(false)}
+              />
 
               <div className="mt-8 space-y-3 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
                 {hasAuthenticatedSession ? (
-                  <Link
-                    to={userHomePath}
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
-                  >
-                    <LayoutDashboard size={16} />
-                    Moja Przestrzen
-                  </Link>
+                  <>
+                    <div className="flex items-center justify-between text-sm text-white/80">
+                      <span>Nowe powiadomienia</span>
+                      <span className="rounded-full bg-white/15 px-2 py-1 font-semibold">
+                        {notificationsCount}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMobileMenuOpen(false);
+                        void signOut();
+                      }}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-white/10 px-4 py-3 text-sm font-semibold text-white hover:bg-white/20"
+                    >
+                      <LogOut size={16} />
+                      Wyloguj
+                    </button>
+                  </>
                 ) : (
                   <>
                     <Link
@@ -290,96 +286,13 @@ export function PublicLayout() {
               Przekazujacy Wiedze
             </Link>
             <Link to={userHomePath} className="hover:text-brand-navy">
-              {hasAuthenticatedSession ? "Moja Przestrzen" : "Panel"}
+              {hasAuthenticatedSession ? "Moja Przestrzeń" : "Panel"}
             </Link>
           </div>
         </div>
       </footer>
     </div>
   );
-}
-
-type PanelNavItem = {
-  to: string;
-  label: string;
-  icon: typeof Bell;
-  badgeCount?: number;
-};
-
-type PanelNavSection = {
-  title?: string;
-  items: PanelNavItem[];
-};
-
-function panelNavigationSections(
-  user: Pick<AppUser, "role" | "roles" | "primaryRole">,
-  isCommunityTrainer = false,
-  pendingCommunityApprovals = 0,
-) {
-  const highestRole = getHighestRole(user);
-  const sections: PanelNavSection[] = [
-    {
-      items: [
-        { to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard },
-        { to: "/panel/grupy", label: "Grupy", icon: Users },
-        { to: "/panel/szkolenia", label: "Szkolenia", icon: CalendarDays },
-      ],
-    },
-    {
-      title: "Uczestnik",
-      items: [
-        {
-          to: "/panel/wydarzenia-spolecznosci",
-          label: "Wydarzenia społeczności",
-          icon: CalendarDays,
-        },
-        { to: "/panel/zgloszenia", label: "Zgłoszenia", icon: Bell },
-        { to: "/panel/ustawienia", label: "Ustawienia", icon: ShieldCheck },
-        { to: "/kalendarz", label: "Widok publiczny", icon: Sparkles },
-      ],
-    },
-  ];
-
-  if (hasModeratorAccess(user)) {
-    sections.push({
-      title: "Moderator",
-      items: [
-        {
-          to: "/panel/moderacja-wydarzen-spolecznosci",
-          label: "Moderacja wydarzeń",
-          icon: Bell,
-          badgeCount: pendingCommunityApprovals || undefined,
-        },
-        { to: "/panel/uzytkownicy", label: "Konta i blokady", icon: Users },
-      ],
-    });
-  }
-
-  if (hasInheritedRole(user, "organizer")) {
-    sections.push({
-      title: "Organizator",
-      items: [{ to: "/panel/terminy", label: "Terminy", icon: CalendarDays }],
-    });
-  }
-
-  if (hasInheritedRole(user, "trainer") && !isCommunityTrainer) {
-    sections.push({
-      title: "Trener",
-      items: [{ to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users }],
-    });
-  }
-
-  if (highestRole === "admin") {
-    sections.push({
-      title: "Admin",
-      items: [
-        { to: "/panel/trenerzy", label: "Przekazujący Wiedzę", icon: Users },
-        { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
-      ],
-    });
-  }
-
-  return sections;
 }
 
 function getPanelBackPath(pathname: string, search: string) {
@@ -422,6 +335,56 @@ function getPanelBackPath(pathname: string, search: string) {
   return null;
 }
 
+function NavigationSectionList({
+  sections,
+  onItemClick,
+}: {
+  sections: AppNavigationSection[];
+  onItemClick?: () => void;
+}) {
+  return (
+    <nav className="space-y-5">
+      {sections.map((section) => (
+        <div key={section.title} className="space-y-2">
+          <p className="px-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
+            {section.title}
+          </p>
+          <div className="space-y-2">
+            {section.items.map((item) => {
+              const Icon = item.icon;
+
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  onClick={onItemClick}
+                  className={({ isActive }) =>
+                    [
+                      "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors",
+                      isActive
+                        ? "bg-white text-brand-navy"
+                        : "text-white/75 hover:bg-white/10 hover:text-white",
+                    ].join(" ")
+                  }
+                >
+                  <Icon size={18} />
+                  <span className="min-w-0 flex-1">{item.label}</span>
+                  {item.badgeCount ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-red-500/90 px-2 py-1 text-xs font-semibold text-white">
+                      <Bell size={12} />
+                      {item.badgeCount}
+                    </span>
+                  ) : null}
+                </NavLink>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </nav>
+  );
+}
+
 function PanelNavigationContent({
   currentUserEmailOrPhone,
   displayName,
@@ -432,7 +395,7 @@ function PanelNavigationContent({
 }: {
   currentUserEmailOrPhone: string;
   displayName: string;
-  sections: ReturnType<typeof panelNavigationSections>;
+  sections: AppNavigationSection[];
   notificationsCount: number;
   onClose?: () => void;
   onSignOut: () => void;
@@ -461,46 +424,7 @@ function PanelNavigationContent({
         </div>
       </div>
 
-      <nav className="space-y-5">
-        {sections.map((section, sectionIndex) => (
-          <div key={section.title ?? `panel-section-${sectionIndex}`} className="space-y-2">
-            {section.title ? (
-              <p className="px-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
-                {section.title}
-              </p>
-            ) : null}
-            <div className="space-y-2">
-              {section.items.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    onClick={onClose}
-                    className={({ isActive }) =>
-                      [
-                        "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors",
-                        isActive
-                          ? "bg-white text-brand-navy"
-                          : "text-white/75 hover:bg-white/10 hover:text-white",
-                      ].join(" ")
-                    }
-                  >
-                    <Icon size={18} />
-                    <span className="min-w-0 flex-1">{item.label}</span>
-                    {item.badgeCount ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/90 px-2 py-1 text-xs font-semibold text-white">
-                        <Bell size={12} />
-                        {item.badgeCount}
-                      </span>
-                    ) : null}
-                  </NavLink>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </nav>
+      <NavigationSectionList sections={sections} onItemClick={onClose} />
 
       <div className="mt-auto space-y-3 rounded-3xl border border-white/10 bg-white/5 p-4">
         <div className="flex items-center justify-between text-sm text-white/80">
@@ -541,19 +465,8 @@ export function PanelLayout() {
   const { currentUser, notificationsCount, signOut, store } = useAppState();
   const location = useLocation();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const trainerProfile = store.trainers.find((item) => item.userId === currentUser?.id);
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser?.id);
-  const highestRole = getHighestRole(currentUser);
-  const pendingCommunityApprovals = store.trainingEvents.filter(
-    (item) =>
-      isCommunityBrandStatus(item.brandStatus) &&
-      item.publicationApprovalStatus === "pending",
-  ).length;
-  const sections = panelNavigationSections(
-    currentUser,
-    highestRole === "trainer" && isCommunityBrandStatus(trainerProfile?.brandStatus),
-    hasModeratorAccess(currentUser) ? pendingCommunityApprovals : 0,
-  );
+  const sections = buildAuthenticatedNavigationSections(currentUser, store);
   const currentUserEmailOrPhone = currentUser?.email || currentUser?.phone || "Konto SMS";
   const panelBackPath = getPanelBackPath(location.pathname, location.search);
   const hasOrganizerScope = canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);

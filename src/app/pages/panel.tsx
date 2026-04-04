@@ -481,6 +481,49 @@ function createEmptyGroupMemberFormState(): GroupMemberFormState {
   };
 }
 
+function normalizeParticipantPhoneLookupKey(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) {
+    return "";
+  }
+
+  if (trimmed.startsWith("+")) {
+    return digits;
+  }
+
+  if (digits.startsWith("00")) {
+    return digits.slice(2);
+  }
+
+  if (digits.length === 9) {
+    return `48${digits}`;
+  }
+
+  return digits;
+}
+
+function hasCompleteParticipantPhone(value: string) {
+  return normalizeParticipantPhoneLookupKey(value).length >= 11;
+}
+
+function applyParticipantProfileToGroupMemberForm(
+  previous: GroupMemberFormState,
+  profile: ParticipantProfile,
+): GroupMemberFormState {
+  return {
+    ...previous,
+    participantProfileId: profile.id,
+    displayName: profile.displayName,
+    phone: profile.phone,
+    referralSource: profile.referralSource ?? "",
+  };
+}
+
 function getGroupPriorityLabel(priority: GroupMemberPriority) {
   switch (priority) {
     case "stali":
@@ -4646,6 +4689,13 @@ export function GroupsPage() {
       new Map((store.participantProfiles ?? []).map((profile) => [profile.id, profile])),
     [store.participantProfiles],
   );
+  const participantProfilesByPhoneLookupKey = useMemo(
+    () =>
+      new Map(
+        (store.participantProfiles ?? []).map((profile) => [profile.phoneLookupKey, profile]),
+      ),
+    [store.participantProfiles],
+  );
   const activeMemberCounts = useMemo(
     () =>
       (store.groupMembers ?? []).reduce<Record<string, number>>((accumulator, member) => {
@@ -4775,6 +4825,24 @@ export function GroupsPage() {
         )
       .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
   }, [canManageGroups, organizerProfile, store.participantProfiles]);
+  const selectedMemberProfile = useMemo(
+    () =>
+      memberForm.participantProfileId
+        ? participantProfilesById.get(memberForm.participantProfileId) ?? null
+        : null,
+    [memberForm.participantProfileId, participantProfilesById],
+  );
+  const memberProfileOptions = useMemo(() => {
+    if (!selectedMemberProfile) {
+      return organizerManagedProfiles;
+    }
+
+    return organizerManagedProfiles.some((profile) => profile.id === selectedMemberProfile.id)
+      ? organizerManagedProfiles
+      : [selectedMemberProfile, ...organizerManagedProfiles];
+  }, [organizerManagedProfiles, selectedMemberProfile]);
+  const shouldShowMemberDetails =
+    Boolean(selectedMemberProfile) || hasCompleteParticipantPhone(memberForm.phone);
   const sharedSlotsById = useMemo(
     () => new Map((store.trainerSharedSlots ?? []).map((slot) => [slot.id, slot])),
     [store.trainerSharedSlots],
@@ -4979,6 +5047,50 @@ export function GroupsPage() {
     }
   }
 
+  function handleMemberPhoneChange(event: ChangeEvent<HTMLInputElement>) {
+    const nextPhone = event.target.value;
+    const nextPhoneLookupKey = normalizeParticipantPhoneLookupKey(nextPhone);
+    const matchedProfile =
+      nextPhoneLookupKey.length >= 11
+        ? participantProfilesByPhoneLookupKey.get(nextPhoneLookupKey) ?? null
+        : null;
+
+    setMemberForm((previous) => {
+      if (matchedProfile) {
+        return applyParticipantProfileToGroupMemberForm(previous, matchedProfile);
+      }
+
+      return {
+        ...previous,
+        participantProfileId: "",
+        phone: nextPhone,
+        displayName: previous.participantProfileId ? "" : previous.displayName,
+        referralSource: previous.participantProfileId ? "" : previous.referralSource,
+      };
+    });
+  }
+
+  function handleMemberProfileSelect(event: ChangeEvent<HTMLSelectElement>) {
+    const nextProfileId = event.target.value;
+    if (!nextProfileId) {
+      setMemberForm((previous) => ({
+        ...previous,
+        participantProfileId: "",
+        displayName: "",
+        phone: "",
+        referralSource: "",
+      }));
+      return;
+    }
+
+    const selectedProfile = participantProfilesById.get(nextProfileId);
+    if (!selectedProfile) {
+      return;
+    }
+
+    setMemberForm((previous) => applyParticipantProfileToGroupMemberForm(previous, selectedProfile));
+  }
+
   async function handleAddMember(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -4987,8 +5099,13 @@ export function GroupsPage() {
       return;
     }
 
-    if (!memberForm.participantProfileId && (!memberForm.displayName || !memberForm.phone)) {
-      toast.error("Podaj imię i numer telefonu albo wybierz istniejący profil.");
+    if (!selectedMemberProfile && !hasCompleteParticipantPhone(memberForm.phone)) {
+      toast.error("Wpisz pełny numer telefonu uczestnika albo wybierz istniejący profil.");
+      return;
+    }
+
+    if (!selectedMemberProfile && !memberForm.displayName.trim()) {
+      toast.error("Podaj imię i nazwisko nowego uczestnika.");
       return;
     }
 
@@ -4997,10 +5114,10 @@ export function GroupsPage() {
       await addGroupMember({
         groupId: selectedGroup.id,
         participantProfileId: memberForm.participantProfileId || undefined,
-        displayName: memberForm.participantProfileId ? undefined : memberForm.displayName,
-        phone: memberForm.participantProfileId ? undefined : memberForm.phone,
+        displayName: selectedMemberProfile ? undefined : memberForm.displayName,
+        phone: memberForm.phone,
         notes: memberForm.notes,
-        referralSource: memberForm.referralSource,
+        referralSource: selectedMemberProfile ? undefined : memberForm.referralSource,
         priority: memberForm.priority,
       });
       toast.success("Dodano członka grupy.");
@@ -5617,104 +5734,102 @@ export function GroupsPage() {
               />
               {canManageGroups && selectedGroupIsOwnedByCurrentUser && selectedGroup.status === "active" ? (
                 <form onSubmit={handleAddMember} className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
-                  <label className="grid min-w-0 gap-2 lg:col-span-2">
-                    <span className="text-sm font-semibold text-brand-navy">
-                      Istniejący profil uczestnika
-                    </span>
-                    <select
-                      value={memberForm.participantProfileId}
-                      onChange={(event) =>
-                        setMemberForm((previous) => ({
-                          ...previous,
-                          participantProfileId: event.target.value,
-                        }))
-                      }
-                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                    >
-                      <option value="">Utwórz nowy profil przy dodawaniu</option>
-                      {organizerManagedProfiles.map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profile.displayName} · {profile.phone} · {getParticipantConfirmationLabel(profile)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
-                    <input
-                      value={memberForm.displayName}
-                      onChange={(event) =>
-                        setMemberForm((previous) => ({
-                          ...previous,
-                          displayName: event.target.value,
-                        }))
-                      }
-                      disabled={Boolean(memberForm.participantProfileId)}
-                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
-                    />
-                  </label>
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Telefon</span>
-                    <input
-                      value={memberForm.phone}
-                      onChange={(event) =>
-                        setMemberForm((previous) => ({ ...previous, phone: event.target.value }))
-                      }
-                      disabled={Boolean(memberForm.participantProfileId)}
-                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
-                    />
-                  </label>
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Priorytet</span>
-                    <select
-                      value={memberForm.priority}
-                      onChange={(event) =>
-                        setMemberForm((previous) => ({
-                          ...previous,
-                          priority: event.target.value as GroupMemberPriority,
-                        }))
-                      }
-                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                    >
-                      <option value="stali">Stali</option>
-                      <option value="regularni">Regularni</option>
-                      <option value="rezerwowi">Rezerwowi</option>
-                    </select>
-                  </label>
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Źródło / polecenie</span>
-                    <input
-                      value={memberForm.referralSource}
-                      onChange={(event) =>
-                        setMemberForm((previous) => ({
-                          ...previous,
-                          referralSource: event.target.value,
-                        }))
-                      }
-                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                    />
-                  </label>
-                  <label className="grid min-w-0 gap-2 lg:col-span-2">
-                    <span className="text-sm font-semibold text-brand-navy">Notatki</span>
-                    <textarea
-                      rows={3}
-                      value={memberForm.notes}
-                      onChange={(event) =>
-                        setMemberForm((previous) => ({ ...previous, notes: event.target.value }))
-                      }
-                      className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                    />
-                  </label>
-                  <div className="lg:col-span-2">
-                    <button
-                      type="submit"
-                      disabled={savingMember}
-                      className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-                    >
-                      <Users size={16} />
-                      {savingMember ? "Dodawanie..." : "Dodaj członka"}
-                    </button>
+                  <div className="grid min-w-0 gap-4 lg:col-span-2 lg:grid-cols-2">
+                    <label className="grid min-w-0 gap-2">
+                      <span className="text-sm font-semibold text-brand-navy">Wpisz nr tel osoby</span>
+                      <input
+                        value={memberForm.phone}
+                        onChange={handleMemberPhoneChange}
+                        placeholder="+48 600 123 456"
+                        className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                      />
+                    </label>
+                    <label className="grid min-w-0 gap-2">
+                      <span className="text-sm font-semibold text-brand-navy">Wybierz z listy</span>
+                      <select
+                        value={memberForm.participantProfileId}
+                        onChange={handleMemberProfileSelect}
+                        className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                      >
+                        <option value="">Wybierz uczestnika</option>
+                        {memberProfileOptions.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.displayName} · {profile.phone} · {getParticipantConfirmationLabel(profile)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
+                  {shouldShowMemberDetails ? (
+                    <>
+                      <label className="grid min-w-0 gap-2">
+                        <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
+                        <input
+                          value={memberForm.displayName}
+                          onChange={(event) =>
+                            setMemberForm((previous) => ({
+                              ...previous,
+                              displayName: event.target.value,
+                            }))
+                          }
+                          disabled={Boolean(selectedMemberProfile)}
+                          className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
+                        />
+                      </label>
+                      <label className="grid min-w-0 gap-2">
+                        <span className="text-sm font-semibold text-brand-navy">Priorytet</span>
+                        <select
+                          value={memberForm.priority}
+                          onChange={(event) =>
+                            setMemberForm((previous) => ({
+                              ...previous,
+                              priority: event.target.value as GroupMemberPriority,
+                            }))
+                          }
+                          className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                        >
+                          <option value="stali">Stali</option>
+                          <option value="regularni">Regularni</option>
+                          <option value="rezerwowi">Rezerwowi</option>
+                        </select>
+                      </label>
+                      <label className="grid min-w-0 gap-2 lg:col-span-2">
+                        <span className="text-sm font-semibold text-brand-navy">Źródło / polecenie</span>
+                        <input
+                          value={memberForm.referralSource}
+                          onChange={(event) =>
+                            setMemberForm((previous) => ({
+                              ...previous,
+                              referralSource: event.target.value,
+                            }))
+                          }
+                          disabled={Boolean(selectedMemberProfile)}
+                          className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
+                        />
+                      </label>
+                      <label className="grid min-w-0 gap-2 lg:col-span-2">
+                        <span className="text-sm font-semibold text-brand-navy">Notatki</span>
+                        <textarea
+                          rows={3}
+                          value={memberForm.notes}
+                          onChange={(event) =>
+                            setMemberForm((previous) => ({ ...previous, notes: event.target.value }))
+                          }
+                          className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                        />
+                      </label>
+                      <div className="lg:col-span-2">
+                        <button
+                          type="submit"
+                          disabled={savingMember}
+                          className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                        >
+                          <Users size={16} />
+                          {savingMember ? "Dodawanie..." : "Dodaj członka"}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
                 </form>
               ) : null}
               <div className="mt-6 space-y-3">

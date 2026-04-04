@@ -101,6 +101,32 @@ function createStore(
   };
 }
 
+function createOrganizerStore(
+  actor: AppUser,
+  overrides: {
+    participantProfiles?: DemoStore["participantProfiles"];
+    groupMembers?: DemoStore["groupMembers"];
+  } = {},
+) {
+  const store = createStore({}, actor);
+  store.groups = [
+    {
+      id: "group-1",
+      name: "Grupa oddechowa",
+      organizerId: "organizer-1",
+      organizerUserId: actor.id,
+      trainerId: "trainer-1",
+      status: "active",
+      defaultEventType: "training",
+      defaultConfirmationLeadTimeDays: 7,
+      createdAt: "2026-04-01T10:00:00.000Z",
+    },
+  ];
+  store.participantProfiles = overrides.participantProfiles ?? [];
+  store.groupMembers = overrides.groupMembers ?? [];
+  return store;
+}
+
 function mockSession(userId: string) {
   const storage = new Map<string, string>();
   storage.set("emandar:mock-auth-session", JSON.stringify({ userId }));
@@ -348,6 +374,146 @@ describe("publishTrainingEvent", () => {
     await expect(publishTrainingEvent("event-community", actor)).rejects.toThrow(
       "Nie możesz opublikować zarchiwizowanego wydarzenia.",
     );
+  });
+});
+
+describe("addGroupMember", () => {
+  it("reuses an existing participant profile found by phone without overwriting referral source", async () => {
+    const { addGroupMember } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const mockedApi = mockStoreFetch(
+      createOrganizerStore(actor, {
+        participantProfiles: [
+          {
+            id: "participant-48600111222",
+            linkedUserId: null,
+            displayName: "Alicja Wrona",
+            firstName: "Alicja",
+            lastName: "Wrona",
+            phone: "+48 600 111 222",
+            phoneLookupKey: "48600111222",
+            referralSource: "Polecenie od Mai",
+            confirmationStatus: "confirmed",
+            status: "active",
+            createdAt: "2026-04-01T10:00:00.000Z",
+            createdByOrganizerId: "organizer-2",
+            createdByUserId: "user-organizer-2",
+          },
+        ],
+      }),
+    );
+
+    await expect(
+      addGroupMember(
+        {
+          groupId: "group-1",
+          displayName: "Inna nazwa",
+          phone: "600 111 222",
+          referralSource: "Nowe źródło",
+          notes: "Nowa notatka grupowa",
+          priority: "regularni",
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      memberId: "group-1__participant-48600111222",
+      participantProfileId: "participant-48600111222",
+    });
+
+    const store = mockedApi.getStore();
+    expect(store.participantProfiles).toHaveLength(1);
+    expect(store.participantProfiles?.[0]?.referralSource).toBe("Polecenie od Mai");
+    expect(store.participantProfiles?.[0]?.managerOrganizerIds).toContain("organizer-1");
+    expect(store.groupMembers?.[0]).toMatchObject({
+      groupId: "group-1",
+      participantProfileId: "participant-48600111222",
+      participantDisplayName: "Alicja Wrona",
+      participantPhone: "+48 600 111 222",
+      priority: "regularni",
+      notes: "Nowa notatka grupowa",
+    });
+  });
+
+  it("creates a new participant profile with referral source when the phone is not in the store", async () => {
+    const { addGroupMember } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const mockedApi = mockStoreFetch(createOrganizerStore(actor));
+
+    await expect(
+      addGroupMember(
+        {
+          groupId: "group-1",
+          displayName: "Karolina Zielinska",
+          phone: "+48 600 333 444",
+          referralSource: "Instagram",
+          notes: "Lubi soboty",
+          priority: "stali",
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      memberId: "group-1__participant-48600333444",
+      participantProfileId: "participant-48600333444",
+    });
+
+    const store = mockedApi.getStore();
+    expect(store.participantProfiles?.[0]).toMatchObject({
+      id: "participant-48600333444",
+      displayName: "Karolina Zielinska",
+      phone: "+48 600 333 444",
+      referralSource: "Instagram",
+      createdByOrganizerId: "organizer-1",
+    });
+    expect(store.groupMembers?.[0]).toMatchObject({
+      participantProfileId: "participant-48600333444",
+      priority: "stali",
+      notes: "Lubi soboty",
+    });
+  });
+
+  it("blocks an organizer from adding members to a group they do not own", async () => {
+    const { addGroupMember } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-2",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-2",
+    });
+
+    mockStoreFetch(createOrganizerStore(createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    })));
+
+    await expect(
+      addGroupMember(
+        {
+          groupId: "group-1",
+          displayName: "Karolina Zielinska",
+          phone: "+48 600 333 444",
+          priority: "stali",
+        },
+        actor,
+      ),
+    ).rejects.toThrow("Nie możesz dodawać członków do tej grupy.");
   });
 });
 

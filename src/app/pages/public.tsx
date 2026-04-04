@@ -1,4 +1,4 @@
-﻿import { useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+﻿import { Fragment, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import {
   ArrowRight,
   CalendarDays,
@@ -214,32 +214,8 @@ function getPublicOrganizerName(event: TrainingEvent, organizerName?: string, tr
   return firstName(organizerName) || "Zespół Emandar";
 }
 
-function getPublicOrganizerDescription(
-  event: TrainingEvent,
-  organizerDescription?: string,
-  trainerHeroNote?: string,
-) {
-  if (isSelfManagedTrainingEvent(event)) {
-    return trainerHeroNote ?? "Szczegóły organizacyjne otrzymasz po zgłoszeniu.";
-  }
-
-  return organizerDescription || "Szczegóły organizacyjne otrzymasz po zgłoszeniu.";
-}
-
 function getPublicLeadName(event: TrainingEvent, trainerName?: string) {
   return trainerName || event.creatorDisplayName || "Gospodarz wydarzenia";
-}
-
-function getPublicLeadDescription(event: TrainingEvent, trainerHeroNote?: string) {
-  if (trainerHeroNote?.trim()) {
-    return trainerHeroNote.trim();
-  }
-
-  if (isCommunityBrandStatus(event.brandStatus)) {
-    return "To wydarzenie społeczności jest prowadzone bezpośrednio przez jego autora.";
-  }
-
-  return "Osoba prowadząca skontaktuje się po wysłaniu zgłoszenia.";
 }
 
 function getEventTags(event: TrainingEvent) {
@@ -288,6 +264,25 @@ function EmandarTrainingBadge({ className = "" }: { className?: string }) {
 function getEventImagePreviewWidth(image: TrainingEventImage, height = 112) {
   const ratio = image.width > 0 && image.height > 0 ? image.width / image.height : 1;
   return Math.max(88, Math.round(height * ratio));
+}
+
+function PublicDetailEyebrow({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <p
+      className={[
+        "text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep",
+        className,
+      ].join(" ")}
+    >
+      {children}
+    </p>
+  );
 }
 
 function getCommunityEventCoverImageIndex(
@@ -1016,6 +1011,7 @@ export function EventDetailsPage() {
   const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [smsDialogStage, setSmsDialogStage] = useState<"verify" | "success">("verify");
   const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
+  const [isScheduleExpanded, setIsScheduleExpanded] = useState(false);
   const [form, setForm] = useState({
     intent: "contact" as EnrollmentIntent,
     imieNazwisko: "",
@@ -1035,7 +1031,12 @@ export function EventDetailsPage() {
   }
 
   const scheduleRows = getScheduleRows(event);
-  const scheduleRangeLabel = getScheduleRangeLabel(event);
+  const shouldCollapseSchedule = scheduleRows.length > 4;
+  const middleScheduleRows = shouldCollapseSchedule ? scheduleRows.slice(1, -1) : [];
+  const visibleScheduleRows =
+    shouldCollapseSchedule && !isScheduleExpanded
+      ? [scheduleRows[0], scheduleRows[scheduleRows.length - 1]].filter(Boolean)
+      : scheduleRows;
   const eventStatus = resolveTrainingEventStatus(event.status);
   const isCancelled = eventStatus === "cancelled";
   const eventTags = getEventTags(event);
@@ -1044,7 +1045,6 @@ export function EventDetailsPage() {
   const enrollmentPhotoRequired = isPhotoModeRequired(enrollmentPhotoMode);
   const enrollmentPhotoEnabled = isPhotoModeEnabled(enrollmentPhotoMode);
   const leadName = getPublicLeadName(event, trainer?.displayName);
-  const leadDescription = getPublicLeadDescription(event, trainer?.heroNote);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventImages = event.eventImages ?? [];
   const detailEventTitle = event.title || event.location;
@@ -1078,6 +1078,10 @@ export function EventDetailsPage() {
       }));
     }
   }, [enrollmentPhotoEnabled, form.photoFile]);
+
+  useEffect(() => {
+    setIsScheduleExpanded(false);
+  }, [event.id]);
 
   function handleFileChange(fileEvent: ChangeEvent<HTMLInputElement>) {
     const nextFile = fileEvent.target.files?.[0] ?? null;
@@ -1281,35 +1285,30 @@ export function EventDetailsPage() {
   }
 
   return (
-    <section className="mx-auto max-w-7xl overflow-x-clip px-4 py-14 sm:px-6 lg:px-8">
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-        <div className="min-w-0 overflow-hidden rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft">
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
+    <section className="mx-auto max-w-7xl overflow-x-clip px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-14">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:gap-8">
+        <div className="min-w-0 overflow-hidden rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:rounded-[2.25rem] sm:p-6 lg:rounded-[2.5rem] lg:p-7">
+          <PublicDetailEyebrow className="tracking-[0.3em]">
             {event.type}
-          </p>
-          <h1 className="mt-4 break-words text-3xl font-semibold text-brand-navy sm:text-4xl">
+          </PublicDetailEyebrow>
+          <h1 className="mt-3 break-words text-[1.8rem] font-semibold leading-[1.08] text-brand-navy sm:mt-4 sm:text-[2.2rem] lg:text-4xl">
             {isCommunityBrandStatus(event.brandStatus)
               ? event.title || event.location
               : event.location}
           </h1>
           {isCommunityBrandStatus(event.brandStatus) ? (
-            <p className="mt-3 text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+            <PublicDetailEyebrow className="mt-3">
               {event.location}
-            </p>
+            </PublicDetailEyebrow>
           ) : null}
-          <p className="mt-3 text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-            {scheduleRangeLabel}
-          </p>
-          <p className="mt-4 text-lg font-medium text-brand-sky-deep">{event.summary}</p>
-          <p className="mt-4 text-lg text-brand-muted">{event.description}</p>
 
           {isCommunityEvent && eventImages.length > 0 && (
-            <div className="mt-8 rounded-[2rem] border border-brand-line bg-brand-shell/55 p-5">
+            <div className="mt-6 rounded-[1.75rem] border border-brand-line bg-brand-shell/55 p-4 sm:mt-8 sm:rounded-[2rem] sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
+                  <PublicDetailEyebrow>
                     Galeria wydarzenia
-                  </p>
+                  </PublicDetailEyebrow>
                   <p className="mt-2 text-sm text-brand-muted">
                     Kliknij zdjęcie, żeby otworzyć pełny podgląd i przejść po całej galerii.
                   </p>
@@ -1360,82 +1359,118 @@ export function EventDetailsPage() {
           )}
 
           <div
-            className={`mt-8 grid gap-4 ${
+            className={`mt-5 grid gap-2.5 sm:mt-6 sm:gap-3 ${
               scheduleRows.length > 1 ? "grid-cols-2 xl:grid-cols-4" : "grid-cols-1"
             }`}
           >
-            {scheduleRows.map((row) => (
-              <div key={row.key} className="rounded-3xl bg-brand-shell p-5">
-                <div className="flex items-center gap-2 text-sm font-semibold text-brand-navy">
-                  <CalendarDays size={16} />
-                  {row.title}
+            {visibleScheduleRows.map((row, index) => (
+              <Fragment key={row.key}>
+                <div className="rounded-2xl bg-brand-shell px-3 py-3 text-sm text-brand-muted sm:px-4 sm:py-4">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-brand-navy">
+                    <CalendarDays size={15} />
+                    {row.title}
+                  </div>
+                  <p className="mt-1.5 text-brand-muted">{row.label}</p>
+                  <p className="text-brand-muted">{row.range}</p>
                 </div>
-                <p className="mt-2 text-brand-muted">{row.label}</p>
-                <p className="text-brand-muted">{row.range}</p>
-              </div>
+                {shouldCollapseSchedule && index === 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsScheduleExpanded((value) => !value)}
+                    className="group rounded-2xl border border-brand-line bg-white px-3 py-3 text-left text-brand-muted shadow-soft transition hover:-translate-y-0.5 hover:border-brand-sky-deep/35 hover:bg-brand-shell/65 sm:px-4 sm:py-4"
+                    aria-expanded={isScheduleExpanded}
+                  >
+                    <div className="flex items-center justify-between gap-3 text-sm font-semibold text-brand-navy">
+                      <span>
+                        {isScheduleExpanded
+                          ? "Zwiń pozostałe dni"
+                          : `Pokaż ${middleScheduleRows.length} ${
+                              middleScheduleRows.length === 1 ? "dzień" : "dni"
+                            }`}
+                      </span>
+                      <ChevronDown
+                        size={16}
+                        className={`shrink-0 transition-transform ${isScheduleExpanded ? "rotate-180" : ""}`}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-sm leading-6">
+                      {isScheduleExpanded
+                        ? "Zostaw tylko pierwszy i ostatni dzień szkolenia."
+                        : "Rozwiń środkowe dni harmonogramu."}
+                    </p>
+                  </button>
+                ) : null}
+              </Fragment>
             ))}
           </div>
 
-          <p className="mt-5 text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-            Maks. {event.capacity} uczestnikow
-          </p>
+          <div className="mt-5 space-y-4 border-t border-brand-line/80 pt-4 sm:mt-6 sm:space-y-5 sm:pt-5">
+            <p className="text-base font-medium leading-7 text-brand-sky-deep sm:text-lg">
+              {event.summary}
+            </p>
+            <p className="text-base leading-7 text-brand-muted sm:text-lg">
+              {event.description}
+            </p>
 
-          <div className="mt-8 grid gap-4 md:grid-cols-2">
-            <div className="min-w-0 rounded-3xl border border-brand-line bg-white p-5">
-              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-                {isCommunityBrandStatus(event.brandStatus)
-                  ? "Gospodarz wydarzenia"
-                  : "Przekazujący Wiedzę"}
-              </p>
-              <p className="mt-2 break-words text-2xl font-semibold text-brand-navy">
-                {leadName}
-              </p>
-              <p className="mt-2 text-brand-muted">{leadDescription}</p>
-            </div>
-            <div className="min-w-0 rounded-3xl border border-brand-line bg-white p-5">
-              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-                Organizator
-              </p>
-              <p className="mt-2 break-words text-2xl font-semibold text-brand-navy">
-                {getPublicOrganizerName(event, organizer?.displayName, leadName)}
-              </p>
-              <p className="mt-2 text-brand-muted">
-                {getPublicOrganizerDescription(
-                  event,
-                  organizer?.description,
-                  trainer?.heroNote,
-                )}
-              </p>
-            </div>
-          </div>
-          {eventTags.length > 0 && (
-            <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-5">
-              <p className="text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep">
-                Tagi wydarzenia
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {eventTags.map((tag) => (
-                  <span
-                    key={`${event.id}-detail-${tag}`}
-                    className="rounded-full border border-brand-line bg-white px-3 py-1 text-sm font-semibold text-brand-navy"
-                  >
-                    {tag}
-                  </span>
-                ))}
+            <div className="grid grid-cols-2 gap-3 border-t border-brand-line/70 pt-4 sm:gap-4 sm:pt-5">
+              <Link
+                to={trainer?.slug ? `/trenerzy/${trainer.slug}` : "/trenerzy"}
+                state={trainer?.slug ? { publicBackPath: `/kalendarz/${event.id}` } : undefined}
+                className="group min-w-0 rounded-[1.65rem] border border-brand-line bg-white px-4 py-4 shadow-soft transition hover:-translate-y-0.5 hover:border-brand-sky-deep/35 hover:bg-brand-shell/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky/40"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.22em]">
+                    Przekazujący
+                  </p>
+                  <ArrowRight
+                    size={15}
+                    className="mt-0.5 shrink-0 text-brand-sky-deep transition-transform group-hover:translate-x-0.5"
+                  />
+                </div>
+                <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
+                  {leadName}
+                </p>
+              </Link>
+
+              <div className="min-w-0 rounded-[1.65rem] border border-brand-line bg-white px-4 py-4 shadow-soft">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.22em]">
+                    Organizator
+                  </p>
+                </div>
+                <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
+                  {getPublicOrganizerName(event, organizer?.displayName, leadName)}
+                </p>
               </div>
             </div>
-          )}
+
+            {eventTags.length > 0 && (
+              <div>
+                <PublicDetailEyebrow>Tagi wydarzenia</PublicDetailEyebrow>
+                <div className="mt-2.5 flex flex-wrap gap-2">
+                  {eventTags.map((tag) => (
+                    <span
+                      key={`${event.id}-detail-${tag}`}
+                      className="rounded-full bg-brand-sky/20 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:px-3 sm:text-xs sm:tracking-[0.18em]"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <form
           onSubmit={handleSubmit}
-          className="min-w-0 overflow-hidden rounded-[2.5rem] border border-brand-line bg-white p-8 shadow-soft"
+          className="min-w-0 overflow-hidden rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:rounded-[2.25rem] sm:p-6 lg:rounded-[2.5rem] lg:p-7"
         >
-          <p className="text-sm font-semibold uppercase tracking-[0.3em] text-brand-sky-deep">
+          <PublicDetailEyebrow className="tracking-[0.3em]">
             Formularz dołączenia
-          </p>
+          </PublicDetailEyebrow>
           {!isLoggedInEnrollmentFlow ? (
-            <p className="mt-3 text-brand-muted">
+            <p className="mt-3 text-sm leading-6 text-brand-muted sm:text-base">
               {`Zgłoszenie trafi do Przekazującego Wiedzę${organizer ? " i organizatora." : "."} ${
                 enrollmentPhotoMode === "required"
                   ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
@@ -1451,7 +1486,7 @@ export function EventDetailsPage() {
             </p>
           )}
 
-          <div className="mt-8 grid gap-4">
+          <div className="mt-6 grid gap-4 sm:mt-7">
             {isLoggedInEnrollmentFlow ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 {([
@@ -1569,7 +1604,7 @@ export function EventDetailsPage() {
             />
           </div>
 
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <div className="mt-5 flex flex-col gap-3 sm:mt-6 sm:flex-row sm:flex-wrap sm:items-center">
             {canManage && (
               <Link
                 to={managementPath}

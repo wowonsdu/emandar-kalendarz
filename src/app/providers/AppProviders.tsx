@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { mapAppError } from "@/domain/errors";
-import { sortTrainerProfiles } from "@/domain/utils";
+import { getHighestRole, sortTrainerProfiles } from "@/domain/utils";
 import {
   addAvailabilitySlot as addAvailabilitySlotAction,
   addEventParticipant as addEventParticipantAction,
@@ -26,6 +26,7 @@ import {
   createEmptyStore,
   createOrganizerTrainingDraft as createOrganizerTrainingDraftAction,
   createUnifiedTrainingEvent as createTrainingEventAction,
+  deleteTrainingEvent as deleteTrainingEventAction,
   decideAccountRequest as decideAccountRequestAction,
   decideEnrollment as decideEnrollmentAction,
   decideOrganizerTrainingDraft as decideOrganizerTrainingDraftAction,
@@ -39,8 +40,10 @@ import {
   manageOwnEnrollment as manageOwnEnrollmentAction,
   manageOwnGroupEventParticipation as manageOwnGroupEventParticipationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
+  publishTrainingEvent as publishTrainingEventAction,
   removeOrganizerCalendarFeed as removeOrganizerCalendarFeedAction,
   removeGroupMember as removeGroupMemberAction,
+  registerParticipant as registerParticipantAction,
   resetTrainerOrganizerCalendarFeedToken as resetTrainerOrganizerCalendarFeedTokenAction,
   resolveEnrollmentPhoto,
   reviewCommunityEvent as reviewCommunityEventAction,
@@ -55,6 +58,7 @@ import {
   syncOwnOrganizerCalendarFeeds as syncOwnOrganizerCalendarFeedsAction,
   syncOwnTrainerCalendarFeeds as syncOwnTrainerCalendarFeedsAction,
   removeTrainerCalendarFeed as removeTrainerCalendarFeedAction,
+  unpublishTrainingEvent as unpublishTrainingEventAction,
   updateTrainingEventBrandStatus as updateTrainingEventBrandStatusAction,
   updateAppSettings as updateAppSettingsAction,
   updateEventParticipantStatus as updateEventParticipantStatusAction,
@@ -63,15 +67,17 @@ import {
   updateOrganizerCalendarFeedEnabled as updateOrganizerCalendarFeedEnabledAction,
   updateOrganizerTrainingDraft as updateOrganizerTrainingDraftAction,
   updateTrainerCalendarFeedEnabled as updateTrainerCalendarFeedEnabledAction,
-  updateActiveRole as updateActiveRoleAction,
   updateTrainerSharedSlot as updateTrainerSharedSlotAction,
   updateTrainingEventManagement as updateTrainingEventManagementAction,
   updateOrganizerProfile as updateOrganizerProfileAction,
+  updateUserModeratorRole as updateUserModeratorRoleAction,
+  updateUserOrganizerFunctionsBlocked as updateUserOrganizerFunctionsBlockedAction,
   updateParticipantProfile as updateParticipantProfileAction,
   updateOrganizerNotificationSettings as updateOrganizerNotificationSettingsAction,
   updateTrainerBrandStatus as updateTrainerBrandStatusAction,
   updateTrainerNotificationSettings as updateTrainerNotificationSettingsAction,
   updateTrainerProfile as updateTrainerProfileAction,
+  updateUserNotificationSettings as updateUserNotificationSettingsAction,
   uploadCommunityEventImages as uploadCommunityEventImagesAction,
   withdrawOrganizerTrainingDraft as withdrawOrganizerTrainingDraftAction,
 } from "@/data/mockRepository";
@@ -99,6 +105,7 @@ import type {
   ParticipantGroupEventManagementInput,
   ParticipantEnrollmentManagementInput,
   ParticipantOnboardingInput,
+  ParticipantRegistrationInput,
   ParticipantProfileUpdateInput,
   NotificationSettingsUpdateInput,
   OrganizerProfileUpdateInput,
@@ -116,16 +123,16 @@ import type {
 interface AppStateContextValue {
   store: DemoStore;
   currentUser: AppUser | null;
+  hasAuthenticatedSession: boolean;
   currentUserReady: boolean;
-  availableRoles: AppRole[];
   authReady: boolean;
   signIn: (email: string, password: string) => Promise<AppUser>;
   signOut: () => Promise<void>;
-  setActiveRole: (role: AppRole) => Promise<void>;
   submitEnrollment: (input: EnrollmentFormInput) => Promise<void>;
   ensurePhoneParticipantProfileForFlow: (
     seedTrainerId?: string,
   ) => Promise<{ ok: true; userId: string; accountCreated?: boolean }>;
+  registerParticipant: (input: ParticipantRegistrationInput) => Promise<void>;
   submitAccountRequest: (input: AccountRequestInput) => Promise<void>;
   connectOrganizerToTrainerWithCode: (
     trainerAuthorizationCode: string,
@@ -170,6 +177,9 @@ interface AppStateContextValue {
     input: OrganizerTrainingDraftDecisionInput,
   ) => Promise<void>;
   archiveTrainingEvent: (eventId: string) => Promise<void>;
+  publishTrainingEvent: (eventId: string) => Promise<void>;
+  unpublishTrainingEvent: (eventId: string) => Promise<void>;
+  deleteTrainingEvent: (eventId: string) => Promise<void>;
   decideTrainingEventCollaboration: (
     eventId: string,
     status: "accepted" | "rejected",
@@ -206,9 +216,17 @@ interface AppStateContextValue {
   ) => Promise<string>;
   updateTrainerProfile: (input: TrainerProfileUpdateInput) => Promise<void>;
   updateOrganizerProfile: (input: OrganizerProfileUpdateInput) => Promise<void>;
+  updateUserModeratorRole: (userId: string, enabled: boolean) => Promise<void>;
+  updateUserOrganizerFunctionsBlocked: (
+    userId: string,
+    blocked: boolean,
+  ) => Promise<void>;
   updateParticipantProfile: (input: ParticipantProfileUpdateInput) => Promise<void>;
   uploadCommunityEventImages: (files: File[]) => Promise<TrainingEventImage[]>;
   updateAppSettings: (input: AppSettings) => Promise<void>;
+  updateNotificationSettings: (
+    input: NotificationSettingsUpdateInput,
+  ) => Promise<void>;
   updateTrainerNotificationSettings: (
     input: NotificationSettingsUpdateInput,
   ) => Promise<void>;
@@ -228,8 +246,11 @@ interface AppStateContextValue {
     status: TrainingEventStatus,
     capacity: number,
     minimumParticipants: number,
+    confirmationLeadTimeDays?: number,
     title?: string,
     location?: string,
+    summary?: string,
+    description?: string,
     tags?: string[],
     eventImages?: TrainingEventImage[],
     useEventImageAsCover?: boolean,
@@ -240,7 +261,8 @@ interface AppStateContextValue {
     publicationReviewMessage?: string,
   ) => Promise<void>;
   notificationsCount: number;
-  getRoleHomePath: (role: AppRole) => string;
+  getPublicSignedInPath: () => string;
+  getPanelHomePath: (role: AppRole) => string;
   resolveEnrollmentPhoto: (path: string) => Promise<string>;
   confirmEnrollmentAttendance: (
     token: string,
@@ -271,7 +293,11 @@ async function withFriendlyErrors<T>(action: () => Promise<T>) {
   }
 }
 
-function getRoleHomePath(role: AppRole) {
+function getPublicSignedInPath() {
+  return "/kalendarz";
+}
+
+function getPanelHomePath(role: AppRole) {
   return role === "participant" ? "/panel/dashboard" : "/panel/dashboard";
 }
 
@@ -321,7 +347,7 @@ function applyPatch(previous: StorePatch, patch: StorePatch): StorePatch {
 export function AppProviders({ children }: { children: ReactNode }) {
   const [publicStore, setPublicStore] = useState(() => createEmptyStore());
   const [privateStore, setPrivateStore] = useState<StorePatch>({});
-  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [rawCurrentUser, setRawCurrentUser] = useState<AppUser | null>(null);
   const [currentUserReady, setCurrentUserReady] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [authUserId, setAuthUserId] = useState<string | null>(null);
@@ -341,13 +367,13 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
       if (!userId) {
         setAuthUserId(null);
-        setCurrentUser(null);
+        setRawCurrentUser(null);
         setPrivateStore({});
         setCurrentUserReady(true);
         return;
       }
 
-      setCurrentUser(null);
+      setRawCurrentUser(null);
       setPrivateStore({});
       setCurrentUserReady(false);
       setAuthUserId(userId);
@@ -360,7 +386,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     }
 
     return subscribeUserProfile(authUserId, (user) => {
-      setCurrentUser(user);
+      setRawCurrentUser(user);
       setCurrentUserReady(true);
       setPrivateStore((previous) =>
         applyPatch(previous, {
@@ -369,6 +395,24 @@ export function AppProviders({ children }: { children: ReactNode }) {
       );
     });
   }, [authUserId]);
+
+  const currentUser = useMemo<AppUser | null>(() => {
+    if (!rawCurrentUser) {
+      return null;
+    }
+
+    const highestRole = getHighestRole(rawCurrentUser);
+    if (rawCurrentUser.role === highestRole) {
+      return rawCurrentUser;
+    }
+
+    return {
+      ...rawCurrentUser,
+      role: highestRole,
+    };
+  }, [rawCurrentUser]);
+
+  const hasAuthenticatedSession = authUserId !== null;
 
   useEffect(() => {
     if (!currentUser) {
@@ -396,27 +440,18 @@ export function AppProviders({ children }: { children: ReactNode }) {
         (item) => item.userId === currentUser.id && !item.readAt,
       ).length
     : 0;
-  const availableRoles = currentUser?.roles ?? [];
-
   const value = useMemo<AppStateContextValue>(
     () => ({
       store,
       currentUser,
+      hasAuthenticatedSession,
       currentUserReady,
-      availableRoles,
       authReady,
       async signIn(email, password) {
         return withFriendlyErrors(() => signInAction(email, password));
       },
       async signOut() {
         await withFriendlyErrors(() => signOutAction());
-      },
-      async setActiveRole(role) {
-        if (!currentUser) {
-          throw new Error("Musisz byc zalogowany.");
-        }
-
-        await withFriendlyErrors(() => updateActiveRoleAction(currentUser, role));
       },
       async submitEnrollment(input) {
         await withFriendlyErrors(() => submitEnrollmentAction(input));
@@ -425,6 +460,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
         return withFriendlyErrors(() =>
           ensurePhoneParticipantProfileForFlowAction(seedTrainerId),
         );
+      },
+      async registerParticipant(input) {
+        await withFriendlyErrors(() => registerParticipantAction(input));
       },
       async submitAccountRequest(input) {
         await withFriendlyErrors(() => submitAccountRequestAction(input));
@@ -566,6 +604,27 @@ export function AppProviders({ children }: { children: ReactNode }) {
         await withFriendlyErrors(() =>
           archiveTrainingEventAction(eventId, currentUser),
         );
+      },
+      async publishTrainingEvent(eventId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => publishTrainingEventAction(eventId, currentUser));
+      },
+      async unpublishTrainingEvent(eventId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => unpublishTrainingEventAction(eventId, currentUser));
+      },
+      async deleteTrainingEvent(eventId) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() => deleteTrainingEventAction(eventId, currentUser));
       },
       async decideTrainingEventCollaboration(eventId, status) {
         if (!currentUser) {
@@ -787,21 +846,39 @@ export function AppProviders({ children }: { children: ReactNode }) {
           throw new Error("Musisz byc zalogowany.");
         }
 
-        await withFriendlyErrors(() => updateTrainerProfileAction(currentUser, input));
+        await withFriendlyErrors(() => updateTrainerProfileAction(input, currentUser));
       },
       async updateOrganizerProfile(input) {
         if (!currentUser) {
           throw new Error("Musisz byc zalogowany.");
         }
 
-        await withFriendlyErrors(() => updateOrganizerProfileAction(currentUser, input));
+        await withFriendlyErrors(() => updateOrganizerProfileAction(input, currentUser));
+      },
+      async updateUserModeratorRole(userId, enabled) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateUserModeratorRoleAction(userId, enabled, currentUser),
+        );
+      },
+      async updateUserOrganizerFunctionsBlocked(userId, blocked) {
+        if (!currentUser) {
+          throw new Error("Musisz być zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateUserOrganizerFunctionsBlockedAction(userId, blocked, currentUser),
+        );
       },
       async updateParticipantProfile(input) {
         if (!currentUser) {
           throw new Error("Musisz byc zalogowany.");
         }
 
-        await withFriendlyErrors(() => updateParticipantProfileAction(currentUser, input));
+        await withFriendlyErrors(() => updateParticipantProfileAction(input, currentUser));
       },
       async uploadCommunityEventImages(files) {
         if (!currentUser) {
@@ -817,13 +894,22 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
         await withFriendlyErrors(() => updateAppSettingsAction(input));
       },
+      async updateNotificationSettings(input) {
+        if (!currentUser) {
+          throw new Error("Musisz byc zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateUserNotificationSettingsAction(input, currentUser),
+        );
+      },
       async updateTrainerNotificationSettings(input) {
         if (!currentUser) {
           throw new Error("Musisz byc zalogowany.");
         }
 
         await withFriendlyErrors(() =>
-          updateTrainerNotificationSettingsAction(currentUser, input),
+          updateTrainerNotificationSettingsAction(input, currentUser),
         );
       },
       async updateOrganizerNotificationSettings(input) {
@@ -832,7 +918,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
         }
 
         await withFriendlyErrors(() =>
-          updateOrganizerNotificationSettingsAction(currentUser, input),
+          updateOrganizerNotificationSettingsAction(input, currentUser),
         );
       },
       async updateTrainerBrandStatus(trainerId, brandStatus) {
@@ -870,8 +956,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
         status,
         capacity,
         minimumParticipants,
+        confirmationLeadTimeDays,
         title,
         location,
+        summary,
+        description,
         tags,
         eventImages,
         useEventImageAsCover,
@@ -892,8 +981,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
               status,
               capacity,
               minimumParticipants,
+              confirmationLeadTimeDays,
               title,
               location,
+              summary,
+              description,
               tags,
               eventImages,
               useEventImageAsCover,
@@ -908,7 +1000,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
         );
       },
       notificationsCount,
-      getRoleHomePath,
+      getPublicSignedInPath,
+      getPanelHomePath,
       resolveEnrollmentPhoto,
       async confirmEnrollmentAttendance(token, decision) {
         await withFriendlyErrors(() =>
@@ -922,7 +1015,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
         return withFriendlyErrors(() => reviewCommunityEventAction(input));
       },
     }),
-    [authReady, availableRoles, currentUser, currentUserReady, notificationsCount, store],
+    [authReady, currentUser, currentUserReady, hasAuthenticatedSession, notificationsCount, store],
   );
 
   return (

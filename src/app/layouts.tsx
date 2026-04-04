@@ -18,11 +18,17 @@ import {
   Navigate,
   Outlet,
   useLocation,
-  useNavigate,
 } from "react-router";
 import { useAppState } from "./providers/AppProviders";
-import type { AppRole } from "@/domain/types";
-import { getRoleLabel, isCommunityBrandStatus } from "@/domain/utils";
+import type { AppRole, AppUser } from "@/domain/types";
+import {
+  canUseOrganizerFunctions,
+  getHighestRole,
+  getRoleLabel,
+  hasModeratorAccess,
+  hasInheritedRole,
+  isCommunityBrandStatus,
+} from "@/domain/utils";
 
 function brandNavLinkClass({ isActive }: { isActive: boolean }) {
   return [
@@ -40,7 +46,7 @@ function exactNavLinkClass(currentPath: string, targetPath: string) {
 const publicNavItems = [
   { to: "/kalendarz", label: "Kalendarz", icon: CalendarDays },
   { to: "/trenerzy", label: "Przekazujacy Wiedze", icon: Users },
-  { to: "/wydarzenia-spolecznosci", label: "Społeczność", icon: Bell },
+  { to: "/wydarzenia-spolecznosci", label: "Wydarzenia społeczności", icon: Bell },
 ] as const;
 
 function BrandMark({ inverted = false }: { inverted?: boolean }) {
@@ -77,14 +83,28 @@ function BrandMark({ inverted = false }: { inverted?: boolean }) {
 }
 
 export function PublicLayout() {
-  const { currentUser, getRoleHomePath } = useAppState();
+  const { currentUser, hasAuthenticatedSession, getPanelHomePath } = useAppState();
   const location = useLocation();
-  const userHomePath = currentUser ? getRoleHomePath(currentUser.role) : "/login";
+  const userHomePath = hasAuthenticatedSession
+    ? getPanelHomePath(currentUser?.role ?? "participant")
+    : "/login";
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [location.pathname, currentUser?.role]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.scrollTo({
+      top: 0,
+      left: 0,
+      behavior: "auto",
+    });
+  }, [location.pathname]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -104,7 +124,7 @@ export function PublicLayout() {
   }, [isMobileMenuOpen]);
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
+    <div className="min-h-screen overflow-x-clip bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:gap-6 sm:px-6 sm:py-4 lg:px-8">
           <div className="min-w-0 md:hidden">
@@ -127,7 +147,7 @@ export function PublicLayout() {
           </nav>
 
           <div className="ml-auto hidden items-center gap-3 md:flex">
-            {currentUser ? (
+            {hasAuthenticatedSession ? (
               <Link
                 to={userHomePath}
                 className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-2 text-xs font-semibold text-white shadow-soft sm:px-5 sm:py-2.5 sm:text-sm"
@@ -167,7 +187,7 @@ export function PublicLayout() {
         </div>
       </header>
 
-      <main>
+      <main className="overflow-x-clip">
         <Outlet />
       </main>
 
@@ -218,7 +238,7 @@ export function PublicLayout() {
               </nav>
 
               <div className="mt-8 space-y-3 rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
-                {currentUser ? (
+                {hasAuthenticatedSession ? (
                   <Link
                     to={userHomePath}
                     onClick={() => setIsMobileMenuOpen(false)}
@@ -270,7 +290,7 @@ export function PublicLayout() {
               Przekazujacy Wiedze
             </Link>
             <Link to={userHomePath} className="hover:text-brand-navy">
-              {currentUser ? "Moja Przestrzen" : "Panel"}
+              {hasAuthenticatedSession ? "Moja Przestrzen" : "Panel"}
             </Link>
           </div>
         </div>
@@ -279,94 +299,87 @@ export function PublicLayout() {
   );
 }
 
-function panelItems(
-  role: AppRole,
+type PanelNavItem = {
+  to: string;
+  label: string;
+  icon: typeof Bell;
+  badgeCount?: number;
+};
+
+type PanelNavSection = {
+  title?: string;
+  items: PanelNavItem[];
+};
+
+function panelNavigationSections(
+  user: Pick<AppUser, "role" | "roles" | "primaryRole">,
   isCommunityTrainer = false,
   pendingCommunityApprovals = 0,
 ) {
-  const base = [
-    { to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/kalendarz", label: "Widok publiczny", icon: Sparkles },
-  ];
-
-  if (role === "participant") {
-    return [
-      ...base,
-      { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
-      { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
-      {
-        to: "/panel/wydarzenia-spolecznosci",
-        label: "Wydarzenia społeczności",
-        icon: CalendarDays,
-      },
-    ];
-  }
-
-  if (role === "organizer") {
-    return [
-      ...base,
-      { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
-      { to: "/panel/grupy", label: "Grupy", icon: Users },
-      { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
-      {
-        to: "/panel/wydarzenia-spolecznosci",
-        label: "Wydarzenia społeczności",
-        icon: CalendarDays,
-      },
-      {
-        to: "/panel/terminy",
-        label: "Terminy",
-        icon: CalendarDays,
-      },
-      { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
-      { to: "/panel/relacje", label: "Relacje", icon: ShieldCheck },
-      { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
-    ];
-  }
-
-  if (role === "trainer") {
-    return [
-      ...base,
-      { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
-      { to: "/panel/grupy", label: "Grupy", icon: Users },
-      { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
-      {
-        to: "/panel/wydarzenia-spolecznosci",
-        label: "Wydarzenia społeczności",
-        icon: CalendarDays,
-      },
-      {
-        to: "/panel/terminy",
-        label: "Terminy",
-        icon: CalendarDays,
-      },
-      { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
-      ...(isCommunityTrainer
-        ? []
-        : [{ to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users }]),
-      { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
-    ];
-  }
-
-  return [
-    ...base,
-    { to: "/panel/ustawienia", label: "Mój profil", icon: ShieldCheck },
-    { to: "/panel/grupy", label: "Grupy", icon: Users },
-    { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
-    { to: "/panel/trenerzy", label: "Przekazujacy Wiedze", icon: Users },
-    { to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users },
-    { to: "/panel/szkolenia", label: "Szkolenia Emandar", icon: CalendarDays },
+  const highestRole = getHighestRole(user);
+  const sections: PanelNavSection[] = [
     {
-      to: "/panel/wydarzenia-spolecznosci",
-      label: "Wydarzenia społeczności",
-      icon: CalendarDays,
-      badgeCount: pendingCommunityApprovals,
+      items: [
+        { to: "/panel/dashboard", label: "Dashboard", icon: LayoutDashboard },
+        { to: "/panel/grupy", label: "Grupy", icon: Users },
+        { to: "/panel/szkolenia", label: "Szkolenia", icon: CalendarDays },
+      ],
     },
-    { to: "/panel/terminy", label: "Terminy", icon: CalendarDays },
-    { to: "/panel/powiadomienia", label: "Powiadomienia", icon: Bell },
-    { to: "/panel/relacje", label: "Relacje", icon: ShieldCheck },
-    { to: "/panel/zgloszenia", label: "Zgloszenia", icon: Bell },
+    {
+      title: "Uczestnik",
+      items: [
+        {
+          to: "/panel/wydarzenia-spolecznosci",
+          label: "Wydarzenia społeczności",
+          icon: CalendarDays,
+        },
+        { to: "/panel/zgloszenia", label: "Zgłoszenia", icon: Bell },
+        { to: "/panel/ustawienia", label: "Ustawienia", icon: ShieldCheck },
+        { to: "/kalendarz", label: "Widok publiczny", icon: Sparkles },
+      ],
+    },
   ];
+
+  if (hasModeratorAccess(user)) {
+    sections.push({
+      title: "Moderator",
+      items: [
+        {
+          to: "/panel/moderacja-wydarzen-spolecznosci",
+          label: "Moderacja wydarzeń",
+          icon: Bell,
+          badgeCount: pendingCommunityApprovals || undefined,
+        },
+        { to: "/panel/uzytkownicy", label: "Konta i blokady", icon: Users },
+      ],
+    });
+  }
+
+  if (hasInheritedRole(user, "organizer")) {
+    sections.push({
+      title: "Organizator",
+      items: [{ to: "/panel/terminy", label: "Terminy", icon: CalendarDays }],
+    });
+  }
+
+  if (hasInheritedRole(user, "trainer") && !isCommunityTrainer) {
+    sections.push({
+      title: "Trener",
+      items: [{ to: "/panel/organizatorzy", label: "Organizatorzy", icon: Users }],
+    });
+  }
+
+  if (highestRole === "admin") {
+    sections.push({
+      title: "Admin",
+      items: [
+        { to: "/panel/trenerzy", label: "Przekazujący Wiedzę", icon: Users },
+        { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
+      ],
+    });
+  }
+
+  return sections;
 }
 
 function getPanelBackPath(pathname: string, search: string) {
@@ -388,10 +401,17 @@ function getPanelBackPath(pathname: string, search: string) {
     return "/panel/szkolenia";
   }
 
+  if (pathname === "/panel/moderacja-wydarzen-spolecznosci") {
+    return null;
+  }
+
   if (
     pathname === "/panel/wydarzenia-spolecznosci/utworz" ||
     pathname.startsWith("/panel/wydarzenia-spolecznosci/")
   ) {
+    if (searchParams.get("view") === "moderation") {
+      return "/panel/moderacja-wydarzen-spolecznosci";
+    }
     return "/panel/wydarzenia-spolecznosci";
   }
 
@@ -403,24 +423,18 @@ function getPanelBackPath(pathname: string, search: string) {
 }
 
 function PanelNavigationContent({
-  availableRoles,
-  currentRole,
   currentUserEmailOrPhone,
   displayName,
-  items,
+  sections,
   notificationsCount,
   onClose,
-  onRoleChange,
   onSignOut,
 }: {
-  availableRoles: AppRole[];
-  currentRole: AppRole;
   currentUserEmailOrPhone: string;
   displayName: string;
-  items: ReturnType<typeof panelItems>;
+  sections: ReturnType<typeof panelNavigationSections>;
   notificationsCount: number;
   onClose?: () => void;
-  onRoleChange: (role: AppRole) => void;
   onSignOut: () => void;
 }) {
   return (
@@ -438,61 +452,54 @@ function PanelNavigationContent({
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-white hover:bg-white/20 lg:hidden"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/10 text-white hover:bg-white/20 xl:hidden"
               aria-label="Zamknij menu"
             >
               <X size={18} />
             </button>
           ) : null}
         </div>
-        {availableRoles.length > 1 && (
-          <label className="mt-4 grid gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.24em] text-white/60">
-              Aktywna rola
-            </span>
-            <select
-              value={currentRole}
-              onChange={(event) => onRoleChange(event.target.value as AppRole)}
-              className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-sm font-semibold text-white outline-none"
-            >
-              {availableRoles.map((role) => (
-                <option key={role} value={role} className="text-brand-navy">
-                  {getRoleLabel(role)}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
       </div>
 
-      <nav className="space-y-2">
-        {items.map((item) => {
-          const Icon = item.icon;
-          return (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              onClick={onClose}
-              className={({ isActive }) =>
-                [
-                  "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors",
-                  isActive
-                    ? "bg-white text-brand-navy"
-                    : "text-white/75 hover:bg-white/10 hover:text-white",
-                ].join(" ")
-              }
-            >
-              <Icon size={18} />
-              <span className="min-w-0 flex-1">{item.label}</span>
-              {item.badgeCount ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-red-500/90 px-2 py-1 text-xs font-semibold text-white">
-                  <Bell size={12} />
-                  {item.badgeCount}
-                </span>
-              ) : null}
-            </NavLink>
-          );
-        })}
+      <nav className="space-y-5">
+        {sections.map((section, sectionIndex) => (
+          <div key={section.title ?? `panel-section-${sectionIndex}`} className="space-y-2">
+            {section.title ? (
+              <p className="px-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
+                {section.title}
+              </p>
+            ) : null}
+            <div className="space-y-2">
+              {section.items.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    onClick={onClose}
+                    className={({ isActive }) =>
+                      [
+                        "flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition-colors",
+                        isActive
+                          ? "bg-white text-brand-navy"
+                          : "text-white/75 hover:bg-white/10 hover:text-white",
+                      ].join(" ")
+                    }
+                  >
+                    <Icon size={18} />
+                    <span className="min-w-0 flex-1">{item.label}</span>
+                    {item.badgeCount ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-red-500/90 px-2 py-1 text-xs font-semibold text-white">
+                        <Bell size={12} />
+                        {item.badgeCount}
+                      </span>
+                    ) : null}
+                  </NavLink>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       <div className="mt-auto space-y-3 rounded-3xl border border-white/10 bg-white/5 p-4">
@@ -531,48 +538,37 @@ export function RequireAuth() {
 }
 
 export function PanelLayout() {
-  const { availableRoles, currentUser, notificationsCount, setActiveRole, signOut, store } =
-    useAppState();
+  const { currentUser, notificationsCount, signOut, store } = useAppState();
   const location = useLocation();
-  const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser?.id);
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser?.id);
+  const highestRole = getHighestRole(currentUser);
   const pendingCommunityApprovals = store.trainingEvents.filter(
     (item) =>
       isCommunityBrandStatus(item.brandStatus) &&
       item.publicationApprovalStatus === "pending",
   ).length;
-  const items = panelItems(
-    currentUser?.role ?? "participant",
-    currentUser?.role === "trainer" && isCommunityBrandStatus(trainerProfile?.brandStatus),
-    currentUser?.role === "admin" ? pendingCommunityApprovals : 0,
+  const sections = panelNavigationSections(
+    currentUser,
+    highestRole === "trainer" && isCommunityBrandStatus(trainerProfile?.brandStatus),
+    hasModeratorAccess(currentUser) ? pendingCommunityApprovals : 0,
   );
   const currentUserEmailOrPhone = currentUser?.email || currentUser?.phone || "Konto SMS";
   const panelBackPath = getPanelBackPath(location.pathname, location.search);
+  const hasOrganizerScope = canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
   const organizerCanCreateOfficialTraining =
-    currentUser?.role === "organizer" &&
+    hasOrganizerScope &&
     Boolean(organizerProfile) &&
     store.groups.some(
       (group) => group.organizerId === organizerProfile?.id && group.status === "active",
     );
-  const participantCanCreateOfficialTraining =
-    currentUser?.role === "participant" &&
-    Boolean(organizerProfile) &&
-    store.relations.some(
-      (relation) =>
-        relation.organizerId === organizerProfile?.id &&
-        relation.status === "approved",
-    );
-  const trainerCanCreateOfficialTraining = currentUser?.role === "trainer";
+  const trainerCanCreateOfficialTraining = hasInheritedRole(currentUser, "trainer");
   const canCreateOfficialTraining =
-    trainerCanCreateOfficialTraining ||
-    organizerCanCreateOfficialTraining ||
-    participantCanCreateOfficialTraining;
-  const canCreateCommunityEvent =
-    currentUser?.role === "participant" || currentUser?.role === "trainer";
+    trainerCanCreateOfficialTraining || organizerCanCreateOfficialTraining;
+  const canCreateCommunityEvent = Boolean(currentUser);
   const headerCreateShortcut =
-    location.pathname === "/panel/grupy" && currentUser.role === "organizer"
+    location.pathname === "/panel/grupy" && hasOrganizerScope
       ? {
           to: "/panel/grupy/utworz",
           mobileLabel: "Utwórz",
@@ -616,29 +612,20 @@ export function PanelLayout() {
     };
   }, [isMobileMenuOpen]);
 
-  function handleRoleChange(role: AppRole) {
-    void setActiveRole(role).then(() => {
-      navigate("/panel/dashboard");
-    });
-  }
-
   if (!currentUser) {
     return <Navigate to="/login" replace />;
   }
 
   return (
-    <div className="min-h-screen bg-brand-shell">
-      <div className="grid min-h-screen w-full lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="hidden border-r border-brand-line/80 bg-brand-navy text-white lg:block">
+    <div className="min-h-screen overflow-x-clip bg-brand-shell">
+      <div className="grid min-h-screen w-full xl:grid-cols-[280px_minmax(0,1fr)]">
+        <aside className="hidden border-r border-brand-line/80 bg-brand-navy text-white xl:block">
           <div className="sticky top-0 min-h-screen">
             <PanelNavigationContent
-              availableRoles={availableRoles}
-              currentRole={currentUser.role}
               currentUserEmailOrPhone={currentUserEmailOrPhone}
               displayName={currentUser.displayName}
-              items={items}
+              sections={sections}
               notificationsCount={notificationsCount}
-              onRoleChange={handleRoleChange}
               onSignOut={() => {
                 void signOut();
               }}
@@ -648,13 +635,10 @@ export function PanelLayout() {
 
         <div className="min-w-0">
           <header className="sticky top-0 z-30 border-b border-brand-line/80 bg-white/90 backdrop-blur-xl">
-            <div className="flex items-center justify-between gap-3 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 lg:px-10">
+            <div className="flex items-center justify-between gap-3 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 xl:px-10">
               <div className="min-w-0">
                 <div>
-                  <p className="text-[10px] uppercase tracking-[0.28em] text-brand-muted sm:text-xs sm:tracking-[0.32em]">
-                    {getRoleLabel(currentUser.role)}
-                  </p>
-                  <h1 className="whitespace-nowrap text-lg font-semibold leading-tight text-brand-navy sm:text-2xl">
+                  <h1 className="text-lg font-semibold leading-tight text-brand-navy break-words sm:text-2xl">
                     Panel zarzadzania
                   </h1>
                 </div>
@@ -663,7 +647,7 @@ export function PanelLayout() {
                 {panelBackPath ? (
                   <Link
                     to={panelBackPath}
-                    className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft lg:hidden"
+                    className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft xl:hidden"
                     aria-label="Wróć"
                   >
                     <ArrowLeft size={20} />
@@ -687,7 +671,7 @@ export function PanelLayout() {
                 <button
                   type="button"
                   onClick={() => setIsMobileMenuOpen(true)}
-                  className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft lg:hidden"
+                  className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft xl:hidden"
                   aria-label="Otwórz menu"
                 >
                   <Menu size={22} />
@@ -696,14 +680,14 @@ export function PanelLayout() {
             </div>
           </header>
 
-          <main className="px-3 py-4 sm:px-6 sm:py-6 lg:px-10">
+          <main className="overflow-x-clip px-3 py-4 sm:px-6 sm:py-6 xl:px-10">
             <Outlet />
           </main>
         </div>
       </div>
 
       {isMobileMenuOpen ? (
-        <div className="fixed inset-0 z-40 lg:hidden">
+        <div className="fixed inset-0 z-40 xl:hidden">
           <button
             type="button"
             aria-label="Zamknij menu"
@@ -712,14 +696,11 @@ export function PanelLayout() {
           />
           <aside className="absolute inset-y-0 right-0 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border-l border-brand-line/80 bg-brand-navy text-white shadow-2xl">
             <PanelNavigationContent
-              availableRoles={availableRoles}
-              currentRole={currentUser.role}
               currentUserEmailOrPhone={currentUserEmailOrPhone}
               displayName={currentUser.displayName}
-              items={items}
+              sections={sections}
               notificationsCount={notificationsCount}
               onClose={() => setIsMobileMenuOpen(false)}
-              onRoleChange={handleRoleChange}
               onSignOut={() => {
                 setIsMobileMenuOpen(false);
                 void signOut();

@@ -442,6 +442,41 @@ describe("permissions and sorting", () => {
     ).toBe(false);
   });
 
+  it("keeps organizer permissions on official trainings for higher roles with organizer profile", () => {
+    const event = {
+      trainerId: "trainer-2",
+      organizerId: "organizer-1",
+      brandStatus: "official" as const,
+      trainerCollaborationStatus: "accepted" as const,
+      organizerCollaborationStatus: "accepted" as const,
+      createdByRole: "organizer" as const,
+    };
+
+    expect(
+      canManageTrainingEvent(event, {
+        role: "trainer",
+        trainerProfileId: "trainer-1",
+        organizerProfileId: "organizer-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("lets higher roles decide organizer-side collaboration when they still own organizer profile", () => {
+    const event = {
+      trainerId: "trainer-2",
+      organizerId: "organizer-1",
+      organizerCollaborationStatus: "pending" as const,
+      trainerCollaborationStatus: "accepted" as const,
+    };
+
+    expect(
+      canDecideTrainingEventCollaboration(event, {
+        role: "trainer",
+        organizerProfileId: "organizer-1",
+      }),
+    ).toBe(true);
+  });
+
   it("returns readable collaboration labels", () => {
     expect(getEventCollaborationStatusLabel("pending")).toBe("oczekuje");
     expect(getEventCollaborationStatusLabel("accepted")).toBe("zaakceptowana");
@@ -631,6 +666,13 @@ describe("draft workflow helpers", () => {
     expect(
       isOrganizerTrainingDraftWithdrawable(event, {
         role: "organizer",
+        organizerProfileId: "organizer-1",
+      }),
+    ).toBe(true);
+
+    expect(
+      isOrganizerTrainingDraftEditable(event, {
+        role: "trainer",
         organizerProfileId: "organizer-1",
       }),
     ).toBe(true);

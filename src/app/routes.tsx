@@ -25,6 +25,7 @@ import {
   RelationsPage,
   RequestsPage,
   TrainerDirectoryPage,
+  UserManagementPage,
 } from "./pages/panel";
 
 function NotFoundPage() {
@@ -92,6 +93,8 @@ export const router = createBrowserRouter(
             { path: "wydarzenia-spolecznosci", Component: EventsPage },
             { path: "wydarzenia-spolecznosci/utworz", Component: EventsPage },
             { path: "wydarzenia-spolecznosci/:eventId", Component: EventManagementPage },
+            { path: "moderacja-wydarzen-spolecznosci", Component: EventsPage },
+            { path: "uzytkownicy", Component: UserManagementPage },
             { path: "kreator-wydarzen", Component: EventsPage },
             { path: "trenerzy", Component: TrainerDirectoryPage },
             { path: "organizatorzy", Component: OrganizerDirectoryPage },

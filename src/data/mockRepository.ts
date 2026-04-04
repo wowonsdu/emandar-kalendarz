@@ -32,6 +32,7 @@ import type {
   OrganizerTrainingDraftUpdateInput,
   ParticipantEnrollmentManagementInput,
   ParticipantGroupEventManagementInput,
+  ParticipantRegistrationInput,
   ParticipantOnboardingInput,
   ParticipantProfile,
   ParticipantProfileUpdateInput,
@@ -54,9 +55,17 @@ import type {
 } from "@/domain/types";
 import { normalizeNotificationSettings } from "@/domain/notifications";
 import {
+  canManageTrainingEvent,
+  canModerateTrainingEvent,
+  canUseOrganizerFunctions,
+  canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
+  getRoleHierarchyLevel,
+  hasModeratorAccess,
   isCommunityBrandStatus,
+  isTrainingEventArchived,
   isTrainingEventPubliclyVisible,
+  isOrganizerFunctionsBlocked,
   resolveOrganizerCollaborationStatus,
   resolveTrainerCollaborationStatus,
 } from "@/domain/utils";
@@ -66,7 +75,6 @@ type StorePatch = Partial<DemoStore>;
 
 const authSessionStorageKey = "emandar:mock-auth-session";
 const smsSessionStorageKey = "emandar:mock-sms-session";
-const storeShadowStorageKey = "emandar:mock-store-shadow:v4";
 const pollIntervalMs = 5000;
 
 let cachedStore: DemoStore | null = null;
@@ -86,14 +94,47 @@ function getBasePath() {
   return import.meta.env.BASE_URL || "/";
 }
 
-function getMockApiUrl(path: string) {
-  const basePath = getBasePath().replace(/\/+$/, "");
-  return `${basePath}/api/mock/${path}`.replace(/([^:]\/)\/+/g, "$1");
+function normalizeBasePath(basePath: string) {
+  const trimmed = basePath.trim();
+  if (!trimmed || trimmed === "/") {
+    return "/";
+  }
+
+  return `/${trimmed.replace(/^\/+|\/+$/g, "")}/`;
 }
 
-function getMockStaticUrl(path: string) {
-  const basePath = getBasePath().replace(/\/+$/, "");
-  return `${basePath}/mock-data/${path}`.replace(/([^:]\/)\/+/g, "$1");
+function buildMockApiUrl(basePath: string, path: string) {
+  return `${normalizeBasePath(basePath)}api/mock/${path}`.replace(/([^:]\/)\/+/g, "$1");
+}
+
+export function resolveMockApiUrls(
+  path: string,
+  options: { baseUrl?: string; pathname?: string } = {},
+) {
+  const configuredBasePath = normalizeBasePath(options.baseUrl ?? getBasePath());
+  const pathname =
+    options.pathname ?? (typeof window !== "undefined" ? window.location.pathname : "");
+  const prefersEmandarBase =
+    configuredBasePath === "/" && pathname.startsWith("/emandar/");
+  const basePathCandidates = Array.from(
+    new Set(
+      [
+        prefersEmandarBase ? "/emandar/" : configuredBasePath,
+        configuredBasePath,
+        pathname.startsWith("/emandar/") ? "/emandar/" : null,
+        "/",
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
+  const pathCandidates = Array.from(
+    new Set(
+      path.endsWith(".php") ? [path, path.replace(/\.php$/, "")] : [path, `${path}.php`],
+    ),
+  );
+
+  return basePathCandidates.flatMap((basePath) =>
+    pathCandidates.map((pathCandidate) => buildMockApiUrl(basePath, pathCandidate)),
+  );
 }
 
 function canUseDomStorage() {
@@ -139,118 +180,6 @@ function cloneValue<T>(value: T): T {
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function isStoreEmpty(store: DemoStore) {
-  return (
-    store.users.length === 0 &&
-    store.trainers.length === 0 &&
-    store.organizers.length === 0 &&
-    store.participantProfiles.length === 0 &&
-    store.groups.length === 0 &&
-    store.trainingEvents.length === 0 &&
-    store.enrollmentRequests.length === 0
-  );
-}
-
-function mergeStoreCollections<T extends { id: string }>(
-  seedItems: T[] | null | undefined,
-  runtimeItems: T[] | null | undefined,
-) {
-  const merged = new Map<string, T>();
-
-  for (const item of seedItems ?? []) {
-    merged.set(item.id, cloneValue(item));
-  }
-
-  for (const item of runtimeItems ?? []) {
-    const previous = merged.get(item.id);
-    merged.set(
-      item.id,
-      previous
-        ? ({
-            ...cloneValue(previous),
-            ...cloneValue(item),
-          } as T)
-        : cloneValue(item),
-    );
-  }
-
-  return [...merged.values()];
-}
-
-function mergeSeedWithRuntime(seedStore: DemoStore, runtimeStore: Partial<DemoStore> | null | undefined) {
-  if (!runtimeStore) {
-    return normalizePublicStore(seedStore);
-  }
-
-  const mergedStore: Partial<DemoStore> = {
-    ...cloneValue(seedStore),
-    ...cloneValue(runtimeStore),
-    users: mergeStoreCollections(seedStore.users, runtimeStore.users),
-    trainers: mergeStoreCollections(seedStore.trainers, runtimeStore.trainers),
-    organizers: mergeStoreCollections(seedStore.organizers, runtimeStore.organizers),
-    participantProfiles: mergeStoreCollections(
-      seedStore.participantProfiles,
-      runtimeStore.participantProfiles,
-    ),
-    groups: mergeStoreCollections(seedStore.groups, runtimeStore.groups),
-    groupMembers: mergeStoreCollections(seedStore.groupMembers, runtimeStore.groupMembers),
-    eventParticipants: mergeStoreCollections(
-      seedStore.eventParticipants,
-      runtimeStore.eventParticipants,
-    ),
-    relations: mergeStoreCollections(seedStore.relations, runtimeStore.relations),
-    trainingEvents: mergeStoreCollections(seedStore.trainingEvents, runtimeStore.trainingEvents),
-    publicTrainingEvents: mergeStoreCollections(
-      seedStore.publicTrainingEvents,
-      runtimeStore.publicTrainingEvents,
-    ),
-    availabilitySlots: mergeStoreCollections(
-      seedStore.availabilitySlots,
-      runtimeStore.availabilitySlots,
-    ),
-    trainerSharedSlots: mergeStoreCollections(
-      seedStore.trainerSharedSlots,
-      runtimeStore.trainerSharedSlots,
-    ),
-    trainerCalendarFeeds: mergeStoreCollections(
-      seedStore.trainerCalendarFeeds,
-      runtimeStore.trainerCalendarFeeds,
-    ),
-    organizerCalendarFeeds: mergeStoreCollections(
-      seedStore.organizerCalendarFeeds,
-      runtimeStore.organizerCalendarFeeds,
-    ),
-    trainerOrganizerCalendarFeeds: mergeStoreCollections(
-      seedStore.trainerOrganizerCalendarFeeds,
-      runtimeStore.trainerOrganizerCalendarFeeds,
-    ),
-    trainerExternalBusyMonths: mergeStoreCollections(
-      seedStore.trainerExternalBusyMonths,
-      runtimeStore.trainerExternalBusyMonths,
-    ),
-    organizerExternalBusyMonths: mergeStoreCollections(
-      seedStore.organizerExternalBusyMonths,
-      runtimeStore.organizerExternalBusyMonths,
-    ),
-    enrollmentRequests: mergeStoreCollections(
-      seedStore.enrollmentRequests,
-      runtimeStore.enrollmentRequests,
-    ),
-    notifications: mergeStoreCollections(seedStore.notifications, runtimeStore.notifications),
-    accountRequests: mergeStoreCollections(seedStore.accountRequests, runtimeStore.accountRequests),
-    trainerAccountApprovals: mergeStoreCollections(
-      seedStore.trainerAccountApprovals,
-      runtimeStore.trainerAccountApprovals,
-    ),
-    appSettings: {
-      ...cloneValue(seedStore.appSettings),
-      ...(runtimeStore.appSettings ? cloneValue(runtimeStore.appSettings) : {}),
-    },
-  };
-
-  return normalizePublicStore(mergedStore);
 }
 
 async function fetchJsonOrNull<T>(url: string) {
@@ -401,61 +330,73 @@ function getCurrentSmsSession() {
 }
 
 async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number }> {
-  const seedPayload = await fetchJsonOrNull<Partial<DemoStore>>(getMockStaticUrl("seed-store.json"));
-  if (seedPayload) {
-    const seedStore = normalizePublicStore(seedPayload);
-    const runtimePayload = await fetchJsonOrNull<Partial<DemoStore>>(
-      getMockStaticUrl("runtime-store.json"),
-    );
-    const store = mergeSeedWithRuntime(seedStore, runtimePayload);
-    writeStorageJson(storeShadowStorageKey, store);
+  for (const url of resolveMockApiUrls("store.php")) {
+    const payload = await fetchJsonOrNull<{
+      store?: Partial<DemoStore>;
+      version?: number;
+    }>(url);
+
+    if (!payload?.store) {
+      continue;
+    }
+
     return {
-      store,
-      version: Date.now(),
+      store: normalizePublicStore(payload.store),
+      version: Number(payload.version ?? Date.now()),
     };
   }
 
-  const shadowStore = normalizePublicStore(readStorageJson<DemoStore | null>(storeShadowStorageKey, null));
-  return {
-    store: shadowStore,
-    version: Date.now(),
-  };
+  throw new Error("Nie udało się wczytać mock store.");
 }
 
 async function persistStore(store: DemoStore) {
   const payload = cloneValue(store);
-  writeStorageJson(storeShadowStorageKey, payload);
+  const pendingSave = savePromise.then(async () => {
+    let lastError: unknown = null;
 
-  savePromise = savePromise.then(async () => {
-    try {
-      const response = await fetch(getMockApiUrl("runtime-store"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "same-origin",
-        body: JSON.stringify({ store: payload }),
-      });
+    for (const url of resolveMockApiUrls("save.php")) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "same-origin",
+          body: JSON.stringify({ store: payload }),
+        });
 
-      if (!response.ok) {
-        throw new Error(`mock-save-${response.status}`);
+        if (!response.ok) {
+          lastError = new Error(`mock-save-${response.status}`);
+          continue;
+        }
+
+        const saved = (await response.json()) as {
+          store?: Partial<DemoStore>;
+          version?: number;
+        };
+
+        return {
+          store: normalizePublicStore(saved.store ?? payload),
+          version: Number(saved.version ?? Date.now()),
+        };
+      } catch (error) {
+        lastError = error;
       }
-
-      const saved = (await response.json()) as {
-        store?: Partial<DemoStore>;
-        version?: number;
-      };
-
-      cachedStore = normalizePublicStore(saved.store ?? payload);
-      cachedVersion = Number(saved.version ?? Date.now());
-      writeStorageJson(storeShadowStorageKey, cachedStore);
-    } catch {
-      cachedStore = normalizePublicStore(payload);
-      cachedVersion = Date.now();
     }
+
+    if (lastError instanceof Error && lastError.message.startsWith("mock-save-")) {
+      throw lastError;
+    }
+
+    throw new Error("Nie udało się połączyć z lokalnym mock API.");
   });
 
-  await savePromise;
+  savePromise = pendingSave.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return pendingSave;
 }
 
 async function ensureStoreLoaded() {
@@ -464,11 +405,16 @@ async function ensureStoreLoaded() {
   }
 
   if (!loadPromise) {
-    loadPromise = readStoreSnapshot().then(({ store, version }) => {
-      cachedStore = store;
-      cachedVersion = version;
-      return store;
-    });
+    loadPromise = readStoreSnapshot()
+      .then(({ store, version }) => {
+        cachedStore = store;
+        cachedVersion = version;
+        return store;
+      })
+      .catch((error) => {
+        loadPromise = null;
+        throw error;
+      });
   }
 
   return loadPromise;
@@ -528,18 +474,20 @@ function emitStoreListeners() {
 }
 
 async function refreshStoreIfChanged() {
-  if (savePromise !== Promise.resolve()) {
-    await savePromise;
-  }
+  await savePromise;
 
-  const snapshot = await readStoreSnapshot();
-  if (snapshot.version === cachedVersion) {
+  try {
+    const snapshot = await readStoreSnapshot();
+    if (snapshot.version === cachedVersion) {
+      return;
+    }
+
+    cachedStore = snapshot.store;
+    cachedVersion = snapshot.version;
+    emitStoreListeners();
+  } catch {
     return;
   }
-
-  cachedStore = snapshot.store;
-  cachedVersion = snapshot.version;
-  emitStoreListeners();
 }
 
 function maybeStartPolling() {
@@ -580,12 +528,22 @@ function maybeStopPolling() {
 }
 
 async function mutateStore<T>(updater: (store: DemoStore) => T | Promise<T>) {
-  const current = cloneValue(await ensureStoreLoaded());
+  const previousVersion = cachedVersion;
+  const previous = cloneValue(await ensureStoreLoaded());
+  const current = cloneValue(previous);
   const result = await updater(current);
   const nextStore = rebuildDerivedStore(current);
-  cachedStore = nextStore;
-  cachedVersion = Date.now();
-  await persistStore(nextStore);
+
+  try {
+    const persisted = await persistStore(nextStore);
+    cachedStore = persisted.store;
+    cachedVersion = persisted.version;
+  } catch (error) {
+    cachedStore = previous;
+    cachedVersion = previousVersion;
+    throw error;
+  }
+
   emitStoreListeners();
   return result;
 }
@@ -740,7 +698,89 @@ function ensureRole(user: AppUser, role: AppRole) {
   }
 }
 
-function requireTrainerProfileId(user: Pick<AppUser, "trainerProfileId">) {
+function hasApprovedOrganizerRelation(store: DemoStore, organizerId: string) {
+  return store.relations.some(
+    (relation) => relation.organizerId === organizerId && relation.status === "approved",
+  );
+}
+
+function syncOrganizerRoleFromRelations(store: DemoStore, user: AppUser) {
+  ensureRole(user, "participant");
+
+  if (!user.organizerProfileId) {
+    user.roles = user.roles.filter((role) => role !== "organizer");
+    if (user.role === "organizer") {
+      user.role = "participant";
+    }
+    return;
+  }
+
+  if (hasApprovedOrganizerRelation(store, user.organizerProfileId)) {
+    ensureRole(user, "organizer");
+    return;
+  }
+
+  user.roles = user.roles.filter((role) => role !== "organizer");
+  if (user.role === "organizer") {
+    user.role = "participant";
+  }
+}
+
+function ensureAdminActor(actor: Pick<AppUser, "role" | "roles" | "primaryRole">) {
+  if (!hasRoleOrAdmin(actor, "admin")) {
+    throw new Error("Tylko admin może wykonać tę akcję.");
+  }
+}
+
+function hasRoleOrAdmin(
+  actor: Pick<AppUser, "role" | "roles" | "primaryRole">,
+  role: AppRole,
+) {
+  return actor.role === role || (Array.isArray(actor.roles) && actor.roles.includes(role));
+}
+
+function ensureOrganizerFunctionsActive(
+  actor: Pick<AppUser, "role" | "roles" | "primaryRole" | "organizerFunctionsBlockedAt">,
+) {
+  if (isOrganizerFunctionsBlocked(actor)) {
+    throw new Error("Funkcje organizatora są zablokowane przez moderatora lub admina.");
+  }
+
+  if (!canUseOrganizerFunctions(actor)) {
+    throw new Error("To konto nie ma aktywnego dostępu organizatora.");
+  }
+}
+
+function deleteTrainingEventFromStore(store: DemoStore, eventId: string) {
+  store.trainingEvents = store.trainingEvents.filter((item) => item.id !== eventId);
+  store.enrollmentRequests = store.enrollmentRequests.filter((item) => item.eventId !== eventId);
+  store.eventParticipants = store.eventParticipants.filter((item) => item.eventId !== eventId);
+}
+
+function requireTrainerProfileId(
+  store: DemoStore,
+  user: Pick<AppUser, "id" | "trainerProfileId">,
+) {
+  if (user.trainerProfileId) {
+    return user.trainerProfileId;
+  }
+
+  const trainer = store.trainers.find((item) => item.userId === user.id);
+  if (trainer) {
+    const storedUser = findUser(store, user.id);
+    if (storedUser) {
+      storedUser.trainerProfileId = trainer.id;
+      ensureRole(storedUser, "trainer");
+    }
+
+    return trainer.id;
+  }
+
+  const storedUser = findUser(store, user.id);
+  if (storedUser?.trainerProfileId) {
+    return storedUser.trainerProfileId;
+  }
+
   if (!user.trainerProfileId) {
     throw new Error("To konto nie ma profilu trenera.");
   }
@@ -790,6 +830,7 @@ export function createEmptyStore(): DemoStore {
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",
+      defaultNotificationSettings: normalizeNotificationSettings(undefined),
     },
   };
 }
@@ -1013,21 +1054,6 @@ export async function signOut() {
   emitStoreListeners();
 }
 
-export async function updateActiveRole(currentUser: AppUser, role: AppUser["role"]) {
-  await mutateStore((store) => {
-    const user = findUser(store, currentUser.id);
-    if (!user) {
-      throw new Error("Nie znaleziono użytkownika.");
-    }
-
-    if (!user.roles.includes(role)) {
-      throw new Error("To konto nie ma wybranej roli.");
-    }
-
-    user.role = role;
-  });
-}
-
 export async function submitEnrollment(input: EnrollmentFormInput) {
   const photoUrl = await maybeReadFile(input.photoFile);
 
@@ -1198,10 +1224,40 @@ export async function manageEnrollmentRequest(
       throw new Error("Nie znaleziono zgłoszenia.");
     }
 
-    if (currentUser.role === "trainer") {
+    const event = store.trainingEvents.find((item) => item.id === request.eventId);
+    if (!event) {
+      throw new Error("Nie znaleziono wydarzenia dla zgłoszenia.");
+    }
+
+    const canManageRequest = canManageTrainingEvent(event, currentUser);
+    if (!canManageRequest) {
+      throw new Error("Nie możesz zarządzać tym zgłoszeniem.");
+    }
+
+    const isSelfManagedEvent =
+      request.requiresOrganizerApproval === false || isCommunityBrandStatus(event.brandStatus);
+
+    if (currentUser.role === "admin") {
       request.trainerDecision = input.decision;
-    } else if (currentUser.role === "organizer" || currentUser.role === "admin") {
       request.organizerDecision = input.decision;
+    } else if (isSelfManagedEvent) {
+      request.trainerDecision = input.decision;
+      request.organizerDecision = "accepted";
+    } else if (
+      currentUser.id === event.trainerUserId ||
+      currentUser.trainerProfileId === event.trainerId
+    ) {
+      request.trainerDecision = input.decision;
+    } else if (
+      currentUser.id === event.organizerUserId ||
+      currentUser.organizerProfileId === event.organizerId
+    ) {
+      request.organizerDecision = input.decision;
+    } else if (currentUser.id === event.creatorUserId) {
+      request.trainerDecision = input.decision;
+      if (request.requiresOrganizerApproval === false) {
+        request.organizerDecision = "accepted";
+      }
     }
 
     request.finalStatus = deriveEnrollmentFinalStatus(
@@ -1351,12 +1407,23 @@ export async function detachRelation(
         };
       });
     }
+
+    if (relation.organizerUserId) {
+      const organizerUser = findUser(store, relation.organizerUserId);
+      if (organizerUser) {
+        syncOrganizerRoleFromRelations(store, organizerUser);
+      }
+    }
   });
 }
 
 export async function createGroup(input: GroupInput, actor: AppUser) {
   return mutateStore((store) => {
+    ensureOrganizerFunctionsActive(actor);
     const organizerId = requireOrganizerProfileId(actor);
+    if (!canOrganizerAccessTrainer(organizerId, input.trainerId, store.relations)) {
+      throw new Error("Najpierw potrzebujesz aktywnego połączenia z tym trenerem.");
+    }
     const groupId = createId("group");
 
     store.groups.unshift({
@@ -1394,6 +1461,10 @@ export async function updateGroup(input: GroupUpdateInput, actor: AppUser) {
       throw new Error("Nie możesz edytować tej grupy.");
     }
 
+    if (group.organizerUserId === actor.id && actor.role !== "admin") {
+      ensureOrganizerFunctionsActive(actor);
+    }
+
     group.name = input.name.trim();
     group.notes = input.notes?.trim();
     group.defaultLocation = input.defaultLocation?.trim();
@@ -1416,6 +1487,10 @@ export async function archiveGroup(groupId: string, actor: AppUser) {
       throw new Error("Nie możesz archiwizować tej grupy.");
     }
 
+    if (group.organizerUserId === actor.id && actor.role !== "admin") {
+      ensureOrganizerFunctionsActive(actor);
+    }
+
     group.status = "archived";
     group.archivedAt = nowIso();
   });
@@ -1426,6 +1501,7 @@ export async function createOrUpdateOrganizerParticipantProfile(
   actor: AppUser,
 ) {
   await mutateStore((store) => {
+    ensureOrganizerFunctionsActive(actor);
     const organizerId = requireOrganizerProfileId(actor);
     const profileId = buildParticipantProfileId(input.phone);
     const existing = store.participantProfiles.find((item) => item.id === profileId);
@@ -1471,6 +1547,10 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
     const group = store.groups.find((item) => item.id === input.groupId);
     if (!group) {
       throw new Error("Nie znaleziono grupy.");
+    }
+
+    if (group.organizerUserId === actor.id && actor.role !== "admin") {
+      ensureOrganizerFunctionsActive(actor);
     }
 
     let participantProfileId = input.participantProfileId;
@@ -1556,6 +1636,10 @@ export async function updateGroupMember(input: GroupMemberUpdateInput, actor: Ap
       throw new Error("Nie możesz edytować tego członka.");
     }
 
+    if (member.organizerUserId === actor.id && actor.role !== "admin") {
+      ensureOrganizerFunctionsActive(actor);
+    }
+
     member.priority = asParticipantPriority(input.priority);
     member.notes = input.notes?.trim();
     member.updatedAt = nowIso();
@@ -1571,6 +1655,10 @@ export async function removeGroupMember(memberId: string, actor: AppUser) {
 
     if (member.organizerUserId !== actor.id && actor.role !== "admin") {
       throw new Error("Nie możesz usunąć tego członka.");
+    }
+
+    if (member.organizerUserId === actor.id && actor.role !== "admin") {
+      ensureOrganizerFunctionsActive(actor);
     }
 
     member.membershipStatus = "removed";
@@ -1680,7 +1768,8 @@ export async function finalizeEventRoster(eventId: string, actor: AppUser) {
 
 export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUser) {
   await mutateStore((store) => {
-    const trainerId = actor.role === "trainer" ? requireTrainerProfileId(actor) : input.trainerId;
+    const trainerId =
+      actor.role === "trainer" ? requireTrainerProfileId(store, actor) : input.trainerId;
 
     store.availabilitySlots.unshift({
       id: createId("availability"),
@@ -1698,7 +1787,7 @@ export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUs
 
 export async function addTrainerCalendarFeed(input: TrainerCalendarFeedInput, actor: AppUser) {
   await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(actor);
+    const trainerId = requireTrainerProfileId(store, actor);
     store.trainerCalendarFeeds.unshift({
       id: createId("trainer-feed"),
       trainerId,
@@ -1749,7 +1838,7 @@ export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) 
 
 export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
   await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(actor);
+    const trainerId = requireTrainerProfileId(store, actor);
     store.trainerCalendarFeeds = store.trainerCalendarFeeds.map((feed) =>
       feed.trainerId === trainerId
         ? {
@@ -1764,7 +1853,7 @@ export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
 
 export async function addTrainerSharedSlot(input: TrainerSharedSlotInput, actor: AppUser) {
   await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(actor);
+    const trainerId = requireTrainerProfileId(store, actor);
     store.trainerSharedSlots.unshift({
       id: createId("shared-slot"),
       trainerId,
@@ -1928,6 +2017,7 @@ export async function createOrganizerTrainingDraft(
   actor: AppUser,
 ) {
   await mutateStore((store) => {
+    ensureOrganizerFunctionsActive(actor);
     const group = store.groups.find((item) => item.id === input.groupId);
     if (!group) {
       throw new Error("Nie znaleziono grupy.");
@@ -1963,6 +2053,10 @@ export async function updateOrganizerTrainingDraft(
   actor: AppUser,
 ) {
   await mutateStore((store) => {
+    if (actor.role !== "admin") {
+      ensureOrganizerFunctionsActive(actor);
+    }
+
     const event = store.trainingEvents.find((item) => item.id === input.eventId);
     if (!event) {
       throw new Error("Nie znaleziono draftu.");
@@ -1995,6 +2089,10 @@ export async function updateOrganizerTrainingDraft(
 
 export async function withdrawOrganizerTrainingDraft(eventId: string, actor: AppUser) {
   await mutateStore((store) => {
+    if (actor.role !== "admin") {
+      ensureOrganizerFunctionsActive(actor);
+    }
+
     const event = store.trainingEvents.find((item) => item.id === eventId);
     if (!event) {
       throw new Error("Nie znaleziono wydarzenia.");
@@ -2107,6 +2205,10 @@ export async function createTrainingEvent(input: TrainingEventInput, actor: AppU
 
 export async function createUnifiedTrainingEvent(input: TrainingEventInput, actor: AppUser) {
   await mutateStore((store) => {
+    if (!isCommunityBrandStatus(input.brandStatus) && actor.role === "organizer") {
+      ensureOrganizerFunctionsActive(actor);
+    }
+
     const base = createEventBase(store, actor, input);
     store.trainingEvents.unshift({
       id: createId("event"),
@@ -2192,9 +2294,65 @@ export async function submitAccountRequest(input: AccountRequestInput) {
   });
 }
 
+export async function registerParticipant(input: ParticipantRegistrationInput) {
+  const avatarUrl = await maybeReadFile(input.avatarFile);
+
+  await mutateStore((store) => {
+    const actor = getActorOrThrow(store);
+    if (!input.trainingDataConsentAccepted) {
+      throw new Error(
+        "Zaznacz zgodę na przetwarzanie danych osobowych do celów organizacji szkoleń.",
+      );
+    }
+
+    actor.displayName = input.displayName.trim();
+    actor.notes = input.notes.trim();
+    actor.phone = input.phone.trim();
+    actor.phoneVerifiedAt = actor.phoneVerifiedAt ?? nowIso();
+    actor.participantOnboardingCompletedAt = nowIso();
+    actor.trainingDataConsentAccepted = true;
+    actor.trainingDataConsentAcceptedAt = nowIso();
+
+    if (avatarUrl) {
+      actor.avatarUrl = avatarUrl;
+      actor.avatarPath = avatarUrl;
+    }
+
+    ensureRole(actor, "participant");
+    if (!actor.participantProfileId) {
+      actor.participantProfileId = buildParticipantProfileId(actor.phone);
+      store.participantProfiles.push(createParticipantProfileFromUser(actor));
+    }
+
+    const participantProfile = store.participantProfiles.find(
+      (item) => item.id === actor.participantProfileId,
+    );
+    if (participantProfile) {
+      const name = splitDisplayName(actor.displayName);
+      participantProfile.displayName = name.displayName;
+      participantProfile.firstName = name.firstName;
+      participantProfile.lastName = name.lastName;
+      participantProfile.linkedUserId = actor.id;
+      participantProfile.phone = actor.phone;
+      participantProfile.phoneLookupKey = normalizePhoneLookupKey(actor.phone);
+      participantProfile.confirmationStatus = actor.phoneVerifiedAt ? "confirmed" : "unconfirmed";
+      participantProfile.confirmedAt = actor.phoneVerifiedAt;
+      participantProfile.notes = actor.notes;
+      participantProfile.updatedAt = nowIso();
+      if (avatarUrl) {
+        participantProfile.avatarUrl = avatarUrl;
+        participantProfile.avatarPath = avatarUrl;
+      }
+    }
+  });
+}
+
 export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode: string) {
   return mutateStore((store) => {
     const actor = getActorOrThrow(store);
+    if (isOrganizerFunctionsBlocked(actor)) {
+      throw new Error("Funkcje organizatora są zablokowane przez moderatora lub admina.");
+    }
     const normalizedCode = trainerAuthorizationCode.trim().toUpperCase();
     const trainer = store.trainers.find(
       (item) => resolveTrainerAuthorizationCode(item as TrainerProfile & { authorizationCode?: string }) === normalizedCode,
@@ -2204,12 +2362,14 @@ export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode
       throw new Error("Nie znaleziono trenera dla tego kodu.");
     }
 
-    ensureRole(actor, "organizer");
+    ensureRole(actor, "participant");
     let organizerId = actor.organizerProfileId;
+    let organizerProfileCreated = false;
 
     if (!organizerId) {
       organizerId = createId("organizer");
       actor.organizerProfileId = organizerId;
+      organizerProfileCreated = true;
       store.organizers.unshift({
         id: organizerId,
         userId: actor.id,
@@ -2223,6 +2383,9 @@ export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode
     const existing = store.relations.find((item) => item.id === relationId);
     if (existing) {
       existing.status = "approved";
+      existing.detachedAt = undefined;
+      existing.detachedByRole = undefined;
+      existing.archivedLinkedEvents = undefined;
     } else {
       store.relations.unshift({
         id: relationId,
@@ -2236,10 +2399,12 @@ export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode
       });
     }
 
+    syncOrganizerRoleFromRelations(store, actor);
+
     return {
       ok: true as const,
       trainerId: trainer.id,
-      organizerProfileCreated: !existing,
+      organizerProfileCreated,
     };
   });
 }
@@ -2279,40 +2444,6 @@ export async function completeParticipantOnboarding(input: ParticipantOnboarding
         participantProfile.avatarUrl = avatarUrl;
         participantProfile.avatarPath = avatarUrl;
       }
-    }
-
-    if (input.requestedRoles.includes("organizer")) {
-      ensureRole(actor, "organizer");
-      if (!actor.organizerProfileId) {
-        actor.organizerProfileId = createId("organizer");
-        store.organizers.unshift({
-          id: actor.organizerProfileId,
-          userId: actor.id,
-          displayName: actor.displayName,
-          description: input.organizerTrainingIntent?.trim() || "Organizator utworzony z onboardingu.",
-          isVisible: true,
-          trainingIntent: input.organizerTrainingIntent?.trim(),
-        });
-      }
-
-      input.selectedTrainerIds.forEach((trainerId) => {
-        const trainer = findTrainer(store, trainerId);
-        if (!trainer) {
-          return;
-        }
-
-        store.trainerAccountApprovals.unshift({
-          id: createId("trainer-approval"),
-          requesterUserId: actor.id,
-          requesterDisplayName: actor.displayName,
-          requesterPhone: actor.phone,
-          targetTrainerId: trainer.id,
-          targetTrainerUserId: trainer.userId,
-          requestedRoles: ["organizer"],
-          status: "pending",
-          createdAt: nowIso(),
-        });
-      });
     }
   });
 }
@@ -2358,9 +2489,10 @@ export async function reviewCommunityEvent(input: {
 
 export async function updateTrainerProfile(input: TrainerProfileUpdateInput, currentUser: AppUser) {
   const avatarUrl = await maybeReadFile(input.avatarFile);
+  const avatarCrop = input.avatarCrop ? cloneValue(input.avatarCrop) : undefined;
 
   await mutateStore((store) => {
-    const trainer = findTrainer(store, requireTrainerProfileId(currentUser));
+    const trainer = findTrainer(store, requireTrainerProfileId(store, currentUser));
     if (!trainer) {
       throw new Error("Nie znaleziono profilu trenera.");
     }
@@ -2380,6 +2512,9 @@ export async function updateTrainerProfile(input: TrainerProfileUpdateInput, cur
       trainer.avatarPath = avatarUrl;
       trainer.avatarUploadedAt = nowIso();
     }
+    if (avatarCrop) {
+      trainer.avatarCrop = avatarCrop;
+    }
   });
 }
 
@@ -2388,6 +2523,10 @@ export async function updateParticipantProfile(
   currentUser: AppUser,
 ) {
   const avatarUrl = await maybeReadFile(input.avatarFile);
+  const avatarCrop = input.avatarCrop ? cloneValue(input.avatarCrop) : undefined;
+  const nextDisplayName = input.displayName.trim();
+  const nextReferralSource = input.referralSource?.trim();
+  const nextNotes = input.notes?.trim();
 
   await mutateStore((store) => {
     const user = findUser(store, currentUser.id);
@@ -2395,26 +2534,47 @@ export async function updateParticipantProfile(
       throw new Error("Nie znaleziono użytkownika.");
     }
 
-    user.displayName = input.displayName.trim();
-    user.referralSource = input.referralSource?.trim();
-    user.notes = input.notes?.trim();
+    user.displayName = nextDisplayName;
+    user.referralSource = nextReferralSource;
+    user.notes = nextNotes;
     if (avatarUrl) {
       user.avatarUrl = avatarUrl;
       user.avatarPath = avatarUrl;
     }
+    if (avatarCrop) {
+      user.avatarCrop = avatarCrop;
+    }
 
     const profile = store.participantProfiles.find((item) => item.id === user.participantProfileId);
     if (profile) {
-      const split = splitDisplayName(input.displayName);
+      const split = splitDisplayName(nextDisplayName);
       profile.displayName = split.displayName;
       profile.firstName = split.firstName;
       profile.lastName = split.lastName;
-      profile.referralSource = input.referralSource?.trim();
-      profile.notes = input.notes?.trim();
+      profile.referralSource = nextReferralSource;
+      profile.notes = nextNotes;
       profile.updatedAt = nowIso();
       if (avatarUrl) {
         profile.avatarUrl = avatarUrl;
         profile.avatarPath = avatarUrl;
+      }
+      if (avatarCrop) {
+        profile.avatarCrop = avatarCrop;
+      }
+    }
+
+    if (user.trainerProfileId) {
+      const trainer = store.trainers.find((item) => item.id === user.trainerProfileId);
+      if (trainer) {
+        trainer.displayName = nextDisplayName;
+        if (avatarUrl) {
+          trainer.avatarUrl = avatarUrl;
+          trainer.avatarPath = avatarUrl;
+          trainer.avatarUploadedAt = nowIso();
+        }
+        if (avatarCrop) {
+          trainer.avatarCrop = avatarCrop;
+        }
       }
     }
   });
@@ -2442,12 +2602,17 @@ export async function updateTrainerNotificationSettings(
   currentUser: AppUser,
 ) {
   await mutateStore((store) => {
-    const trainer = findTrainer(store, requireTrainerProfileId(currentUser));
+    const trainer = findTrainer(store, requireTrainerProfileId(store, currentUser));
     if (!trainer) {
       throw new Error("Nie znaleziono profilu trenera.");
     }
 
-    trainer.notificationSettings = normalizeNotificationSettings(input);
+    const systemDefaults = normalizeNotificationSettings(store.appSettings.defaultNotificationSettings);
+    trainer.notificationSettings = normalizeNotificationSettings(input, systemDefaults);
+    const user = findUser(store, currentUser.id);
+    if (user) {
+      user.notificationSettings = normalizeNotificationSettings(input, systemDefaults);
+    }
   });
 }
 
@@ -2461,7 +2626,27 @@ export async function updateOrganizerNotificationSettings(
       throw new Error("Nie znaleziono profilu organizatora.");
     }
 
-    organizer.notificationSettings = normalizeNotificationSettings(input);
+    const systemDefaults = normalizeNotificationSettings(store.appSettings.defaultNotificationSettings);
+    organizer.notificationSettings = normalizeNotificationSettings(input, systemDefaults);
+    const user = findUser(store, currentUser.id);
+    if (user) {
+      user.notificationSettings = normalizeNotificationSettings(input, systemDefaults);
+    }
+  });
+}
+
+export async function updateUserNotificationSettings(
+  input: NotificationSettingsUpdateInput,
+  currentUser: AppUser,
+) {
+  await mutateStore((store) => {
+    const user = findUser(store, currentUser.id);
+    if (!user) {
+      throw new Error("Nie znaleziono użytkownika.");
+    }
+
+    const systemDefaults = normalizeNotificationSettings(store.appSettings.defaultNotificationSettings);
+    user.notificationSettings = normalizeNotificationSettings(input, systemDefaults);
   });
 }
 
@@ -2513,13 +2698,40 @@ export async function decideTrainingEventCollaboration(
       throw new Error("Nie znaleziono wydarzenia.");
     }
 
-    if (currentUser.role === "trainer") {
+    const canActAsTrainer =
+      getRoleHierarchyLevel(currentUser.role) >= getRoleHierarchyLevel("trainer") &&
+      currentUser.trainerProfileId === event.trainerId;
+    const canActAsOrganizer =
+      getRoleHierarchyLevel(currentUser.role) >= getRoleHierarchyLevel("organizer") &&
+      currentUser.organizerProfileId === event.organizerId;
+
+    if (currentUser.role === "admin") {
+      if (resolveTrainerCollaborationStatus(event) === "pending") {
+        event.trainerCollaborationStatus = input.status;
+        event.trainerDecidedAt = nowIso();
+        event.trainerDecidedByUserId = currentUser.id;
+      }
+
+      if (resolveOrganizerCollaborationStatus(event) === "pending") {
+        event.organizerCollaborationStatus = input.status;
+      }
+
+      return;
+    }
+
+    if (canActAsTrainer && resolveTrainerCollaborationStatus(event) === "pending") {
       event.trainerCollaborationStatus = input.status;
       event.trainerDecidedAt = nowIso();
       event.trainerDecidedByUserId = currentUser.id;
-    } else if (currentUser.role === "organizer" || currentUser.role === "admin") {
-      event.organizerCollaborationStatus = input.status;
+      return;
     }
+
+    if (canActAsOrganizer && resolveOrganizerCollaborationStatus(event) === "pending") {
+      event.organizerCollaborationStatus = input.status;
+      return;
+    }
+
+    throw new Error("Nie możesz podjąć tej decyzji.");
   });
 }
 
@@ -2559,40 +2771,54 @@ export async function updateTrainingEventManagement(
       throw new Error("Nie znaleziono wydarzenia.");
     }
 
-    if (
-      event.trainerUserId !== currentUser.id &&
-      event.organizerUserId !== currentUser.id &&
-      currentUser.role !== "admin"
-    ) {
+    const canManageEvent = canManageTrainingEvent(event, currentUser);
+    const canModerateCommunityPublication =
+      input.publicationDecision !== undefined &&
+      isCommunityBrandStatus(event.brandStatus) &&
+      canModerateTrainingEvent(event, currentUser);
+
+    if (!canManageEvent && !canModerateCommunityPublication) {
       throw new Error("Nie możesz zarządzać tym wydarzeniem.");
     }
 
-    event.status = input.status;
-    event.capacity = input.capacity;
-    event.minimumParticipants = input.minimumParticipants;
-    if (input.title !== undefined) {
-      event.title = input.title.trim();
+    if (canManageEvent) {
+      event.status = input.status;
+      event.capacity = input.capacity;
+      event.minimumParticipants = input.minimumParticipants;
+      if (typeof input.confirmationLeadTimeDays === "number") {
+        event.confirmationLeadTimeDays = Math.max(0, Math.round(input.confirmationLeadTimeDays));
+      }
+      if (input.title !== undefined) {
+        event.title = input.title.trim();
+      }
+      if (input.location !== undefined) {
+        event.location = input.location.trim();
+      }
+      if (input.summary !== undefined) {
+        event.summary = input.summary.trim();
+      }
+      if (input.description !== undefined) {
+        event.description = input.description.trim();
+      }
+      if (input.tags !== undefined) {
+        event.tags = cloneValue(input.tags);
+      }
+      if (input.eventImages !== undefined) {
+        event.eventImages = cloneValue(input.eventImages);
+      }
+      if (input.useEventImageAsCover !== undefined) {
+        event.useEventImageAsCover = input.useEventImageAsCover;
+      }
+      if (input.scheduleDays !== undefined) {
+        event.scheduleDays = cloneValue(input.scheduleDays);
+        event.startsAt = input.scheduleDays[0]?.startsAt ?? event.startsAt;
+        event.endsAt = input.scheduleDays[input.scheduleDays.length - 1]?.endsAt ?? event.endsAt;
+      }
+      if (input.enrollmentPhotoRequirement !== undefined) {
+        event.enrollmentPhotoRequirement = input.enrollmentPhotoRequirement;
+      }
     }
-    if (input.location !== undefined) {
-      event.location = input.location.trim();
-    }
-    if (input.tags !== undefined) {
-      event.tags = cloneValue(input.tags);
-    }
-    if (input.eventImages !== undefined) {
-      event.eventImages = cloneValue(input.eventImages);
-    }
-    if (input.useEventImageAsCover !== undefined) {
-      event.useEventImageAsCover = input.useEventImageAsCover;
-    }
-    if (input.scheduleDays !== undefined) {
-      event.scheduleDays = cloneValue(input.scheduleDays);
-      event.startsAt = input.scheduleDays[0]?.startsAt ?? event.startsAt;
-      event.endsAt = input.scheduleDays[input.scheduleDays.length - 1]?.endsAt ?? event.endsAt;
-    }
-    if (input.enrollmentPhotoRequirement !== undefined) {
-      event.enrollmentPhotoRequirement = input.enrollmentPhotoRequirement;
-    }
+
     if (input.publicationDecision !== undefined) {
       event.publicationApprovalStatus = input.publicationDecision;
       event.publicationReviewMessage = input.publicationReviewMessage?.trim();
@@ -2610,11 +2836,7 @@ export async function archiveTrainingEvent(eventId: string, actor: AppUser) {
       throw new Error("Nie znaleziono wydarzenia.");
     }
 
-    if (
-      event.trainerUserId !== actor.id &&
-      event.organizerUserId !== actor.id &&
-      actor.role !== "admin"
-    ) {
+    if (!canManageTrainingEvent(event, actor)) {
       throw new Error("Nie możesz archiwizować tego wydarzenia.");
     }
 
@@ -2622,6 +2844,111 @@ export async function archiveTrainingEvent(eventId: string, actor: AppUser) {
     event.archivedByRole = actor.role;
     event.archivedReason = "manual";
     event.isPublished = false;
+  });
+}
+
+export async function unpublishTrainingEvent(eventId: string, actor: AppUser) {
+  await mutateStore((store) => {
+    const event = store.trainingEvents.find((item) => item.id === eventId);
+    if (!event) {
+      throw new Error("Nie znaleziono wydarzenia.");
+    }
+
+    if (!canModerateTrainingEvent(event, actor)) {
+      throw new Error("Nie możesz wycofać publikacji tego wydarzenia.");
+    }
+
+    event.isPublished = false;
+    if (isCommunityBrandStatus(event.brandStatus)) {
+      event.publicationReviewedAt = nowIso();
+      event.publicationReviewedByUserId = actor.id;
+      event.publicationReviewMessage = "Publikacja została wycofana przez moderatora.";
+    }
+  });
+}
+
+export async function publishTrainingEvent(eventId: string, actor: AppUser) {
+  await mutateStore((store) => {
+    const event = store.trainingEvents.find((item) => item.id === eventId);
+    if (!event) {
+      throw new Error("Nie znaleziono wydarzenia.");
+    }
+
+    if (!canManageTrainingEvent(event, actor)) {
+      throw new Error("Nie możesz opublikować tego wydarzenia.");
+    }
+
+    if (isTrainingEventArchived(event)) {
+      throw new Error("Nie możesz opublikować zarchiwizowanego wydarzenia.");
+    }
+
+    if (isCommunityBrandStatus(event.brandStatus) && event.publicationApprovalStatus !== "accepted") {
+      throw new Error("To wydarzenie nie ma jeszcze akceptacji moderacji.");
+    }
+
+    event.isPublished = true;
+  });
+}
+
+export async function deleteTrainingEvent(eventId: string, actor: AppUser) {
+  await mutateStore((store) => {
+    const event = store.trainingEvents.find((item) => item.id === eventId);
+    if (!event) {
+      throw new Error("Nie znaleziono wydarzenia.");
+    }
+
+    if (!canModerateTrainingEvent(event, actor)) {
+      throw new Error("Nie możesz usunąć tego wydarzenia.");
+    }
+
+    deleteTrainingEventFromStore(store, eventId);
+  });
+}
+
+export async function updateUserModeratorRole(
+  userId: string,
+  enabled: boolean,
+  currentUser: AppUser,
+) {
+  await mutateStore((store) => {
+    ensureAdminActor(currentUser);
+    const user = findUser(store, userId);
+    if (!user) {
+      throw new Error("Nie znaleziono użytkownika.");
+    }
+
+    if (user.role === "admin") {
+      throw new Error("Nie można zmieniać moderatora na koncie admina.");
+    }
+
+    ensureRole(user, "participant");
+    user.roles = enabled
+      ? Array.from(new Set([...user.roles, "moderator"]))
+      : user.roles.filter((role) => role !== "moderator");
+  });
+}
+
+export async function updateUserOrganizerFunctionsBlocked(
+  userId: string,
+  blocked: boolean,
+  currentUser: AppUser,
+) {
+  await mutateStore((store) => {
+    if (!hasModeratorAccess(currentUser)) {
+      throw new Error("Tylko moderator lub admin może zablokować funkcje organizatora.");
+    }
+
+    const user = findUser(store, userId);
+    if (!user) {
+      throw new Error("Nie znaleziono użytkownika.");
+    }
+
+    if (!user.organizerProfileId) {
+      throw new Error("To konto nie ma profilu organizatora.");
+    }
+
+    user.organizerFunctionsBlockedAt = blocked ? nowIso() : undefined;
+    user.organizerFunctionsBlockedByUserId = blocked ? currentUser.id : undefined;
   });
 }
 
@@ -2672,6 +2999,9 @@ export async function updateAppSettings(input: AppSettings) {
     store.appSettings = {
       signupPhotoMode: input.signupPhotoMode,
       enrollmentPhotoMode: input.enrollmentPhotoMode,
+      defaultNotificationSettings: normalizeNotificationSettings(
+        input.defaultNotificationSettings,
+      ),
     };
   });
 }

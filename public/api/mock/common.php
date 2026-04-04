@@ -12,7 +12,17 @@ function mock_seed_path(): string
 
 function mock_runtime_path(): string
 {
-    return __DIR__ . '/../../mock-data/runtime-store.json';
+    $configured = getenv('EMANDAR_RUNTIME_STORE_PATH');
+    if (is_string($configured) && trim($configured) !== '') {
+        return trim($configured);
+    }
+
+    $productionDirectory = '/opt/panel.ceo/emandar-data';
+    if (is_dir($productionDirectory)) {
+        return $productionDirectory . '/runtime-store.json';
+    }
+
+    return dirname(__DIR__, 3) . '/.local-state/emandar/runtime-store.json';
 }
 
 function mock_read_json_file(string $path): array
@@ -28,20 +38,6 @@ function mock_read_json_file(string $path): array
 
     $decoded = json_decode($json, true);
     return is_array($decoded) ? $decoded : [];
-}
-
-function mock_current_store_payload(): array
-{
-    $runtimePath = mock_runtime_path();
-    $seedPath = mock_seed_path();
-    $activePath = is_file($runtimePath) ? $runtimePath : $seedPath;
-    $store = mock_read_json_file($activePath);
-    $version = is_file($activePath) ? (filemtime($activePath) ?: time()) : time();
-
-    return [
-        'store' => $store,
-        'version' => $version,
-    ];
 }
 
 function mock_request_body(): array
@@ -75,4 +71,20 @@ function mock_write_store(array $store): array
         'store' => $store,
         'version' => filemtime($runtimePath) ?: time(),
     ];
+}
+
+function mock_current_store_payload(): array
+{
+    $runtimePath = mock_runtime_path();
+    $runtimeStore = mock_read_json_file($runtimePath);
+
+    if ($runtimeStore !== []) {
+        return [
+            'store' => $runtimeStore,
+            'version' => is_file($runtimePath) ? (filemtime($runtimePath) ?: time()) : time(),
+        ];
+    }
+
+    $seed = mock_read_json_file(mock_seed_path());
+    return mock_write_store($seed);
 }

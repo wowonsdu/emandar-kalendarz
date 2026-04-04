@@ -1,4 +1,4 @@
-export type AppRole = "admin" | "trainer" | "organizer" | "participant";
+export type AppRole = "admin" | "trainer" | "organizer" | "participant" | "moderator";
 
 export type UserStatus = "active" | "invited";
 export type RelationStatus = "pending" | "approved" | "rejected" | "detached";
@@ -47,6 +47,14 @@ export type PhotoMode = "required" | "optional" | "disabled";
 export type TrainerSharedSlotSource = "manual" | "ical-derived";
 export type TrainerSharedSlotStatus = "active" | "archived";
 
+export interface AvatarCropSettings {
+  sourceWidth: number;
+  sourceHeight: number;
+  zoom: number;
+  panX: number;
+  panY: number;
+}
+
 export interface NotificationSettings {
   reminderLeadDays: number;
   sendToTrainer: boolean;
@@ -62,7 +70,7 @@ export interface AppUser {
   role: AppRole;
   roles: AppRole[];
   primaryRole: AppRole;
-  pendingRoles?: Array<Exclude<AppRole, "admin" | "participant">>;
+  pendingRoles?: Array<Exclude<AppRole, "admin" | "participant" | "moderator">>;
   accountApprovalStatus?: AccountApprovalStatus;
   selectedTrainerIds?: string[];
   approvedTrainerIds?: string[];
@@ -75,12 +83,18 @@ export interface AppUser {
   phone: string;
   avatarUrl?: string;
   avatarPath?: string;
+  avatarCrop?: AvatarCropSettings;
+  notificationSettings?: NotificationSettings;
   authProvider?: "phone" | "password";
   phoneVerifiedAt?: string;
+  trainingDataConsentAccepted?: boolean;
+  trainingDataConsentAcceptedAt?: string;
   status: UserStatus;
   trainerProfileId?: string;
   organizerProfileId?: string;
   participantProfileId?: string;
+  organizerFunctionsBlockedAt?: string;
+  organizerFunctionsBlockedByUserId?: string;
   createdAt?: string;
   password?: string;
 }
@@ -98,6 +112,7 @@ export interface TrainerProfile {
   heroNote: string;
   avatarUrl?: string;
   avatarPath?: string;
+  avatarCrop?: AvatarCropSettings;
   avatarUploadedAt?: string;
   brandStatus: EmandarBrandStatus;
   authorizationCode?: string;
@@ -131,6 +146,7 @@ export interface ParticipantProfile {
   referralSource?: string;
   avatarUrl?: string;
   avatarPath?: string;
+  avatarCrop?: AvatarCropSettings;
   confirmationStatus: ParticipantProfileConfirmationStatus;
   status: ParticipantProfileStatus;
   managerOrganizerIds?: string[];
@@ -526,6 +542,7 @@ export interface TrainerAccountApproval {
 export interface AppSettings {
   signupPhotoMode: PhotoMode;
   enrollmentPhotoMode: PhotoMode;
+  defaultNotificationSettings?: NotificationSettings;
 }
 
 export interface DemoStore {
@@ -574,11 +591,17 @@ export interface AccountRequestInput {
   avatarFile?: File | null;
 }
 
+export interface ParticipantRegistrationInput {
+  displayName: string;
+  phone: string;
+  notes: string;
+  avatarFile?: File | null;
+  trainingDataConsentAccepted: boolean;
+}
+
 export interface ParticipantOnboardingInput {
   displayName: string;
-  requestedRoles: Array<Exclude<AppRole, "admin" | "trainer">>;
   notes?: string;
-  organizerTrainingIntent?: string;
   selectedTrainerIds: string[];
   avatarFile?: File | null;
 }
@@ -588,6 +611,7 @@ export interface ParticipantProfileUpdateInput {
   referralSource?: string;
   notes?: string;
   avatarFile?: File | null;
+  avatarCrop?: AvatarCropSettings;
 }
 
 export interface OrganizerParticipantProfileInput {
@@ -762,6 +786,7 @@ export interface TrainerProfileUpdateInput {
   locations: string[];
   authorizationCode?: string;
   avatarFile?: File | null;
+  avatarCrop?: AvatarCropSettings;
 }
 
 export interface OrganizerProfileUpdateInput {
@@ -796,8 +821,11 @@ export interface TrainingEventManagementUpdateInput {
   status: TrainingEventStatus;
   capacity: number;
   minimumParticipants: number;
+  confirmationLeadTimeDays?: number;
   title?: string;
   location?: string;
+  summary?: string;
+  description?: string;
   tags?: string[];
   eventImages?: TrainingEventImage[];
   useEventImageAsCover?: boolean;

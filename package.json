@@ -6,6 +6,8 @@
   "scripts": {
     "build": "node ./node_modules/vite/bin/vite.js build",
     "dev": "node ./node_modules/vite/bin/vite.js",
+    "mock:reset": "node ./scripts/mock-reset.mjs",
+    "mock:seed:from-runtime": "node ./scripts/mock-seed-from-runtime.mjs",
     "release:check": "npm run test && npm run build",
     "test": "node ./node_modules/vitest/vitest.mjs run src"
   },

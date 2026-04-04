@@ -1,17 +1,56 @@
 # Local Runbook
 
 - This branch runs on the built-in mock JSON backend under `public/mock-data` and `public/api/mock`.
+- `public/mock-data/seed-store.json` is the repo-tracked bootstrap seed only.
+- Runtime app state must persist in a separate simulated database file, not back into the seed:
+  - local dev: `.local-state/emandar/runtime-store.json`
+  - production: `/opt/panel.ceo/emandar-data/runtime-store.json`
+- Normal browsing, editing, moderation, deletes, and config changes must write only to the runtime store.
+- Use `npm run mock:reset` only when an explicit reseed is requested. That command overwrites local runtime state from the current seed.
+- When promoting current local runtime back into `public/mock-data/seed-store.json`, use `npm run mock:seed:from-runtime`.
+- That export must preserve seeded trainer profiles and trainer-linked user records from the current seed, so demo reseeds do not overwrite trainer bios, avatars, sort order, or other curated trainer data.
 - Use `npm run dev` for local work, `npm test` for unit tests, and `npm run build` before deploy.
+
+## Project Context
+
+- This project is a training and events management system for Emandar.
+- The system covers:
+  - official `Szkolenia Emandar`
+  - `Wydarzenia społeczności`
+  - groups
+  - trainer-organizer relations
+  - participant enrollments and follow-up communication
+- The role model is hierarchical and cumulative, not flat:
+  - `participant` is the base role
+  - `moderator` is an additional moderation capability that can be granted by admin to any participant-level account without moving it up the organizer/trainer/admin hierarchy
+  - `organizer` includes everything from `participant` and adds organizer capabilities
+  - `trainer` includes everything from `participant` and `organizer` and adds trainer capabilities
+  - `admin` includes everything from lower roles and adds full administration capabilities
+- Higher roles must retain all lower-role capabilities. Do not model the UI as mutually exclusive role silos.
+- `moderator` is not a linear hierarchy step. Treat it as participant baseline plus event moderation capabilities:
+  - review community events
+  - browse official Emandar trainings
+  - unpublish official/community events
+  - delete official/community events permanently
+  - block organizer functions on a user account without detaching trainer relations
+- `Wydarzenia społeczności` are part of the base participant flow, so they remain available to organizer, trainer, and admin as inherited participant capabilities.
+- `Szkolenia Emandar`, groups, and trainer-organizer coordination are organizer/trainer/admin extensions on top of the participant layer.
+- Trainers can additionally organize their own official Emandar trainings and their own community events.
+- Admin is the top-level role with full access plus moderation and trainer/system management.
+- When changing permissions, navigation, or views, prefer cumulative capability logic over direct `role === ...` branching.
 
 ## Production web deploy
 
 - Preferred public web target for this repo is `https://panel.ceo/emandar/`.
 - Live files for that path are served from `/opt/panel.ceo/emandar` on `root@51.68.143.29`.
+- Persistent mock runtime data for that app must live outside the deployed build at `/opt/panel.ceo/emandar-data/runtime-store.json`.
 - Before replacing live files, create a timestamped backup next to the app directory, for example `/opt/panel.ceo/emandar-backup-YYYYMMDD-HHMMSS`.
 - Standard deploy flow for the static frontend:
   1. Run `npm run build`
   2. Copy `dist/` to `root@51.68.143.29:/opt/panel.ceo/emandar/` with `rsync -az --delete`
-  3. Verify `https://panel.ceo/emandar/` and the current hashed asset URL both return `200`
+  3. Never overwrite or delete `/opt/panel.ceo/emandar-data/runtime-store.json` during deploy
+  4. If a full reseed is explicitly requested, overwrite the runtime store from the current seed and then continue configuration through the browser
+  5. Verify `https://panel.ceo/emandar/` and the current hashed asset URL both return `200`
 
 ## Backend reference
 

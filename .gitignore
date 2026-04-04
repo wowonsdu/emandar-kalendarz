@@ -8,3 +8,7 @@ dist/
 run-once.log
 .logs/
 public/demo-ical/
+.local-state/
+.playwright-mcp/
+artifacts/
+test-results/

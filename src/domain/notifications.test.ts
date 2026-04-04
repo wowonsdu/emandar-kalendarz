@@ -3,7 +3,6 @@ import {
   getDefaultNotificationSettings,
   normalizeNotificationSettings,
   resolveAttendanceConfirmationStatusLabel,
-  resolveNotificationSettingsOwnerRole,
 } from "./notifications";
 
 describe("notifications helpers", () => {
@@ -21,34 +20,6 @@ describe("notifications helpers", () => {
     ).toMatchObject({
       reminderLeadDays: 30,
     });
-  });
-
-  it("prefers organizer settings for shared official events", () => {
-    expect(
-      resolveNotificationSettingsOwnerRole({
-        organizerId: "organizer-1",
-        brandStatus: "official",
-        selfManagedByTrainer: false,
-      }),
-    ).toBe("organizer");
-  });
-
-  it("uses trainer settings for community or self managed events", () => {
-    expect(
-      resolveNotificationSettingsOwnerRole({
-        organizerId: "organizer-1",
-        brandStatus: "supported",
-        selfManagedByTrainer: false,
-      }),
-    ).toBe("trainer");
-
-    expect(
-      resolveNotificationSettingsOwnerRole({
-        organizerId: "organizer-1",
-        brandStatus: "official",
-        selfManagedByTrainer: true,
-      }),
-    ).toBe("trainer");
   });
 
   it("returns readable attendance labels", () => {

@@ -1,9 +1,12 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type FormEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import {
@@ -11,7 +14,6 @@ import {
   CalendarDays,
   Check,
   ImagePlus,
-  Link2,
   Phone,
   Plus,
   RefreshCcw,
@@ -33,6 +35,7 @@ import {
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { useAppState } from "../providers/AppProviders";
+import { CommunityEventCard } from "@/app/components/community-event-card";
 import {
   OrganizerCalendarFeedsPanel,
   OrganizerGoogleCalendarExportPanel,
@@ -44,25 +47,36 @@ import {
   type OrganizerTrainingDraftListItem,
   TrainerAvailabilityWorkspace,
 } from "@/app/components/panel";
-import { resolveAttendanceConfirmationStatusLabel } from "@/domain/notifications";
+import { AvatarMedia } from "@/app/components/avatar-media";
+import {
+  NOTIFICATION_TEMPLATE_PLACEHOLDERS,
+  normalizeNotificationSettings,
+  resolveAttendanceConfirmationStatusLabel,
+} from "@/domain/notifications";
 import {
   aggregateEventCapacityStats,
   buildTrainerFreeDaySlices,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
+  canModerateTrainingEvent,
+  canUseOrganizerFunctions,
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  getHighestRole,
   getParticipantEnrollmentStatusLabel,
   getRoleLabel,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventStatusLabel,
+  hasModeratorAccess,
+  hasInheritedRole,
   isParticipantEnrollmentActive,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
   isCommunityBrandStatus,
+  isOrganizerFunctionsBlocked,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainerCollaborationStatus,
@@ -73,6 +87,7 @@ import {
   sortTrainerProfiles,
 } from "@/domain/utils";
 import type {
+  AvatarCropSettings,
   EmandarBrandStatus,
   EnrollmentFinalStatus,
   EnrollmentRequest,
@@ -144,6 +159,136 @@ const FREE_SLICE_BUCKETS = [
   "3-days",
   "4-plus-days",
 ] as const satisfies TrainerFreeDaySliceBucket[];
+
+const PROFILE_AVATAR_ASPECT_RATIO = 4 / 5;
+
+type AvatarCropDraft = {
+  file: File | null;
+  previewUrl: string | null;
+  revokePreviewUrl: boolean;
+  naturalWidth: number;
+  naturalHeight: number;
+  zoom: number;
+  panX: number;
+  panY: number;
+};
+
+type AvatarCropDragState = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPanX: number;
+  startPanY: number;
+};
+
+type AvatarCropPinchState = {
+  startDistance: number;
+  startZoom: number;
+  startCenterX: number;
+  startCenterY: number;
+  startPanX: number;
+  startPanY: number;
+};
+
+function createEmptyAvatarCropDraft(): AvatarCropDraft {
+  return {
+    file: null,
+    previewUrl: null,
+    revokePreviewUrl: false,
+    naturalWidth: 0,
+    naturalHeight: 0,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+  };
+}
+
+function clampAvatarPan(value: number) {
+  return Math.max(-100, Math.min(100, value));
+}
+
+function getAvatarCoverPlacement(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+  zoom: number,
+  panX: number,
+  panY: number,
+) {
+  const safeSourceWidth = Math.max(sourceWidth, 1);
+  const safeSourceHeight = Math.max(sourceHeight, 1);
+  const safeZoom = Math.max(1, zoom);
+  const baseScale = Math.max(targetWidth / safeSourceWidth, targetHeight / safeSourceHeight);
+  const drawWidth = safeSourceWidth * baseScale * safeZoom;
+  const drawHeight = safeSourceHeight * baseScale * safeZoom;
+  const overflowX = Math.max(drawWidth - targetWidth, 0);
+  const overflowY = Math.max(drawHeight - targetHeight, 0);
+  const left = (targetWidth - drawWidth) / 2 + (clampAvatarPan(panX) / 100) * (overflowX / 2);
+  const top = (targetHeight - drawHeight) / 2 + (clampAvatarPan(panY) / 100) * (overflowY / 2);
+
+  return {
+    drawWidth,
+    drawHeight,
+    left,
+    top,
+  };
+}
+
+function getAvatarCropPreviewStyle(draft: AvatarCropDraft): CSSProperties | undefined {
+  if (!draft.previewUrl || !draft.naturalWidth || !draft.naturalHeight) {
+    return undefined;
+  }
+
+  const previewFrameWidth = 100;
+  const previewFrameHeight = previewFrameWidth / PROFILE_AVATAR_ASPECT_RATIO;
+  const placement = getAvatarCoverPlacement(
+    draft.naturalWidth,
+    draft.naturalHeight,
+    previewFrameWidth,
+    previewFrameHeight,
+    draft.zoom,
+    draft.panX,
+    draft.panY,
+  );
+
+  return {
+    position: "absolute",
+    width: `${placement.drawWidth}%`,
+    height: `${(placement.drawHeight / previewFrameHeight) * 100}%`,
+    left: `${placement.left}%`,
+    top: `${(placement.top / previewFrameHeight) * 100}%`,
+    maxWidth: "none",
+  };
+}
+
+async function readImageDimensions(previewUrl: string) {
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      resolve({
+        width: image.naturalWidth || image.width,
+        height: image.naturalHeight || image.height,
+      });
+    };
+    image.onerror = () => reject(new Error("Nie udało się odczytać zdjęcia."));
+    image.src = previewUrl;
+  });
+}
+
+function buildAvatarCropSettings(draft: AvatarCropDraft): AvatarCropSettings | undefined {
+  if (!draft.previewUrl || !draft.naturalWidth || !draft.naturalHeight) {
+    return undefined;
+  }
+
+  return {
+    sourceWidth: draft.naturalWidth,
+    sourceHeight: draft.naturalHeight,
+    zoom: draft.zoom,
+    panX: draft.panX,
+    panY: draft.panY,
+  };
+}
 
 function getAvailabilityHorizonEnd() {
   const end = new Date();
@@ -236,7 +381,39 @@ type TrainingEventFormState = {
   location: string;
   capacity: string;
   minimumParticipants: string;
+  confirmationLeadTimeDays: string;
   isPublished: boolean;
+};
+
+type EventManagementSettingsDraft = {
+  status: TrainingEventStatus;
+  capacity: string;
+  minimumParticipants: string;
+  confirmationLeadTimeDays: string;
+  title: string;
+  location: string;
+  eventImages: TrainingEventImage[];
+  useEventImageAsCover: boolean;
+  enrollmentPhotoRequirement: "default" | "required" | "optional";
+  tags: string;
+  firstDayDate: string;
+  scheduleDays: ScheduleDayDraft[];
+};
+
+type CommunityEventEditorValues = {
+  status: TrainingEventStatus;
+  capacity: string;
+  minimumParticipants: string;
+  confirmationLeadTimeDays: string;
+  title: string;
+  location: string;
+  eventImages: TrainingEventImage[];
+  useEventImageAsCover: boolean;
+  tags: string;
+  summary: string;
+  description: string;
+  firstDayDate: string;
+  scheduleDays: ScheduleDayDraft[];
 };
 
 function createEmptyGroupFormState(trainerId = ""): GroupFormState {
@@ -271,6 +448,7 @@ function createEmptyTrainingEventFormState(): TrainingEventFormState {
     location: "",
     capacity: "20",
     minimumParticipants: "10",
+    confirmationLeadTimeDays: "5",
     isPublished: true,
   };
 }
@@ -312,6 +490,16 @@ function getGroupPriorityLabel(priority: GroupMemberPriority) {
 
 function getGroupEventTypeLabel(eventType: GroupEventType) {
   return eventType === "post" ? "Post" : "Szkolenie";
+}
+
+function sortGroupsByStatusAndName(groups: Group[]) {
+  return [...groups].sort((left, right) => {
+    if (left.status !== right.status) {
+      return left.status === "active" ? -1 : 1;
+    }
+
+    return left.name.localeCompare(right.name, "pl");
+  });
 }
 
 const GROUP_PRIORITY_ORDER: Record<GroupMemberPriority, number> = {
@@ -627,6 +815,124 @@ function getScheduleDraftsFromEvent(event: TrainingEvent) {
   };
 }
 
+function getCommunityModerationStatusLabel(
+  status: TrainingEvent["publicationApprovalStatus"],
+) {
+  if (status === "accepted") {
+    return "Moderacja zaakceptowana";
+  }
+
+  if (status === "rejected") {
+    return "Moderacja odrzucona";
+  }
+
+  return "Czeka na moderację";
+}
+
+function getCommunityPublicationVisibilityLabel(event: Pick<TrainingEvent, "isPublished">) {
+  return event.isPublished ? "Opublikowane" : "Ukryte";
+}
+
+function getCommunityStatusRowItems(event: TrainingEvent) {
+  return [
+    {
+      label: "Publikacja",
+      value: getCommunityPublicationVisibilityLabel(event),
+    },
+    {
+      label: "Moderacja",
+      value: getCommunityModerationStatusLabel(event.publicationApprovalStatus),
+    },
+    {
+      label: "Status",
+      value: getEventLifecycleLabel(event),
+    },
+  ];
+}
+
+function getCommunityEventEditorValuesFromTrainingForm(
+  form: TrainingEventFormState,
+): CommunityEventEditorValues {
+  return {
+    status: form.status,
+    capacity: form.capacity,
+    minimumParticipants: form.minimumParticipants,
+    confirmationLeadTimeDays: form.confirmationLeadTimeDays,
+    title: form.title,
+    location: form.location,
+    eventImages: form.eventImages,
+    useEventImageAsCover: form.useEventImageAsCover,
+    tags: form.tags,
+    summary: form.summary,
+    description: form.description,
+    firstDayDate: form.firstDayDate,
+    scheduleDays: form.scheduleDays,
+  };
+}
+
+function applyCommunityEventEditorValuesToTrainingForm(
+  form: TrainingEventFormState,
+  values: CommunityEventEditorValues,
+): TrainingEventFormState {
+  return {
+    ...form,
+    status: values.status,
+    capacity: values.capacity,
+    minimumParticipants: values.minimumParticipants,
+    confirmationLeadTimeDays: values.confirmationLeadTimeDays,
+    title: values.title,
+    location: values.location,
+    eventImages: values.eventImages,
+    useEventImageAsCover: values.useEventImageAsCover,
+    tags: values.tags,
+    summary: values.summary,
+    description: values.description,
+    firstDayDate: values.firstDayDate,
+    scheduleDays: values.scheduleDays,
+  };
+}
+
+function getCommunityEventEditorValuesFromManagementDraft(
+  draft: EventManagementSettingsDraft,
+  event: TrainingEvent,
+): CommunityEventEditorValues {
+  return {
+    status: draft.status,
+    capacity: draft.capacity,
+    minimumParticipants: draft.minimumParticipants,
+    confirmationLeadTimeDays: draft.confirmationLeadTimeDays,
+    title: draft.title,
+    location: draft.location,
+    eventImages: draft.eventImages,
+    useEventImageAsCover: draft.useEventImageAsCover,
+    tags: draft.tags,
+    summary: event.summary,
+    description: event.description,
+    firstDayDate: draft.firstDayDate,
+    scheduleDays: draft.scheduleDays,
+  };
+}
+
+function applyCommunityEventEditorValuesToManagementDraft(
+  draft: EventManagementSettingsDraft,
+  values: CommunityEventEditorValues,
+): EventManagementSettingsDraft {
+  return {
+    ...draft,
+    status: values.status,
+    capacity: values.capacity,
+    minimumParticipants: values.minimumParticipants,
+    confirmationLeadTimeDays: values.confirmationLeadTimeDays,
+    title: values.title,
+    location: values.location,
+    eventImages: values.eventImages,
+    useEventImageAsCover: values.useEventImageAsCover,
+    tags: values.tags,
+    firstDayDate: values.firstDayDate,
+    scheduleDays: values.scheduleDays,
+  };
+}
+
 function getPanelScheduleRangeLabel(event: TrainingEvent) {
   const bounds = getTrainingEventScheduleBounds(event);
 
@@ -919,7 +1225,7 @@ function ParticipantContactBlock({
       <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
         {title}
       </p>
-      <p className="mt-2 text-lg font-semibold text-brand-navy">
+      <p className="mt-2 break-words text-lg font-semibold text-brand-navy">
         {name ?? fallback}
       </p>
       <p className="mt-1 text-sm text-brand-muted">
@@ -957,7 +1263,7 @@ function ParticipantEnrollmentCard({
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
             {record.event.title}
           </p>
-          <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
+          <h3 className="mt-2 break-words text-2xl font-semibold text-brand-navy">
             {getPanelScheduleRangeLabel(record.event)}
           </h3>
           <p className="mt-2 text-brand-muted">{record.event.summary}</p>
@@ -996,7 +1302,7 @@ function ParticipantEnrollmentCard({
 
       {canManage && (
         <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4">
-          <div className="flex flex-wrap gap-3">
+          <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
             <button
               type="button"
               disabled={submittingAction !== null}
@@ -1017,18 +1323,18 @@ function ParticipantEnrollmentCard({
                   setSubmittingAction(null);
                 }
               }}
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:w-auto"
             >
               <Trash2 size={16} />
               Zrezygnuj
             </button>
 
             {transferOptions.length > 0 && (
-              <>
+              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <select
                   value={transferTargetEventId}
                   onChange={(event) => setTransferTargetEventId(event.target.value)}
-                  className="rounded-full border border-brand-line bg-white px-4 py-3 text-sm text-brand-navy outline-none"
+                  className="min-w-0 w-full max-w-full rounded-full border border-brand-line bg-white px-4 py-3 text-sm text-brand-navy outline-none"
                 >
                   {transferOptions.map((event) => (
                     <option key={event.id} value={event.id}>
@@ -1058,12 +1364,12 @@ function ParticipantEnrollmentCard({
                       setSubmittingAction(null);
                     }
                   }}
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto"
                 >
                   <RefreshCcw size={16} />
                   Przenieś na inne szkolenie
                 </button>
-              </>
+              </div>
             )}
           </div>
         </div>
@@ -1104,7 +1410,9 @@ function ParticipantGroupEventCard({
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
             {record.group?.name ?? record.event.groupName ?? "Grupa Emandar"}
           </p>
-          <h3 className="mt-2 text-2xl font-semibold text-brand-navy">{record.event.title}</h3>
+          <h3 className="mt-2 break-words text-2xl font-semibold text-brand-navy">
+            {record.event.title}
+          </h3>
           <p className="mt-2 text-brand-muted">{record.event.summary}</p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -1147,7 +1455,7 @@ function ParticipantGroupEventCard({
       </div>
 
       {canCancelParticipation ? (
-        <div className="mt-5 flex flex-wrap gap-3">
+        <div className="mt-5 grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
           <button
             type="button"
             disabled={submittingAction !== null}
@@ -1170,18 +1478,18 @@ function ParticipantGroupEventCard({
                 setSubmittingAction(null);
               }
             }}
-            className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:w-auto"
           >
             <X size={16} />
             {submittingAction === "cancel" ? "Rezygnowanie..." : "Zrezygnuj z udziału"}
           </button>
 
           {canTransferParticipation ? (
-            <>
+            <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
               <select
                 value={transferTargetEventId}
                 onChange={(event) => setTransferTargetEventId(event.target.value)}
-                className="rounded-full border border-brand-line bg-white px-4 py-3 text-sm text-brand-navy outline-none"
+                className="min-w-0 w-full max-w-full rounded-full border border-brand-line bg-white px-4 py-3 text-sm text-brand-navy outline-none"
               >
                 {transferOptions.map((event) => (
                   <option key={event.id} value={event.id}>
@@ -1211,14 +1519,14 @@ function ParticipantGroupEventCard({
                     setSubmittingAction(null);
                   }
                 }}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto"
               >
                 <RefreshCcw size={16} />
                 {submittingAction === "transfer"
                   ? "Przenoszenie..."
                   : "Przenieś na inne wydarzenie"}
               </button>
-            </>
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -1232,11 +1540,6 @@ function ParticipantOnboardingCard() {
   const [form, setForm] = useState({
     displayName: currentUser?.displayName ?? "",
     selectedTrainerIds: currentUser?.selectedTrainerIds ?? [],
-    requestedRoles: [
-      "participant",
-      ...((currentUser?.pendingRoles ?? []).includes("organizer") ? (["organizer"] as const) : []),
-    ] as Array<"participant" | "organizer">,
-    organizerTrainingIntent: "",
     notes: "",
     avatarFile: null as File | null,
   });
@@ -1268,9 +1571,7 @@ function ParticipantOnboardingCard() {
     try {
       await completeParticipantOnboarding({
         displayName: form.displayName,
-        requestedRoles: form.requestedRoles,
         selectedTrainerIds: form.selectedTrainerIds,
-        organizerTrainingIntent: form.organizerTrainingIntent,
         notes: form.notes,
         avatarFile: form.avatarFile,
       });
@@ -1288,7 +1589,7 @@ function ParticipantOnboardingCard() {
     <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
       <SectionBlockHeading
         title="Uzupełnij profil"
-        description="Po potwierdzeniu numeru masz już konto uczestnika. Tutaj dopinasz trenerów, do których chodzisz na grupy, i ewentualnie prosisz o rolę organizatora."
+        description="Po potwierdzeniu numeru masz już konto uczestnika. Tutaj uzupełniasz profil i zaznaczasz trenerów, do których już chodzisz na grupy."
       />
       <form onSubmit={handleSubmit} className="mt-5 grid gap-5">
         <label className="grid gap-2">
@@ -1304,7 +1605,7 @@ function ParticipantOnboardingCard() {
         </label>
 
         <div className="grid gap-3 rounded-[2rem] border border-brand-line bg-brand-shell p-4 text-brand-navy">
-          <label className="flex items-start gap-3">
+          <div className="flex items-start gap-3">
             <input
               type="checkbox"
               checked
@@ -1314,54 +1615,19 @@ function ParticipantOnboardingCard() {
             <span className="grid gap-1">
               <span className="text-sm font-semibold">Uczestnik</span>
               <span className="text-sm text-brand-muted">
-                To konto już działa jako uczestnik i ma dostęp do Mojej przestrzeni.
+                To konto działa jako uczestnik. Dostęp organizatora aktywujesz później z menu
+                Organizator Emandar po wpisaniu kodu trenera.
               </span>
             </span>
-          </label>
-          <label className="flex items-start gap-3">
-            <input
-              type="checkbox"
-              checked={form.requestedRoles.includes("organizer")}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  requestedRoles: event.target.checked
-                    ? Array.from(new Set([...current.requestedRoles, "organizer"]))
-                    : current.requestedRoles.filter((role) => role !== "organizer"),
-                  organizerTrainingIntent:
-                    event.target.checked ? current.organizerTrainingIntent : "",
-                }))
-              }
-              className="mt-1 h-4 w-4 rounded border border-brand-line accent-brand-navy"
-            />
-            <span className="grid gap-1">
-              <span className="text-sm font-semibold">Organizator Grup Emandar</span>
-              <span className="text-sm text-brand-muted">
-                Ta rola przejdzie normalny flow akceptacji po stronie trenerów.
-              </span>
-            </span>
-          </label>
+          </div>
+          <Link
+            to="/panel/relacje"
+            className="inline-flex items-center gap-2 self-start rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy"
+          >
+            <Users size={16} />
+            Organizator Emandar
+          </Link>
         </div>
-
-        {form.requestedRoles.includes("organizer") && (
-          <label className="grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">
-              Jakie szkolenia chcesz organizować?
-            </span>
-            <textarea
-              required
-              rows={4}
-              value={form.organizerTrainingIntent}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  organizerTrainingIntent: event.target.value,
-                }))
-              }
-              className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-          </label>
-        )}
 
         <label className="grid gap-2">
           <span className="text-sm font-semibold text-brand-navy">
@@ -1532,17 +1798,19 @@ function PhotoModeSegmentedControl({
   disabled?: boolean;
 }) {
   return (
-    <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-brand-line bg-white p-1 shadow-soft">
-      {photoModeOptions.map((option) => (
+    <div className="grid w-full min-w-0 grid-cols-2 gap-2 rounded-[1.75rem] border border-brand-line bg-white p-1.5 shadow-soft sm:inline-flex sm:w-auto sm:flex-wrap sm:items-center">
+      {photoModeOptions.map((option, index) => (
         <button
           key={option.value}
           type="button"
           disabled={disabled}
           onClick={() => onChange(option.value)}
-          className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] transition sm:text-sm ${
+          className={`inline-flex min-w-0 items-center justify-center rounded-full px-4 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] whitespace-nowrap transition sm:px-4 sm:py-2 sm:text-sm sm:tracking-[0.16em] ${
+            index === photoModeOptions.length - 1 ? "col-span-2 sm:col-span-1" : ""
+          } ${
             value === option.value
-              ? "bg-brand-navy text-white"
-              : "text-brand-muted hover:text-brand-navy"
+              ? "bg-brand-navy text-white shadow-soft"
+              : "bg-brand-shell/35 text-brand-muted hover:bg-brand-shell hover:text-brand-navy"
           } disabled:cursor-not-allowed disabled:opacity-60`}
         >
           {option.label}
@@ -1588,33 +1856,32 @@ function CollaborationActionBar({
 }
 
 function PanelSection({
-  eyebrow,
+  eyebrow: _eyebrow,
   title,
   description,
   action,
+  showLeadText = true,
   children,
 }: {
   eyebrow?: string;
   title: string;
   description?: string;
   action?: ReactNode;
+  showLeadText?: boolean;
   children: ReactNode;
 }) {
-  const leadText = description ?? title;
-
   return (
     <section className="space-y-4 sm:space-y-5">
       <div className="flex flex-col gap-2.5 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          {eyebrow ? (
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-sky-deep sm:text-sm sm:tracking-[0.3em]">
-              {eyebrow}
+          <h2 className="break-words text-xl font-medium leading-snug text-brand-navy sm:text-2xl">
+            {title}
+          </h2>
+          {showLeadText && description ? (
+            <p className="mt-2 max-w-3xl break-words text-sm text-brand-muted sm:text-base">
+              {description}
             </p>
           ) : null}
-          <h2 className="sr-only">{title}</h2>
-          <p className="mt-1 max-w-3xl text-xl font-medium leading-snug text-brand-navy sm:mt-1.5 sm:text-2xl">
-            {leadText}
-          </p>
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
       </div>
@@ -1638,7 +1905,7 @@ function StatCard({
         <Icon size={18} />
       </div>
       <div className="min-w-0">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-muted sm:mt-4 sm:text-sm sm:tracking-[0.2em]">
+        <p className="break-words text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:mt-4 sm:text-sm sm:tracking-[0.2em]">
           {label}
         </p>
         <p className="mt-1 text-3xl font-semibold leading-none text-brand-navy sm:mt-2 sm:text-4xl">{value}</p>
@@ -1676,7 +1943,7 @@ function SectionBlockHeading({
   return (
     <div>
       {title ? (
-        <h3 className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">{title}</h3>
+        <h3 className="break-words text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">{title}</h3>
       ) : null}
       {description ? <p className="mt-2 text-sm text-brand-muted">{description}</p> : null}
     </div>
@@ -1684,40 +1951,49 @@ function SectionBlockHeading({
 }
 
 function EventScopeSwitch({
+  title,
   activeScope,
-  allLabel,
-  mineLabel,
+  joinedLabel,
+  ownedLabel,
   onChange,
 }: {
+  title?: string;
   activeScope: "all" | "mine";
-  allLabel: string;
-  mineLabel: string;
+  joinedLabel: string;
+  ownedLabel: string;
   onChange: (scope: "all" | "mine") => void;
 }) {
   return (
-    <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-brand-line bg-white p-1 shadow-soft">
-      <button
-        type="button"
-        onClick={() => onChange("all")}
-        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-          activeScope === "all"
-            ? "bg-brand-navy text-white"
-            : "text-brand-muted hover:text-brand-navy"
-        }`}
-      >
-        {allLabel}
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange("mine")}
-        className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-          activeScope === "mine"
-            ? "bg-brand-navy text-white"
-            : "text-brand-muted hover:text-brand-navy"
-        }`}
-      >
-        {mineLabel}
-      </button>
+    <div className="w-full max-w-[28rem]">
+      {title ? (
+        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-brand-sky-deep">
+          {title}
+        </p>
+      ) : null}
+      <div className="grid grid-cols-2 gap-1 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft">
+        <button
+          type="button"
+          onClick={() => onChange("all")}
+          className={`min-w-0 rounded-[1.35rem] px-3 py-2.5 text-center text-sm font-semibold transition ${
+            activeScope === "all"
+              ? "bg-brand-navy text-white"
+              : "text-brand-muted hover:text-brand-navy"
+          }`}
+        >
+          {joinedLabel}
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange("mine")}
+          className={`min-w-0 rounded-[1.35rem] px-3 py-2.5 text-center text-sm font-semibold transition ${
+            activeScope === "mine"
+              ? "bg-brand-navy text-white"
+              : "text-brand-muted hover:text-brand-navy"
+          }`}
+        >
+          {ownedLabel}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1854,6 +2130,390 @@ function EventGalleryField({
           Nie dodano jeszcze zdjęć wydarzenia. Jeśli zostawisz tę sekcję pustą, publiczny widok pokaże zdjęcie gospodarza.
         </div>
       )}
+    </div>
+  );
+}
+
+function EventDetailScopeSwitch({
+  activeTab,
+  onChange,
+  requestCount,
+  participantCountLabel,
+}: {
+  activeTab: "requests" | "participants" | "edit";
+  onChange: (nextTab: "requests" | "participants" | "edit") => void;
+  requestCount: number;
+  participantCountLabel: string;
+}) {
+  const items = [
+    {
+      id: "requests" as const,
+      label: "Zgłoszenia",
+      badge: requestCount > 0 ? String(requestCount) : undefined,
+      icon: <Bell size={15} />,
+    },
+    {
+      id: "participants" as const,
+      label: "Uczestnicy",
+      badge: participantCountLabel,
+      icon: <Users size={15} />,
+    },
+    {
+      id: "edit" as const,
+      label: "Edycja wydarzenia",
+      badge: undefined,
+      icon: null,
+    },
+  ];
+
+  return (
+    <div className="w-full rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft">
+      <div className="grid gap-1 md:grid-cols-3">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onChange(item.id)}
+            className={`flex min-w-0 items-center justify-center gap-2 rounded-[1.35rem] px-3 py-2.5 text-center text-sm font-semibold transition ${
+              activeTab === item.id
+                ? "bg-brand-navy text-white"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+          >
+            {item.icon}
+            <span className="truncate">{item.label}</span>
+            {item.badge ? (
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                  activeTab === item.id
+                    ? "bg-white/18 text-white"
+                    : "bg-brand-shell text-brand-navy"
+                }`}
+              >
+                {item.badge}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CommunityEventEditorFields({
+  values,
+  disabled = false,
+  uploadingImages,
+  onChange,
+  onUploadImages,
+}: {
+  values: CommunityEventEditorValues;
+  disabled?: boolean;
+  uploadingImages: boolean;
+  onChange: (updater: (previous: CommunityEventEditorValues) => CommunityEventEditorValues) => void;
+  onUploadImages: (files: File[]) => Promise<void>;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Tytuł wydarzenia</span>
+        <input
+          required
+          disabled={disabled}
+          value={values.title}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              title: event.target.value,
+            }))
+          }
+          placeholder="np. Kajaki nad Bugiem"
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Lokalizacja</span>
+        <input
+          required
+          disabled={disabled}
+          value={values.location}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              location: event.target.value,
+            }))
+          }
+          placeholder="np. Warszawa, dolnośląskie"
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <label className="grid gap-2 xl:col-span-2">
+        <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
+        <select
+          disabled={disabled}
+          value={values.status}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              status: event.target.value as TrainingEventStatus,
+            }))
+          }
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        >
+          <option value="active">Aktywne</option>
+          <option value="confirmed">Potwierdzone zorganizowanie</option>
+          <option value="cancelled">Anulowane</option>
+        </select>
+      </label>
+
+      <label className="grid gap-2 xl:col-span-2">
+        <span className="text-sm font-semibold text-brand-navy">Krótka informacja o wydarzeniu</span>
+        <textarea
+          required
+          disabled={disabled}
+          rows={3}
+          maxLength={180}
+          value={values.summary}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              summary: event.target.value,
+            }))
+          }
+          className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <label className="grid gap-2 xl:col-span-2">
+        <span className="text-sm font-semibold text-brand-navy">Informacja do prośby o dołączenie</span>
+        <textarea
+          required
+          disabled={disabled}
+          rows={6}
+          value={values.description}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              description: event.target.value,
+            }))
+          }
+          className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+        <span className="text-sm text-brand-muted">
+          Ten tekst pokaże się osobie przed wysłaniem prośby o dołączenie.
+        </span>
+      </label>
+
+      <label className="grid gap-2 xl:col-span-2">
+        <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
+        <input
+          disabled={disabled}
+          value={values.tags}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              tags: event.target.value,
+            }))
+          }
+          placeholder="np. ognisko, pożywienie, nocleg, samodzielna kuchnia"
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+        <span className="text-sm text-brand-muted">
+          Oddziel tagi przecinkami. Pokażą się publicznie jako chmura tagów.
+        </span>
+      </label>
+
+      <div className="grid gap-2 xl:col-span-2">
+        <EventGalleryField
+          images={values.eventImages}
+          useEventImageAsCover={values.useEventImageAsCover}
+          uploading={uploadingImages}
+          disabled={disabled}
+          onUpload={onUploadImages}
+          onRemove={(imageId) =>
+            onChange((previous) => {
+              const nextImages = previous.eventImages.filter((image) => image.id !== imageId);
+              return {
+                ...previous,
+                eventImages: nextImages,
+                useEventImageAsCover: nextImages.length > 0 ? previous.useEventImageAsCover : false,
+              };
+            })
+          }
+          onToggleUseEventImageAsCover={(nextValue) =>
+            onChange((previous) => ({
+              ...previous,
+              useEventImageAsCover: nextValue && previous.eventImages.length > 0,
+            }))
+          }
+          onMakePrimary={(imageId) =>
+            onChange((previous) => ({
+              ...previous,
+              eventImages: moveEventImageToFront(previous.eventImages, imageId),
+            }))
+          }
+        />
+      </div>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Pierwszy dzień wydarzenia</span>
+        <input
+          required
+          disabled={disabled}
+          type="date"
+          value={values.firstDayDate}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              firstDayDate: event.target.value,
+            }))
+          }
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Liczba dni wydarzenia</span>
+        <input
+          required
+          disabled={disabled}
+          min={1}
+          type="number"
+          value={values.scheduleDays.length}
+          onChange={(event) => {
+            const nextDayCount = Math.max(1, Number(event.target.value) || 1);
+            onChange((previous) => ({
+              ...previous,
+              scheduleDays: resizeScheduleDayDrafts(nextDayCount, previous.scheduleDays),
+            }));
+          }}
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <div className="grid gap-4 xl:col-span-2 xl:grid-cols-4">
+        {values.scheduleDays.map((day, index) => {
+          const draftScheduleDays = buildScheduleDaysFromDrafts(
+            values.firstDayDate,
+            values.scheduleDays,
+          );
+
+          return (
+            <div
+              key={`community-editor-day-${index + 1}`}
+              className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+            >
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                  Dzień {index + 1}
+                </p>
+                <p className="text-sm text-brand-muted">
+                  {draftScheduleDays[index]?.startsAt
+                    ? formatDate(draftScheduleDays[index].startsAt)
+                    : "Wybierz pierwszy dzień"}
+                </p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Godzina startu</span>
+                  <input
+                    required
+                    disabled={disabled}
+                    type="time"
+                    value={day.startTime}
+                    onChange={(event) =>
+                      onChange((previous) => ({
+                        ...previous,
+                        scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, startTime: event.target.value } : item,
+                        ),
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Godzina końca</span>
+                  <input
+                    required
+                    disabled={disabled}
+                    type="time"
+                    value={day.endTime}
+                    onChange={(event) =>
+                      onChange((previous) => ({
+                        ...previous,
+                        scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, endTime: event.target.value } : item,
+                        ),
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+                  />
+                </label>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Limit miejsc</span>
+        <input
+          required
+          disabled={disabled}
+          min={1}
+          type="number"
+          value={values.capacity}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              capacity: event.target.value,
+            }))
+          }
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Próg potwierdzenia wydarzenia</span>
+        <input
+          required
+          disabled={disabled}
+          min={1}
+          type="number"
+          value={values.minimumParticipants}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              minimumParticipants: event.target.value,
+            }))
+          }
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">SMS potwierdzenia udziału</span>
+        <input
+          required
+          disabled={disabled}
+          min={0}
+          type="number"
+          value={values.confirmationLeadTimeDays}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              confirmationLeadTimeDays: event.target.value,
+            }))
+          }
+          className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+        <span className="text-sm text-brand-muted">
+          Ile dni przed wydarzeniem wysłać SMS z prośbą o potwierdzenie udziału.
+        </span>
+      </label>
     </div>
   );
 }
@@ -2213,60 +2873,57 @@ export function DashboardPage() {
     return null;
   }
 
-  if (currentUser.role === "participant") {
-    const participantRecords = getParticipantEnrollmentRecords(currentUser.id, store);
-    const participantGroupRecords = currentUser.participantProfileId
-      ? getParticipantGroupEventRecords(currentUser.participantProfileId, store)
-      : [];
-    const visibleLegacyRecords = participantRecords.filter(
-      (record) => !isSyncedGroupEnrollmentRecord(record),
-    );
-    const activeRecords = visibleLegacyRecords.filter((record) => !record.isArchived);
-    const archivedRecords = visibleLegacyRecords.filter((record) => record.isArchived);
-    const activeGroupRecords = participantGroupRecords.filter((record) => !record.isArchived);
-    const archivedGroupRecords = participantGroupRecords.filter((record) => record.isArchived);
-    const nextLegacyRecord = activeRecords[0];
-    const nextGroupRecord = activeGroupRecords[0];
-    const nextRecord =
-      !nextLegacyRecord
-        ? nextGroupRecord
-        : !nextGroupRecord
-          ? nextLegacyRecord
-          : new Date(nextGroupRecord.event.startsAt).getTime() <
-              new Date(nextLegacyRecord.event.startsAt).getTime()
-            ? nextGroupRecord
-            : nextLegacyRecord;
-    const needsAttentionCount =
-      activeRecords.filter(
-        (record) =>
-          record.request.finalStatus === "pending" || record.request.finalStatus === "partial",
-      ).length +
-      activeGroupRecords.filter((record) => record.eventParticipant.status === "invited").length;
-    const totalActiveCount = activeRecords.length + activeGroupRecords.length;
-    const totalArchivedCount = archivedRecords.length + archivedGroupRecords.length;
-    const upcomingGroupEvents = activeGroupRecords.slice(0, 5);
-    const upcomingLegacyEvents = activeRecords.slice(0, 5);
-    const nextRecordIsGroup =
-      Boolean(nextRecord) && "eventParticipant" in nextRecord;
-    const ownAccountApprovals = store.trainerAccountApprovals.filter(
-      (approval) => approval.requesterUserId === currentUser.id,
-    );
-    const shouldShowApprovalStatus =
-      currentUser.accountApprovalStatus === "pending" ||
-      currentUser.accountApprovalStatus === "rejected" ||
-      ownAccountApprovals.length > 0;
-
-    return (
-      <PanelSection
-        eyebrow={getRoleLabel(currentUser.role)}
-        title="Twoje szkolenia i najbliższe wydarzenia"
-        description="Tutaj widzisz wszystkie swoje zapisy, kontakt do zespołu prowadzącego oraz szybki skrót do archiwum uczestnictwa."
-      >
+  const participantRecords = getParticipantEnrollmentRecords(currentUser.id, store);
+  const participantGroupRecords = currentUser.participantProfileId
+    ? getParticipantGroupEventRecords(currentUser.participantProfileId, store)
+    : [];
+  const visibleLegacyRecords = participantRecords.filter(
+    (record) => !isSyncedGroupEnrollmentRecord(record),
+  );
+  const activeRecords = visibleLegacyRecords.filter((record) => !record.isArchived);
+  const archivedRecords = visibleLegacyRecords.filter((record) => record.isArchived);
+  const activeGroupRecords = participantGroupRecords.filter((record) => !record.isArchived);
+  const archivedGroupRecords = participantGroupRecords.filter((record) => record.isArchived);
+  const nextLegacyRecord = activeRecords[0];
+  const nextGroupRecord = activeGroupRecords[0];
+  const nextRecord =
+    !nextLegacyRecord
+      ? nextGroupRecord
+      : !nextGroupRecord
+        ? nextLegacyRecord
+        : new Date(nextGroupRecord.event.startsAt).getTime() <
+            new Date(nextLegacyRecord.event.startsAt).getTime()
+          ? nextGroupRecord
+          : nextLegacyRecord;
+  const needsAttentionCount =
+    activeRecords.filter(
+      (record) =>
+        record.request.finalStatus === "pending" || record.request.finalStatus === "partial",
+    ).length +
+    activeGroupRecords.filter((record) => record.eventParticipant.status === "invited").length;
+  const totalActiveCount = activeRecords.length + activeGroupRecords.length;
+  const totalArchivedCount = archivedRecords.length + archivedGroupRecords.length;
+  const upcomingGroupEvents = activeGroupRecords.slice(0, 5);
+  const upcomingLegacyEvents = activeRecords.slice(0, 5);
+  const nextRecordIsGroup =
+    Boolean(nextRecord) && "eventParticipant" in nextRecord;
+  const ownAccountApprovals = store.trainerAccountApprovals.filter(
+    (approval) => approval.requesterUserId === currentUser.id,
+  );
+  const pendingElevatedRoles = (currentUser.pendingRoles ?? []).filter(
+    (role) => role === "trainer",
+  );
+  const shouldShowApprovalStatus =
+    pendingElevatedRoles.length > 0 ||
+    currentUser.accountApprovalStatus === "rejected" ||
+    ownAccountApprovals.length > 0;
+  const participantDashboardContent = (
+      <div className="space-y-6">
         {shouldShowApprovalStatus && (
           <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
-              title="Status konta"
-              description="Dopóki trener nie zatwierdzi Twojego konta, działasz w trybie uczestnika i widzisz tylko własne szkolenia."
+              title="Dodatkowe role"
+              description="Konto uczestnika działa od razu. Tutaj widać tylko status dodatkowych uprawnień, jeśli w ogóle zostały zgłoszone."
             />
             <div className="mt-5 grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
               <div className="rounded-3xl bg-brand-shell p-5">
@@ -2276,16 +2933,16 @@ export function DashboardPage() {
                 <p className="mt-3 text-2xl font-semibold text-brand-navy">
                   {currentUser.accountApprovalStatus === "rejected"
                     ? "Wymaga nowej akceptacji"
-                    : currentUser.accountApprovalStatus === "approved"
-                      ? "Konto potwierdzone"
-                      : "Czeka na akceptację trenera"}
+                    : pendingElevatedRoles.length > 0
+                      ? "Czeka na dodatkową akceptację"
+                      : "Konto uczestnika aktywne"}
                 </p>
                 <p className="mt-3 text-sm text-brand-muted">
                   Zakres do odblokowania:{" "}
                   {getAccountRequestRoleLabel({
                     requestedRoles: [
                       "participant",
-                      ...(currentUser.pendingRoles ?? []),
+                      ...pendingElevatedRoles,
                     ],
                   })}
                 </p>
@@ -2441,6 +3098,17 @@ export function DashboardPage() {
             </div>
           </article>
         </div>
+      </div>
+  );
+
+  if (currentUser.role === "participant") {
+    return (
+      <PanelSection
+        eyebrow={getRoleLabel(currentUser.role)}
+        title="Twoje szkolenia i najbliższe wydarzenia"
+        showLeadText={false}
+      >
+        {participantDashboardContent}
       </PanelSection>
     );
   }
@@ -2450,38 +3118,27 @@ export function DashboardPage() {
     (item) => item.userId === currentUser.id,
   );
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-  const relevantEvents =
-    currentUser.role === "trainer"
-      ? store.trainingEvents.filter(
-          (item) => item.trainerId === trainerProfile?.id && !isTrainingEventArchived(item),
-        )
-      : currentUser.role === "organizer"
-        ? store.trainingEvents.filter(
-            (item) => item.organizerId === organizerProfile?.id && !isTrainingEventArchived(item),
-          )
-        : store.trainingEvents.filter((item) => !isTrainingEventArchived(item));
-  const relevantRequests =
-    currentUser.role === "trainer"
-      ? store.enrollmentRequests.filter((item) => item.trainerId === trainerProfile?.id)
-      : currentUser.role === "organizer"
-        ? store.enrollmentRequests.filter(
-            (item) => item.organizerId === organizerProfile?.id,
-          )
-        : store.enrollmentRequests;
+  const relevantEvents = store.trainingEvents.filter(
+    (item) => !isTrainingEventArchived(item) && canManageTrainingEvent(item, currentUser),
+  );
+  const relevantEventIds = new Set(relevantEvents.map((event) => event.id));
+  const relevantRequests = store.enrollmentRequests.filter((item) =>
+    relevantEventIds.has(item.eventId),
+  );
   const relevantOperationalRequests = useMemo(
     () => relevantRequests.filter((request) => isOperationalEnrollmentRequest(request, store)),
     [relevantRequests, store],
   );
   const communityEvents = useMemo(
     () =>
-      currentUser.role === "trainer" && trainerProfile
+      hasInheritedRole(currentUser, "trainer") && trainerProfile
         ? relevantEvents.filter(
             (item) =>
               item.trainerId === trainerProfile.id &&
               isCommunityBrandStatus(item.brandStatus),
           )
         : [],
-    [currentUser.role, relevantEvents, trainerProfile],
+    [currentUser, relevantEvents, trainerProfile],
   );
   const activeCommunityEvents = useMemo(
     () =>
@@ -2525,13 +3182,16 @@ export function DashboardPage() {
   const dashboardMonthBuckets = useMemo(() => getDashboardMonthBuckets(new Date()), []);
   const dashboardWindow = dashboardMonthBuckets.at(-1);
   const analyticsEventsInRange = useMemo(() => {
-    if (!dashboardWindow || (currentUser.role !== "trainer" && currentUser.role !== "organizer")) {
+    if (
+      !dashboardWindow ||
+      !hasInheritedRole(currentUser, "organizer")
+    ) {
       return [];
     }
 
     const windowStart = new Date();
     return relevantEvents.filter((event) => isDateWithinRange(event.startsAt, windowStart, dashboardWindow.end));
-  }, [currentUser.role, dashboardWindow, relevantEvents]);
+  }, [currentUser, dashboardWindow, relevantEvents]);
   const analyticsActiveEvents = useMemo(
     () =>
       analyticsEventsInRange.filter((event) => {
@@ -2601,7 +3261,7 @@ export function DashboardPage() {
     [analyticsActiveEvents, dashboardMonthBuckets],
   );
   const organizerGroupsData = useMemo(() => {
-    if (currentUser.role !== "trainer") {
+    if (!hasInheritedRole(currentUser, "trainer")) {
       return [];
     }
 
@@ -2637,9 +3297,12 @@ export function DashboardPage() {
 
       return left.label.localeCompare(right.label, "pl");
     });
-  }, [analyticsActiveEvents, currentUser.role, store.organizers]);
+  }, [analyticsActiveEvents, currentUser, store.organizers]);
   const analyticsRequestsInRange = useMemo(() => {
-    if (!dashboardWindow || (currentUser.role !== "trainer" && currentUser.role !== "organizer")) {
+    if (
+      !dashboardWindow ||
+      !hasInheritedRole(currentUser, "organizer")
+    ) {
       return [];
     }
 
@@ -2647,7 +3310,7 @@ export function DashboardPage() {
     return relevantOperationalRequests.filter((request) =>
       isDateWithinRange(request.createdAt, rangeStart, dashboardWindow.end),
     );
-  }, [currentUser.role, dashboardMonthBuckets, dashboardWindow, relevantOperationalRequests]);
+  }, [currentUser, dashboardMonthBuckets, dashboardWindow, relevantOperationalRequests]);
   const requestsByMonthData = useMemo(
     () =>
       dashboardMonthBuckets.map((bucket) => ({
@@ -2695,30 +3358,52 @@ export function DashboardPage() {
       })),
     [analyticsEventsInRange, dashboardMonthBuckets],
   );
-  const shouldShowRoleAnalytics =
-    currentUser.role === "trainer" || currentUser.role === "organizer";
+  const shouldShowRoleAnalytics = hasInheritedRole(currentUser, "organizer");
+  const relationsCount = currentUser.role === "admin"
+    ? store.relations.length
+    : store.relations.filter((item) => {
+        const matchesTrainer = trainerProfile ? item.trainerId === trainerProfile.id : false;
+        const matchesOrganizer = organizerProfile ? item.organizerId === organizerProfile.id : false;
+        return matchesTrainer || matchesOrganizer;
+      }).length;
 
   return (
     <PanelSection
       eyebrow={getRoleLabel(currentUser.role)}
       title="Pulpit pracy"
-      description="Panel działa teraz na współdzielonym mock backendzie JSON. Wszystkie liczby i rekordy pochodzą z bieżącego store prototypowego."
     >
+      <div className="rounded-[2rem] border border-brand-line bg-white/70 p-4 shadow-soft sm:p-6">
+        <div className="mb-5">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+            Perspektywa uczestnika
+          </p>
+          <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+            Twoje zapisy i najbliższe wydarzenia
+          </h3>
+          <p className="mt-2 text-sm text-brand-muted">
+            Wyższy poziom roli nie ukrywa już uczestnika. Ten blok zawsze pokazuje Twoje własne
+            uczestnictwo, niezależnie od tego, czy dodatkowo organizujesz albo prowadzisz wydarzenia.
+          </p>
+        </div>
+        {participantDashboardContent}
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+            Perspektywa operacyjna
+          </p>
+          <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+            Organizacja, relacje i stan terminów
+          </h3>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
         <StatCard label="Intake" value={relevantOperationalRequests.length} icon={Bell} />
         <StatCard label="Powiadomienia" value={notificationsCount} icon={ShieldCheck} />
-        <StatCard
-          label="Relacje"
-          value={
-            currentUser.role === "admin"
-              ? store.relations.length
-              : currentUser.role === "trainer"
-                ? store.relations.filter((item) => item.trainerId === trainerProfile?.id).length
-                : store.relations.filter((item) => item.organizerId === organizerProfile?.id).length
-          }
-          icon={Users}
-        />
+        <StatCard label="Relacje" value={relationsCount} icon={Users} />
       </div>
 
       {shouldShowRoleAnalytics && (
@@ -2734,7 +3419,7 @@ export function DashboardPage() {
             </div>
             <div
               className={`grid gap-4 xl:grid-cols-2 ${
-                currentUser.role === "trainer" ? "2xl:grid-cols-4" : "2xl:grid-cols-3"
+                hasInheritedRole(currentUser, "trainer") ? "2xl:grid-cols-4" : "2xl:grid-cols-3"
               }`}
             >
               <DashboardChartCard
@@ -2830,7 +3515,7 @@ export function DashboardPage() {
                 </div>
               </DashboardChartCard>
 
-              {currentUser.role === "trainer" && (
+              {hasInheritedRole(currentUser, "trainer") && (
                 <DashboardChartCard
                   title="Grupy wedlug organizatorow"
                   description="Ile zaplanowanych grup masz w tym samym oknie czasu u kazdego organizatora."
@@ -3141,8 +3826,10 @@ export function RequestsPage() {
 
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-  const organizerProfile = store.organizers.find(
-    (item) => item.userId === currentUser.id,
+  const manageableEventIds = new Set(
+    store.trainingEvents
+      .filter((event) => canManageTrainingEvent(event, currentUser))
+      .map((event) => event.id),
   );
 
   const accountApprovals = store.trainerAccountApprovals.filter((approval) => {
@@ -3161,28 +3848,14 @@ export function RequestsPage() {
   });
 
   const requests = store.enrollmentRequests.filter((request) => {
-    if (currentUser.role === "trainer") {
-      return (
-        request.trainerId === trainerProfile?.id &&
-        isOperationalEnrollmentRequest(request, store)
-      );
-    }
-
-    if (currentUser.role === "organizer") {
-      return (
-        request.organizerId === organizerProfile?.id &&
-        isOperationalEnrollmentRequest(request, store)
-      );
-    }
-
-    return isOperationalEnrollmentRequest(request, store);
+    return manageableEventIds.has(request.eventId) && isOperationalEnrollmentRequest(request, store);
   });
 
   return (
     <PanelSection
       eyebrow="Zgłoszenia"
       title="Nowe osoby i publiczny intake"
-      description="Tutaj wpadają legacy zgłoszenia oraz nieobsłużony jeszcze intake publiczny. Dla wydarzeń grupowych główny skład jest zarządzany już w rosterze."
+      showLeadText={false}
     >
       <div className="space-y-4">
         {requests.length === 0 && (
@@ -3197,12 +3870,7 @@ export function RequestsPage() {
             return null;
           }
 
-          const canTrainerDecide =
-            currentUser.role === "trainer" && request.trainerDecision === "pending";
-          const canOrganizerDecide =
-            currentUser.role === "organizer" &&
-            (request.requiresOrganizerApproval ?? true) &&
-            request.organizerDecision === "pending";
+          const canDecideRequest = canManageTrainingEvent(event, currentUser);
 
           return (
             <article
@@ -3273,7 +3941,7 @@ export function RequestsPage() {
                 <EnrollmentPhotoCard request={request} />
               </div>
 
-              {(canTrainerDecide || canOrganizerDecide) && (
+              {canDecideRequest && (
                 <div className="mt-5 flex flex-wrap gap-3">
                   <button
                     type="button"
@@ -3496,7 +4164,7 @@ function DetachRelationControls({
   );
 }
 
-export function RelationsPage() {
+function RelationsHubContent() {
   const {
     connectOrganizerToTrainerWithCode,
     currentUser,
@@ -3510,27 +4178,32 @@ export function RelationsPage() {
   }
 
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
-
   const organizerProfile = store.organizers.find(
     (item) => item.userId === currentUser.id,
   );
-  const relations = store.relations.filter((relation) => {
-    if (currentUser.role === "trainer") {
-      return relation.trainerId === trainerProfile?.id;
-    }
-    if (currentUser.role === "organizer") {
-      return relation.organizerId === organizerProfile?.id;
-    }
-    return true;
-  });
+  const organizerFunctionsAreBlocked = isOrganizerFunctionsBlocked(currentUser);
+  const canUseOrganizerHub = currentUser.role === "participant" || Boolean(organizerProfile);
+  const canUseTrainerHub = hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile);
+  const organizerRelations = organizerProfile
+    ? store.relations.filter((relation) => relation.organizerId === organizerProfile.id)
+    : [];
+  const trainerRelations = trainerProfile
+    ? store.relations.filter((relation) => relation.trainerId === trainerProfile.id)
+    : [];
+  const organizerActiveRelations = organizerRelations.filter(
+    (relation) => relation.status === "approved",
+  );
+  const allRelations = currentUser.role === "admin"
+    ? store.relations
+    : Array.from(
+        new Map(
+          [...organizerRelations, ...trainerRelations].map((relation) => [relation.id, relation]),
+        ).values(),
+      );
 
   return (
-    <PanelSection
-      eyebrow="Relacje"
-      title="Relacje z trenerami"
-      description="Organizator przypina się do trenera od razu po poprawnym kodzie. Nie ma już osobnego etapu akceptacji relacji."
-    >
-      {currentUser.role === "organizer" && (
+    <div className="space-y-6">
+      {canUseOrganizerHub && (
         <form
           onSubmit={async (event) => {
             event.preventDefault();
@@ -3549,6 +4222,10 @@ export function RelationsPage() {
           }}
           className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
         >
+          <SectionBlockHeading
+            title="Połącz się z trenerem"
+            description="To jedyne wejście do aktywacji organizatora. Po wpisaniu poprawnego kodu trener od razu pojawi się na Twojej liście."
+          />
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
             <label className="grid flex-1 gap-2">
               <span className="text-sm font-semibold text-brand-navy">
@@ -3559,29 +4236,162 @@ export function RelationsPage() {
                 value={trainerAuthorizationCode}
                 onChange={(event) => setTrainerAuthorizationCode(event.target.value)}
                 placeholder="Wpisz kod od trenera"
+                disabled={organizerFunctionsAreBlocked}
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
               />
             </label>
             <button
               type="submit"
-              disabled={connectingTrainer}
+              disabled={connectingTrainer || organizerFunctionsAreBlocked}
               className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
             >
               <Users size={16} />
               {connectingTrainer ? "Aktywowanie..." : "Aktywuj relację"}
             </button>
           </div>
+          {organizerFunctionsAreBlocked ? (
+            <p className="mt-4 rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">
+              Funkcje organizatora są chwilowo zablokowane przez moderatora lub admina. Nadal
+              zachowujesz konto uczestnika i podgląd historycznych danych, ale nie aktywujesz tu
+              nowych relacji ani nie uruchamiasz nowych działań organizerowych.
+            </p>
+          ) : null}
         </form>
       )}
 
-      <div className="space-y-4">
-        {relations.length === 0 && (
+      {organizerProfile ? (
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <SectionBlockHeading
+            title="Twój dostęp organizatora"
+            description="Dostęp do tworzenia nowych grup i szkoleń zależy od liczby aktywnych połączeń z trenerami."
+          />
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <StatCard
+              label="Aktywni trenerzy"
+              value={organizerActiveRelations.length}
+              icon={Users}
+            />
+            <StatCard
+              label="Łączne relacje"
+              value={organizerRelations.length}
+              icon={ShieldCheck}
+            />
+          </div>
+          <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell/70 p-4 text-sm text-brand-muted">
+            {organizerFunctionsAreBlocked
+              ? "Masz przypiętych trenerów, ale moderator lub admin zablokował teraz funkcje organizatora. Relacje zostają w systemie, jednak nowe grupy, szkolenia i działania organizerowe są wstrzymane."
+              : organizerActiveRelations.length > 0
+              ? "Masz aktywny dostęp organizatora. Możesz od razu tworzyć nowe grupy i szkolenia w odpowiednich ekranach panelu."
+              : "Nie masz teraz aktywnego trenera. Zachowujesz wgląd do wcześniej utworzonych grup, ale nowe grupy i szkolenia pozostają zablokowane."}
+          </div>
+        </article>
+      ) : null}
+
+      {canUseOrganizerHub ? (
+        <div className="space-y-4">
+          <SectionBlockHeading
+            title="Relacje organizatora"
+            description="To aktywne i historyczne połączenia z trenerami, z których wynika dostęp organizatora."
+          />
+          {organizerRelations.length === 0 && (
+            <EmptyPanelState
+              title="Brak relacji organizatora"
+              description="Nie masz jeszcze aktywnego połączenia z trenerem. Wpisz kod w tej sekcji, aby odblokować dostęp organizatora."
+            />
+          )}
+          {organizerRelations.map((relation) => {
+            const trainer = store.trainers.find((item) => item.id === relation.trainerId);
+            const organizer = store.organizers.find(
+              (item) => item.id === relation.organizerId,
+            );
+
+            return (
+              <article
+                key={`organizer-${relation.id}`}
+                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-2xl font-semibold text-brand-navy">
+                      {trainer?.displayName ?? "Trener"} ↔ {organizer?.displayName ?? "Organizator"}
+                    </p>
+                    <p className="mt-2 text-brand-muted">
+                      Połączenie utworzone {formatDate(relation.createdAt)}.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
+                    {relation.status}
+                  </span>
+                </div>
+
+                {relation.status === "approved" && !organizerFunctionsAreBlocked ? (
+                  <DetachRelationControls relationId={relation.id} allowArchiveOption={false} />
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {canUseTrainerHub ? (
+        <div className="space-y-4">
+          <SectionBlockHeading
+            title="Relacje trenera"
+            description="Tutaj widzisz organizatorów przypiętych do Ciebie jako Przekazującego Wiedzę."
+          />
+          {trainerRelations.length === 0 && (
+            <EmptyPanelState
+              title="Brak relacji trenera"
+              description="Aktywne relacje z organizatorami pojawią się tutaj automatycznie."
+            />
+          )}
+          {trainerRelations.map((relation) => {
+            const trainer = store.trainers.find((item) => item.id === relation.trainerId);
+            const organizer = store.organizers.find(
+              (item) => item.id === relation.organizerId,
+            );
+
+            return (
+              <article
+                key={`trainer-${relation.id}`}
+                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <p className="text-2xl font-semibold text-brand-navy">
+                      {trainer?.displayName ?? "Trener"} ↔ {organizer?.displayName ?? "Organizator"}
+                    </p>
+                    <p className="mt-2 text-brand-muted">
+                      Połączenie utworzone {formatDate(relation.createdAt)}.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
+                    {relation.status}
+                  </span>
+                </div>
+
+                {relation.status === "approved" ? (
+                  <DetachRelationControls relationId={relation.id} allowArchiveOption />
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {currentUser.role === "admin" && !canUseOrganizerHub && !canUseTrainerHub ? (
+        <div className="space-y-4">
+          <SectionBlockHeading
+            title="Wszystkie relacje"
+            description="Admin widzi pełny przekrój połączeń trener-organizator."
+          />
+          {allRelations.length === 0 && (
           <EmptyPanelState
             title="Brak relacji"
-            description="Aktywne relacje trener-organizator pojawią się tutaj po wpisaniu poprawnego kodu trenera."
+            description="Aktywne relacje trener-organizator pojawią się tutaj automatycznie."
           />
-        )}
-        {relations.map((relation) => {
+          )}
+          {allRelations.map((relation) => {
           const trainer = store.trainers.find((item) => item.id === relation.trainerId);
           const organizer = store.organizers.find(
             (item) => item.id === relation.organizerId,
@@ -3589,13 +4399,13 @@ export function RelationsPage() {
 
           return (
             <article
-              key={relation.id}
+              key={`admin-${relation.id}`}
               className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
             >
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="text-2xl font-semibold text-brand-navy">
-                    {trainer?.displayName} ↔ {organizer?.displayName}
+                    {trainer?.displayName ?? "Trener"} ↔ {organizer?.displayName ?? "Organizator"}
                   </p>
                   <p className="mt-2 text-brand-muted">
                     Połączenie utworzone {formatDate(relation.createdAt)}.
@@ -3606,19 +4416,20 @@ export function RelationsPage() {
                 </span>
               </div>
 
-              {relation.status === "approved" &&
-                (currentUser.role === "organizer" || currentUser.role === "admin") && (
-                  <DetachRelationControls
-                    relationId={relation.id}
-                    allowArchiveOption={false}
-                  />
-                )}
+              {relation.status === "approved" ? (
+                <DetachRelationControls relationId={relation.id} allowArchiveOption={false} />
+              ) : null}
             </article>
           );
         })}
-      </div>
-    </PanelSection>
+        </div>
+      ) : null}
+    </div>
   );
+}
+
+export function RelationsPage() {
+  return <Navigate to="/panel/ustawienia" replace />;
 }
 
 export function GroupsPage() {
@@ -3647,14 +4458,22 @@ export function GroupsPage() {
   >({});
   const [savingGroup, setSavingGroup] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
+  const [groupScope, setGroupScope] = useState<"all" | "mine">("mine");
 
   if (!currentUser) {
     return null;
   }
 
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser.id);
-  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
-  const canManageGroups = currentUser.role === "organizer" && Boolean(organizerProfile);
+  const hasActiveOrganizerAccess = Boolean(
+    organizerProfile &&
+      (store.relations ?? []).some(
+        (relation) =>
+          relation.organizerId === organizerProfile.id && relation.status === "approved",
+      ),
+  );
+  const canManageGroups =
+    Boolean(organizerProfile) && hasActiveOrganizerAccess && canUseOrganizerFunctions(currentUser);
   const trainersById = useMemo(
     () => new Map((store.trainers ?? []).map((trainer) => [trainer.id, trainer])),
     [store.trainers],
@@ -3676,6 +4495,21 @@ export function GroupsPage() {
       }, {}),
     [store.groupMembers],
   );
+  const participantGroupMembershipsByGroupId = useMemo(() => {
+    if (!currentUser.participantProfileId) {
+      return new Map<string, GroupMember>();
+    }
+
+    return new Map(
+      (store.groupMembers ?? [])
+        .filter(
+          (member) =>
+            member.participantProfileId === currentUser.participantProfileId &&
+            member.membershipStatus === "active",
+        )
+        .map((member) => [member.groupId, member]),
+    );
+  }, [currentUser.participantProfileId, store.groupMembers]);
   const groupEventCounts = useMemo(
     () =>
       (store.trainingEvents ?? []).reduce<Record<string, number>>((accumulator, event) => {
@@ -3688,25 +4522,35 @@ export function GroupsPage() {
       }, {}),
     [store.trainingEvents],
   );
+  const ownedGroups = useMemo(
+    () =>
+      organizerProfile
+        ? sortGroupsByStatusAndName(
+            (store.groups ?? []).filter((group) => group.organizerId === organizerProfile.id),
+          )
+        : [],
+    [organizerProfile, store.groups],
+  );
+  const joinedGroups = useMemo(
+    () =>
+      sortGroupsByStatusAndName(
+        (store.groups ?? []).filter((group) =>
+          participantGroupMembershipsByGroupId.has(group.id),
+        ),
+      ),
+    [participantGroupMembershipsByGroupId, store.groups],
+  );
+  const hasOrganizerGroupScope =
+    Boolean(organizerProfile) &&
+    (ownedGroups.length > 0 || hasInheritedRole(currentUser, "organizer"));
+  const isParticipantGroupViewer = !hasOrganizerGroupScope || groupScope === "all";
   const visibleGroups = useMemo(() => {
-    const source = store.groups ?? [];
-    const filtered =
-      currentUser.role === "organizer" && organizerProfile
-        ? source.filter((group) => group.organizerId === organizerProfile.id)
-        : currentUser.role === "trainer" && trainerProfile
-          ? source.filter((group) => group.trainerId === trainerProfile.id)
-          : currentUser.role === "admin"
-            ? source
-            : [];
+    if (isParticipantGroupViewer) {
+      return joinedGroups;
+    }
 
-    return [...filtered].sort((left, right) => {
-      if (left.status !== right.status) {
-        return left.status === "active" ? -1 : 1;
-      }
-
-      return left.name.localeCompare(right.name, "pl");
-    });
-  }, [currentUser.role, organizerProfile, store.groups, trainerProfile]);
+    return ownedGroups;
+  }, [isParticipantGroupViewer, joinedGroups, ownedGroups]);
   const isCreateGroupRoute = location.pathname === "/panel/grupy/utworz";
   const isGroupDetailView = Boolean(groupId);
   const selectedGroup = groupId
@@ -3754,8 +4598,9 @@ export function GroupsPage() {
       .filter((trainer): trainer is TrainerProfile => Boolean(trainer))
       .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
   }, [organizerProfile, store.relations, trainersById]);
+  const canCreateGroups = canManageGroups && availableTrainers.length > 0;
   const organizerManagedProfiles = useMemo(() => {
-    if (!organizerProfile) {
+    if (!organizerProfile || !canManageGroups) {
       return [];
     }
 
@@ -3764,15 +4609,15 @@ export function GroupsPage() {
         (profile) =>
           profile.createdByOrganizerId === organizerProfile.id ||
           profile.managerOrganizerIds?.includes(organizerProfile.id),
-      )
+        )
       .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
-  }, [organizerProfile, store.participantProfiles]);
+  }, [canManageGroups, organizerProfile, store.participantProfiles]);
   const sharedSlotsById = useMemo(
     () => new Map((store.trainerSharedSlots ?? []).map((slot) => [slot.id, slot])),
     [store.trainerSharedSlots],
   );
   const selectedGroupMatchedSlots = useMemo(() => {
-    if (!selectedGroup || !organizerProfile) {
+    if (!selectedGroup || !organizerProfile || !canManageGroups) {
       return [] as OrganizerMatchedSlotView[];
     }
 
@@ -3810,6 +4655,7 @@ export function GroupsPage() {
       )
       .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
   }, [
+    canManageGroups,
     organizerProfile,
     selectedGroup,
     sharedSlotsById,
@@ -3817,6 +4663,12 @@ export function GroupsPage() {
     store.trainingEvents,
     trainersById,
   ]);
+  const selectedGroupIsOwnedByCurrentUser = Boolean(
+    selectedGroup && organizerProfile && selectedGroup.organizerId === organizerProfile.id,
+  );
+  const selectedGroupParticipantMembership = selectedGroup
+    ? participantGroupMembershipsByGroupId.get(selectedGroup.id) ?? null
+    : null;
   const annualPlanningSuggestions = useMemo(() => {
     if (!selectedGroup || selectedGroupMatchedSlots.length === 0) {
       return [];
@@ -3873,7 +4725,13 @@ export function GroupsPage() {
   }, [planningIntervalWeeks, selectedGroup, selectedGroupEvents, selectedGroupMatchedSlots]);
 
   useEffect(() => {
-    if (!canManageGroups || editingGroupId || groupForm.trainerId || availableTrainers.length === 0) {
+    if (!hasOrganizerGroupScope && groupScope !== "all") {
+      setGroupScope("all");
+    }
+  }, [groupScope, hasOrganizerGroupScope]);
+
+  useEffect(() => {
+    if (!canCreateGroups || editingGroupId || groupForm.trainerId || availableTrainers.length === 0) {
       return;
     }
 
@@ -3881,14 +4739,14 @@ export function GroupsPage() {
       ...previous,
       trainerId: availableTrainers[0].id,
     }));
-  }, [availableTrainers, canManageGroups, editingGroupId, groupForm.trainerId]);
+  }, [availableTrainers, canCreateGroups, editingGroupId, groupForm.trainerId]);
 
   function resetGroupForm() {
     setEditingGroupId(null);
     setGroupForm(createEmptyGroupFormState(availableTrainers[0]?.id ?? ""));
   }
 
-  const isCreateGroupFormVisible = canManageGroups && !isGroupDetailView && isCreateGroupRoute;
+  const isCreateGroupFormVisible = canCreateGroups && !isGroupDetailView && isCreateGroupRoute;
   const isEditGroupFormVisible =
     canManageGroups &&
     isGroupDetailView &&
@@ -4015,7 +4873,7 @@ export function GroupsPage() {
     }
   }
 
-  if (isCreateGroupRoute && !canManageGroups) {
+  if (isCreateGroupRoute && !canCreateGroups) {
     return <Navigate to="/panel/grupy" replace />;
   }
 
@@ -4035,13 +4893,18 @@ export function GroupsPage() {
       }
       description={
         isCreateGroupRoute
-          ? "Każde szkolenie Emandar musi należeć do grupy. Tutaj ustawiasz bazę pod dalsze zatwierdzanie i planowanie."
+          ? undefined
           : isGroupDetailView
-          ? "To nadrzędny kontekst dla wszystkich szkoleń Emandar w tej relacji trener-organizator."
-          : canManageGroups
-            ? "Grupa jest nadrzędna wobec szkolenia. Tutaj konfigurujesz relację trener-organizator i przechodzisz do szczegółowego widoku danej grupy."
-            : "To przegląd prywatnych grup Emandar. Trener widzi kontekst grup przy swoich draftach i szkoleniach."
+            ? isParticipantGroupViewer
+              ? "Widzisz tylko grupy, które sam utworzyłeś albo do których już należysz. Dane administracyjne są tu ukryte."
+              : "To nadrzędny kontekst dla wszystkich szkoleń Emandar w tej relacji trener-organizator."
+            : isParticipantGroupViewer
+              ? undefined
+              : canManageGroups
+                ? undefined
+                : "To Twoje grupy organizatora. Bez aktywnego trenera pozostają dostępne w trybie podglądu."
       }
+      showLeadText={isCreateGroupRoute || isGroupDetailView}
       action={
         isCreateGroupRoute ? undefined : isGroupDetailView ? (
           <div className="flex flex-wrap gap-3">
@@ -4053,9 +4916,30 @@ export function GroupsPage() {
               Wróć do listy
             </Link>
           </div>
+        ) : canCreateGroups ? (
+          <div className="flex flex-wrap gap-3">
+            <Link
+              to="/panel/grupy/utworz"
+              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+            >
+              <Plus size={16} />
+              Nowa grupa
+            </Link>
+          </div>
         ) : undefined
       }
     >
+      {!isGroupDetailView && !isCreateGroupRoute && hasOrganizerGroupScope ? (
+        <div className="flex justify-start">
+          <EventScopeSwitch
+            activeScope={groupScope}
+            joinedLabel="Uczestniczę"
+            ownedLabel="Organizuję"
+            onChange={setGroupScope}
+          />
+        </div>
+      ) : null}
+
       {isCreateGroupFormVisible ? (
         <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
           <form onSubmit={handleSaveGroup} className="grid gap-4 lg:grid-cols-2">
@@ -4133,7 +5017,9 @@ export function GroupsPage() {
               />
             </label>
             <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Okno potwierdzeń (dni)</span>
+              <span className="text-sm font-semibold text-brand-navy">
+                SMS potwierdzenia udziału (dni)
+              </span>
               <input
                 type="number"
                 min={0}
@@ -4200,55 +5086,65 @@ export function GroupsPage() {
       ) : null}
 
       {!isGroupDetailView && !isCreateGroupRoute ? (
-        <div className="space-y-3">
+        <div className="space-y-6">
           {visibleGroups.length === 0 ? (
             <EmptyPanelState
               title="Brak grup"
               description={
-                canManageGroups
+                canCreateGroups
                   ? "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
+                  : isParticipantGroupViewer
+                    ? "Nie należysz jeszcze do żadnej grupy i nie masz własnych grup organizatora."
                   : "Nie masz jeszcze żadnych przypisanych grup."
               }
             />
           ) : (
-            visibleGroups.map((group) => {
-              const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-              const isSelected = selectedGroup?.id === group.id;
+            <div className="space-y-3">
+              {visibleGroups.map((group) => {
+                const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
+                const isSelected = selectedGroup?.id === group.id;
+                const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);
 
-              return (
-                <Link
-                  key={group.id}
-                  to={`/panel/grupy/${group.id}`}
-                  className={`block rounded-[1.75rem] border p-4 shadow-soft transition sm:rounded-[2rem] sm:p-5 ${
-                    isSelected
-                      ? "border-brand-navy bg-brand-navy/5"
-                      : "border-brand-line bg-white hover:bg-brand-shell/70"
-                  }`}
-                >
-                  <div className="flex flex-col gap-3">
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.2em]">
-                          {group.status === "active" ? "Aktywna" : "Archiwum"}
-                        </span>
-                        <span className="text-xs text-brand-muted">
-                          {getGroupEventTypeLabel(group.defaultEventType)}
-                        </span>
+                return (
+                  <Link
+                    key={group.id}
+                    to={`/panel/grupy/${group.id}`}
+                    className={`block rounded-[1.75rem] border p-4 shadow-soft transition sm:rounded-[2rem] sm:p-5 ${
+                      isSelected
+                        ? "border-brand-navy bg-brand-navy/5"
+                        : "border-brand-line bg-white hover:bg-brand-shell/70"
+                    }`}
+                  >
+                    <div className="flex flex-col gap-3">
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isOwnedGroup && !isParticipantGroupViewer ? (
+                            <span className="rounded-full bg-brand-navy/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:text-xs sm:tracking-[0.2em]">
+                              Twoja grupa
+                            </span>
+                          ) : null}
+                          <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.2em]">
+                            {group.status === "active" ? "Aktywna" : "Archiwum"}
+                          </span>
+                          <span className="text-xs text-brand-muted">
+                            {getGroupEventTypeLabel(group.defaultEventType)}
+                          </span>
+                        </div>
+                        <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-lg">
+                          {group.name}
+                        </p>
+                        <p className="text-sm text-brand-muted">{trainerName}</p>
                       </div>
-                      <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-lg">
-                        {group.name}
-                      </p>
-                      <p className="text-sm text-brand-muted">{trainerName}</p>
+                      <div className="grid grid-cols-2 gap-3 text-sm text-brand-muted">
+                        <p>{activeMemberCounts[group.id] ?? 0} aktywnych osób</p>
+                        <p className="text-right">{groupEventCounts[group.id] ?? 0} wydarzeń</p>
+                      </div>
+                      <p className="text-sm font-semibold text-brand-navy">Otwórz grupę</p>
                     </div>
-                    <div className="grid grid-cols-2 gap-3 text-sm text-brand-muted">
-                      <p>{activeMemberCounts[group.id] ?? 0} aktywnych osób</p>
-                      <p className="text-right">{groupEventCounts[group.id] ?? 0} wydarzeń</p>
-                    </div>
-                    <p className="text-sm font-semibold text-brand-navy">Otwórz grupę</p>
-                  </div>
-                </Link>
-              );
-            })
+                  </Link>
+                );
+              })}
+            </div>
           )}
         </div>
       ) : selectedGroup ? (
@@ -4334,7 +5230,9 @@ export function GroupsPage() {
                   />
                 </label>
                 <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Okno potwierdzeń (dni)</span>
+                  <span className="text-sm font-semibold text-brand-navy">
+                    SMS potwierdzenia udziału (dni)
+                  </span>
                   <input
                     type="number"
                     min={0}
@@ -4422,7 +5320,7 @@ export function GroupsPage() {
                   <p>{selectedGroup.defaultLocation || "Brak ustawionej lokalizacji"}</p>
                 </div>
                 <div>
-                  <p className="font-semibold text-brand-navy">Potwierdzenia</p>
+                  <p className="font-semibold text-brand-navy">SMS potwierdzenia udziału</p>
                   <p>{selectedGroup.defaultConfirmationLeadTimeDays} dni przed wydarzeniem</p>
                 </div>
               </div>
@@ -4431,13 +5329,23 @@ export function GroupsPage() {
                   {selectedGroup.notes}
                 </div>
               ) : null}
-              {canManageGroups ? (
+              {isParticipantGroupViewer ? (
+                <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+                  {selectedGroupIsOwnedByCurrentUser
+                    ? hasActiveOrganizerAccess
+                      ? "To Twoja grupa organizatora. Masz aktywny dostęp organizatora, więc możesz zarządzać nią bez zmiany perspektywy konta."
+                      : "To Twoja wcześniejsza grupa organizatora. Bez aktywnego trenera pozostaje dostępna tylko do podglądu."
+                    : selectedGroupParticipantMembership
+                      ? "Należysz do tej grupy jako uczestnik. Widzisz podgląd grupy i powiązane wydarzenia, bez ustawień administracyjnych."
+                      : "Widzisz tę grupę w trybie podglądu."}
+                </div>
+              ) : null}
+              {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
                 <div className="mt-6 flex flex-wrap gap-3">
                   <button
                     type="button"
                     onClick={() => {
                       setEditingGroupId(selectedGroup.id);
-                      setIsCreateGroupFormOpen(false);
                       setGroupForm(createGroupFormStateFromGroup(selectedGroup));
                     }}
                     className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
@@ -4464,7 +5372,7 @@ export function GroupsPage() {
               ) : null}
             </article>
 
-            {canManageGroups ? (
+            {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
               <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
                 <SectionBlockHeading
                   title="Planowanie Roczne"
@@ -4538,9 +5446,13 @@ export function GroupsPage() {
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Członkowie grupy"
-                description="Priorytet członka steruje tym, kto wpada automatycznie do rosteru wydarzenia i kto ma pierwszeństwo przy obsłudze listy."
+                description={
+                  isParticipantGroupViewer
+                    ? "W podglądzie uczestnika pokazujemy tylko skład grupy bez danych administracyjnych."
+                    : "Priorytet członka steruje tym, kto wpada automatycznie do rosteru wydarzenia i kto ma pierwszeństwo przy obsłudze listy."
+                }
               />
-              {canManageGroups && selectedGroup.status === "active" ? (
+              {canManageGroups && selectedGroupIsOwnedByCurrentUser && selectedGroup.status === "active" ? (
                 <form onSubmit={handleAddMember} className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
                   <label className="grid min-w-0 gap-2 lg:col-span-2">
                     <span className="text-sm font-semibold text-brand-navy">
@@ -4646,7 +5558,11 @@ export function GroupsPage() {
                 {selectedGroupMembers.length === 0 ? (
                   <EmptyPanelState
                     title="Brak członków"
-                    description="Dodaj pierwsze osoby do grupy, aby planować szkolenia i budować roster wydarzeń."
+                    description={
+                      isParticipantGroupViewer
+                        ? "Ta grupa nie ma jeszcze żadnych aktywnych członków."
+                        : "Dodaj pierwsze osoby do grupy, aby planować szkolenia i budować roster wydarzeń."
+                    }
                   />
                 ) : (
                   selectedGroupMembers.map((member) => {
@@ -4664,16 +5580,26 @@ export function GroupsPage() {
                             <p className="text-lg font-semibold text-brand-navy">
                               {member.participantDisplayName}
                             </p>
-                            <div className="flex flex-wrap items-center gap-2 text-sm text-brand-muted">
-                              <Phone size={14} />
-                              <span>{member.participantPhone}</span>
-                            </div>
-                            <p className="text-xs uppercase tracking-[0.2em] text-brand-sky-deep">
-                              {getGroupPriorityLabel(draft?.priority ?? member.priority)} ·{" "}
-                              {getParticipantConfirmationLabel(participantProfile)}
-                            </p>
+                            {isParticipantGroupViewer ? (
+                              <p className="text-sm text-brand-muted">
+                                {member.participantProfileId === currentUser.participantProfileId
+                                  ? "To Twoje miejsce w tej grupie."
+                                  : "Członek grupy."}
+                              </p>
+                            ) : (
+                              <>
+                                <div className="flex flex-wrap items-center gap-2 text-sm text-brand-muted">
+                                  <Phone size={14} />
+                                  <span>{member.participantPhone}</span>
+                                </div>
+                                <p className="text-xs uppercase tracking-[0.2em] text-brand-sky-deep">
+                                  {getGroupPriorityLabel(draft?.priority ?? member.priority)} ·{" "}
+                                  {getParticipantConfirmationLabel(participantProfile)}
+                                </p>
+                              </>
+                            )}
                           </div>
-                          {canManageGroups ? (
+                          {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
                             <div className="grid min-w-0 gap-3 sm:min-w-[250px]">
                               <select
                                 value={draft?.priority ?? member.priority}
@@ -4737,7 +5663,11 @@ export function GroupsPage() {
             <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Wydarzenia grupy"
-                description="Tutaj widać wszystkie szkolenia i drafty przypięte do tej grupy."
+                description={
+                  isParticipantGroupViewer
+                    ? "Tutaj widać szkolenia przypięte do tej grupy. Szczegóły uczestnictwa sprawdzisz z poziomu listy szkoleń."
+                    : "Tutaj widać wszystkie szkolenia i drafty przypięte do tej grupy."
+                }
               />
               <div className="mt-6 space-y-3">
                 {selectedGroupEvents.length === 0 ? (
@@ -4746,30 +5676,54 @@ export function GroupsPage() {
                     description="Po utworzeniu draftu albo szkolenia z poziomu terminów wydarzenia pojawią się tutaj automatycznie."
                   />
                 ) : (
-                  selectedGroupEvents.map((event) => (
-                    <Link
-                      key={event.id}
-                      to={`/panel/szkolenia/${event.id}`}
-                      className="block rounded-3xl border border-brand-line bg-brand-shell/60 p-4 transition hover:bg-brand-shell"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="space-y-2">
-                          <p className="text-lg font-semibold text-brand-navy">{event.title}</p>
-                          <p className="text-sm text-brand-muted">
-                            {formatDate(event.startsAt)} · {formatShortTime(event.startsAt)} -{" "}
-                            {formatShortTime(event.endsAt)}
-                          </p>
-                          <p className="text-sm text-brand-muted">{event.location}</p>
+                  selectedGroupEvents.map((event) =>
+                    isParticipantGroupViewer ? (
+                      <article
+                        key={event.id}
+                        className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="space-y-2">
+                            <p className="text-lg font-semibold text-brand-navy">{event.title}</p>
+                            <p className="text-sm text-brand-muted">
+                              {formatDate(event.startsAt)} · {formatShortTime(event.startsAt)} -{" "}
+                              {formatShortTime(event.endsAt)}
+                            </p>
+                            <p className="text-sm text-brand-muted">{event.location}</p>
+                          </div>
+                          <div className="text-right text-sm text-brand-muted">
+                            <p>{getTrainingEventStatusLabel(resolveTrainingEventStatus(event.status))}</p>
+                            <p className="mt-1">
+                              {resolveTrainingEventWorkflowStatus(event)}
+                            </p>
+                          </div>
                         </div>
-                        <div className="text-right text-sm text-brand-muted">
-                          <p>{getTrainingEventStatusLabel(resolveTrainingEventStatus(event.status))}</p>
-                          <p className="mt-1">
-                            {resolveTrainingEventWorkflowStatus(event)}
-                          </p>
+                      </article>
+                    ) : (
+                      <Link
+                        key={event.id}
+                        to={`/panel/szkolenia/${event.id}`}
+                        className="block rounded-3xl border border-brand-line bg-brand-shell/60 p-4 transition hover:bg-brand-shell"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="space-y-2">
+                            <p className="text-lg font-semibold text-brand-navy">{event.title}</p>
+                            <p className="text-sm text-brand-muted">
+                              {formatDate(event.startsAt)} · {formatShortTime(event.startsAt)} -{" "}
+                              {formatShortTime(event.endsAt)}
+                            </p>
+                            <p className="text-sm text-brand-muted">{event.location}</p>
+                          </div>
+                          <div className="text-right text-sm text-brand-muted">
+                            <p>{getTrainingEventStatusLabel(resolveTrainingEventStatus(event.status))}</p>
+                            <p className="mt-1">
+                              {resolveTrainingEventWorkflowStatus(event)}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    </Link>
-                  ))
+                      </Link>
+                    ),
+                  )
                 )}
               </div>
             </article>
@@ -4827,10 +5781,10 @@ export function AvailabilityPage() {
     (item) => item.userId === currentUser.id,
   );
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-
-  if (currentUser.role === "trainer" && isCommunityTrainer) {
-    return <Navigate to="/panel/szkolenia" replace />;
-  }
+  const hasTrainerAvailabilityScope =
+    hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile) && !isCommunityTrainer;
+  const hasOrganizerAvailabilityScope =
+    canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
 
   const ownCalendarFeeds = useMemo(
     () =>
@@ -4884,19 +5838,19 @@ export function AvailabilityPage() {
   );
 
   useEffect(() => {
-    if (!trainerProfile || currentUser.role !== "trainer" || isCommunityTrainer) {
+    if (!hasTrainerAvailabilityScope) {
       return;
     }
 
     void syncOwnTrainerCalendarFeeds().catch(() => {});
-  }, [currentUser.role, isCommunityTrainer, syncOwnTrainerCalendarFeeds, trainerProfile?.id]);
+  }, [hasTrainerAvailabilityScope, syncOwnTrainerCalendarFeeds]);
   useEffect(() => {
-    if (!organizerProfile || currentUser.role !== "organizer") {
+    if (!hasOrganizerAvailabilityScope) {
       return;
     }
 
     void syncOwnOrganizerCalendarFeeds().catch(() => {});
-  }, [currentUser.role, organizerProfile?.id, syncOwnOrganizerCalendarFeeds]);
+  }, [hasOrganizerAvailabilityScope, syncOwnOrganizerCalendarFeeds]);
 
   const ownBusyIntervals = useMemo(() => {
     if (!trainerProfile) {
@@ -5069,7 +6023,7 @@ export function AvailabilityPage() {
   }, [activeFreeSliceBucket, freeDaySlicesByBucket]);
 
   useEffect(() => {
-    if (currentUser.role !== "organizer" || !organizerProfile) {
+    if (!hasOrganizerAvailabilityScope || !organizerProfile) {
       return;
     }
 
@@ -5102,7 +6056,7 @@ export function AvailabilityPage() {
     });
     void navigate("/panel/terminy", { replace: true });
   }, [
-    currentUser.role,
+    hasOrganizerAvailabilityScope,
     location.search,
     navigate,
     organizerGroups,
@@ -5270,25 +6224,13 @@ export function AvailabilityPage() {
   return (
     <PanelSection
       eyebrow="Terminy"
-      title={
-        currentUser.role === "organizer"
-          ? "Dopasowane terminy trenerow"
-          : currentUser.role === "trainer"
-            ? "Udostepniane sloty i drafty organizatorow"
-            : "Terminy i feedy"
-      }
-      description={
-        currentUser.role === "organizer"
-          ? "Organizer podpina wlasny iCal, widzi tylko zmatchowane sloty zaakceptowanych trenerow i tworzy z nich drafty szkolen do decyzji trenera."
-          : currentUser.role === "trainer"
-            ? "Trener podpina prywatny iCal, publikuje konkretne sloty i podejmuje decyzje o draftach szkolen skladanych przez organizatorow."
-            : "Widok techniczny nowego flow slotow, feedow i draftow."
-      }
+      title="Terminy i feedy"
+      description="Jeden ekran zbiera terminy i feedy dla wszystkich warstw, które masz odblokowane. Wyższy poziom nie ukrywa już niższych workflowów."
     >
-      {currentUser.role === "trainer" && trainerProfile && !isCommunityTrainer && (
+      {hasTrainerAvailabilityScope && (
         <div className="space-y-6">
           <TrainerAvailabilityWorkspace
-            currentUserRole={currentUser.role}
+            currentUserRole="trainer"
             feeds={ownCalendarFeeds}
             sharedSlots={ownSharedSlots}
             drafts={trainerDrafts}
@@ -5409,7 +6351,7 @@ export function AvailabilityPage() {
         </div>
       )}
 
-      {currentUser.role === "organizer" && organizerProfile && (
+      {hasOrganizerAvailabilityScope && organizerProfile && (
         <div className="space-y-6">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
             <OrganizerCalendarFeedsPanel
@@ -5556,11 +6498,12 @@ export function AvailabilityPage() {
 export function EventsPage() {
   const location = useLocation();
   const {
-    connectOrganizerToTrainerWithCode,
     createTrainingEvent,
     currentUser,
     decideTrainingEventCollaboration,
+    publishTrainingEvent,
     store,
+    unpublishTrainingEvent,
     uploadCommunityEventImages,
   } = useAppState();
 
@@ -5572,31 +6515,40 @@ export function EventsPage() {
   const organizerProfile = store.organizers.find(
     (item) => item.userId === currentUser.id,
   );
+  const highestRole = getHighestRole(currentUser);
+  const hasModerationScope = hasModeratorAccess(currentUser);
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-  const isParticipant = currentUser.role === "participant";
-  const isCommunitySection = location.pathname.startsWith("/panel/wydarzenia-spolecznosci");
+  const isOrganizerManager =
+    canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
+  const isTrainerManager =
+    hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile);
+  const hasOfficialManagementScope = isOrganizerManager || isTrainerManager;
+  const isCommunityModerationSection = location.pathname.startsWith(
+    "/panel/moderacja-wydarzen-spolecznosci",
+  );
+  const isCommunitySection =
+    isCommunityModerationSection ||
+    location.pathname.startsWith("/panel/wydarzenia-spolecznosci");
   const isCommunityCreatorView = location.pathname.endsWith("/wydarzenia-spolecznosci/utworz");
   const isOfficialCreatorView = location.pathname.endsWith("/szkolenia/utworz");
   const isLegacyCreatorView = location.pathname.endsWith("/kreator-wydarzen");
   const isCreatorView = isCommunityCreatorView || isOfficialCreatorView;
-  const canCreateCommunityEvent =
-    currentUser.role === "participant" || currentUser.role === "trainer";
-  const [eventScope, setEventScope] = useState<"all" | "mine">("all");
-  const [showConnectTrainerCard, setShowConnectTrainerCard] = useState(false);
-  const [trainerAuthorizationCode, setTrainerAuthorizationCode] = useState("");
-  const [connectingTrainer, setConnectingTrainer] = useState(false);
+  const canCreateCommunityEvent = true;
+  const [eventScope, setEventScope] = useState<"all" | "mine">(
+    isCommunitySection ? "all" : hasOfficialManagementScope ? "mine" : "all",
+  );
   const participantRecords = useMemo(
-    () => (isParticipant ? getParticipantEnrollmentRecords(currentUser.id, store) : []),
-    [currentUser.id, isParticipant, store],
+    () => getParticipantEnrollmentRecords(currentUser.id, store),
+    [currentUser.id, store],
   );
   const participantGroupRecords = useMemo(
     () =>
-      isParticipant && currentUser.participantProfileId
+      currentUser.participantProfileId
         ? getParticipantGroupEventRecords(currentUser.participantProfileId, store).filter(
             (record) => !isCommunityPanelEvent(record.event),
           )
         : [],
-    [currentUser.participantProfileId, isParticipant, store],
+    [currentUser.participantProfileId, store],
   );
   const participantOfficialRecords = useMemo(
     () =>
@@ -5627,22 +6579,10 @@ export function EventsPage() {
   );
   const officialListedEvents = useMemo(
     () =>
-      currentUser.role === "trainer"
-        ? officialEvents.filter((item) => item.trainerId === trainerProfile?.id)
-        : currentUser.role === "organizer"
-          ? officialEvents.filter((item) => item.organizerId === organizerProfile?.id)
-          : currentUser.role === "admin"
-            ? officialEvents
-            : [],
-    [currentUser.role, officialEvents, organizerProfile?.id, trainerProfile?.id],
-  );
-  const ownOfficialEvents = useMemo(
-    () =>
-      officialEvents.filter(
-        (item) =>
-          item.creatorUserId === currentUser.id || item.organizerUserId === currentUser.id,
-      ),
-    [currentUser.id, officialEvents],
+      hasModerationScope
+        ? officialEvents
+        : officialEvents.filter((item) => canManageTrainingEvent(item, currentUser)),
+    [currentUser, hasModerationScope, officialEvents],
   );
   const ownCommunityEvents = useMemo(
     () =>
@@ -5650,37 +6590,61 @@ export function EventsPage() {
     [communityEvents, currentUser.id],
   );
   const listedEvents = isCommunitySection
-    ? currentUser.role === "admin"
+    ? isCommunityModerationSection
+      ? [...communityEvents].sort((left, right) => {
+          const leftPending = left.publicationApprovalStatus === "pending" ? 0 : 1;
+          const rightPending = right.publicationApprovalStatus === "pending" ? 0 : 1;
+
+          if (leftPending !== rightPending) {
+            return leftPending - rightPending;
+          }
+
+          return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+        })
+      : hasModerationScope
       ? communityEvents
       : ownCommunityEvents
-    : isParticipant
-      ? ownOfficialEvents
-      : officialListedEvents;
-  const isParticipantCommunityOwnedView =
-    isParticipant && isCommunitySection && eventScope === "mine";
-  const isParticipantOfficialJoinedView =
-    isParticipant && !isCommunitySection && eventScope === "all";
-  const eyebrow = isCommunitySection ? "Społeczność" : "Szkolenia";
+    : officialListedEvents;
+  const isCommunityJoinedView =
+    !isCommunityModerationSection && isCommunitySection && eventScope === "all";
+  const isOfficialJoinedView =
+    !isCommunitySection &&
+    !hasModerationScope &&
+    (!hasOfficialManagementScope || eventScope === "all");
+  const isCommunityListView = isCommunitySection && !isCreatorView;
+  const shouldShowScopeSwitch =
+    !isCreatorView && !isCommunityModerationSection && (isCommunitySection || hasOfficialManagementScope);
+  const eyebrow = isCommunityModerationSection
+    ? "Moderacja wydarzeń społeczności"
+    : isCommunitySection
+      ? "Wydarzenia społeczności"
+      : "Szkolenia";
   const sectionTitle = isCreatorView
     ? isCommunitySection
       ? "Utwórz wydarzenie społeczności"
       : "Utwórz szkolenie"
-    : isCommunitySection
+    : isCommunityModerationSection
+      ? "Moderacja wydarzeń społeczności"
+      : isCommunitySection
       ? "Wydarzenia społeczności"
       : "Szkolenia Emandar";
   const sectionDescription = isCreatorView
     ? isCommunitySection
       ? "Tutaj dodajesz wydarzenie społeczności, które po zapisie trafia bezpośrednio do moderacji admina."
       : "Tutaj dodajesz szkolenie Emandar bez mieszania go z wydarzeniami społeczności."
-    : isCommunitySection
+    : isCommunityModerationSection
+      ? "Tutaj moderator albo admin widzi wszystkie wydarzenia społeczności, może przejrzeć ich status i otworzyć pełną moderację."
+      : isCommunitySection
       ? "Tutaj widzisz listę wydarzeń społeczności, w których bierzesz udział albo które utworzyłeś."
-      : isParticipant
-        ? "Tutaj widzisz szkolenia Emandar, w których bierzesz udział, oraz własne szkolenia tworzone już z poziomu panelu."
-        : "Tutaj zarządzasz tylko szkoleniami Emandar, bez mieszania ich z wydarzeniami społeczności.";
+      : hasModerationScope
+        ? "Tutaj moderator albo admin widzi wszystkie szkolenia Emandar, także te prowadzone przez grupy i organizatorów."
+      : hasOfficialManagementScope
+        ? undefined
+        : "Tutaj widzisz szkolenia Emandar, w których bierzesz udział.";
 
   const availableOrganizers = useMemo(
     () =>
-      currentUser.role === "trainer" && !isCommunityTrainer
+      isTrainerManager && !isCommunityTrainer
         ? store.relations
             .filter(
               (relation) =>
@@ -5692,8 +6656,8 @@ export function EventsPage() {
             .filter((item): item is NonNullable<typeof item> => Boolean(item))
         : [],
     [
-      currentUser.role,
       isCommunityTrainer,
+      isTrainerManager,
       store.organizers,
       store.relations,
       trainerProfile?.id,
@@ -5701,9 +6665,7 @@ export function EventsPage() {
   );
   const availableTrainers = useMemo(
     () =>
-      (currentUser.role === "organizer" ||
-        (currentUser.role === "participant" && organizerProfile)) &&
-      organizerProfile
+      isOrganizerManager && organizerProfile
         ? store.trainers.filter(
             (trainer) =>
               !isCommunityTrainerProfile(trainer.brandStatus) &&
@@ -5715,12 +6677,9 @@ export function EventsPage() {
               ),
           )
         : [],
-    [currentUser.role, organizerProfile, store.relations, store.trainers],
+    [isOrganizerManager, organizerProfile, store.relations, store.trainers],
   );
-  const canCreateOfficialTraining =
-    currentUser.role === "trainer" ||
-    currentUser.role === "organizer" ||
-    (isParticipant && availableTrainers.length > 0);
+  const canCreateOfficialTraining = isTrainerManager || isOrganizerManager;
   const [trainerEventForm, setTrainerEventForm] = useState<TrainingEventFormState>(
     createEmptyTrainingEventFormState(),
   );
@@ -5728,12 +6687,13 @@ export function EventsPage() {
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [uploadingCreatorImages, setUploadingCreatorImages] = useState(false);
   const [savingEventId, setSavingEventId] = useState<string | null>(null);
+  const [togglingPublicationEventId, setTogglingPublicationEventId] = useState<string | null>(null);
   const availableOfficialGroups = useMemo(() => {
     if (isCommunitySection) {
       return [] as Group[];
     }
 
-    if (currentUser.role === "organizer" && organizerProfile) {
+    if (isOrganizerManager && organizerProfile) {
       return store.groups
         .filter(
           (group) =>
@@ -5742,7 +6702,7 @@ export function EventsPage() {
         .sort((left, right) => left.name.localeCompare(right.name, "pl"));
     }
 
-    if (currentUser.role === "trainer" && trainerProfile) {
+    if (isTrainerManager && trainerProfile) {
       return store.groups
         .filter(
           (group) => group.trainerId === trainerProfile.id && group.status === "active",
@@ -5752,8 +6712,9 @@ export function EventsPage() {
 
     return [] as Group[];
   }, [
-    currentUser.role,
     isCommunitySection,
+    isOrganizerManager,
+    isTrainerManager,
     organizerProfile,
     store.groups,
     trainerProfile,
@@ -5777,6 +6738,16 @@ export function EventsPage() {
     [selectedOfficialGroup, store.trainingEvents],
   );
 
+  useEffect(() => {
+    if (!isCommunitySection && !hasModerationScope && !hasOfficialManagementScope && eventScope !== "all") {
+      setEventScope("all");
+    }
+  }, [eventScope, hasModerationScope, hasOfficialManagementScope, isCommunitySection]);
+
+  if (isCommunityModerationSection && !hasModerationScope) {
+    return <Navigate to="/panel/wydarzenia-spolecznosci" replace />;
+  }
+
   function applyOfficialGroupToTrainingForm(groupId: string) {
     const nextGroup = availableOfficialGroups.find((group) => group.id === groupId) ?? null;
 
@@ -5792,6 +6763,10 @@ export function EventsPage() {
         typeof nextGroup?.defaultCapacity === "number"
           ? String(nextGroup.defaultCapacity)
           : previous.capacity,
+      confirmationLeadTimeDays:
+        typeof nextGroup?.defaultConfirmationLeadTimeDays === "number"
+          ? String(nextGroup.defaultConfirmationLeadTimeDays)
+          : previous.confirmationLeadTimeDays,
       tags:
         nextGroup?.defaultTags && nextGroup.defaultTags.length > 0
           ? nextGroup.defaultTags.join(", ")
@@ -5800,7 +6775,7 @@ export function EventsPage() {
   }
 
   useEffect(() => {
-    if (currentUser.role !== "trainer" || isCommunityTrainer) {
+    if (!isTrainerManager || isCommunityTrainer) {
       return;
     }
 
@@ -5820,13 +6795,10 @@ export function EventsPage() {
         selfManagedByTrainer: shouldSelfManage,
       };
     });
-  }, [availableOrganizers, currentUser.role, isCommunityTrainer]);
+  }, [availableOrganizers, isCommunityTrainer, isTrainerManager]);
 
   useEffect(() => {
-    if (
-      currentUser.role !== "organizer" &&
-      !(currentUser.role === "participant" && organizerProfile)
-    ) {
+    if (!isOrganizerManager) {
       return;
     }
 
@@ -5841,14 +6813,14 @@ export function EventsPage() {
         trainerId: nextTrainerId,
       };
     });
-  }, [availableTrainers, currentUser.role, organizerProfile]);
+  }, [availableTrainers, isOrganizerManager]);
 
   useEffect(() => {
     if (isCommunitySection) {
       return;
     }
 
-    if (currentUser.role !== "organizer" && currentUser.role !== "trainer") {
+    if (!hasOfficialManagementScope) {
       return;
     }
 
@@ -5864,7 +6836,7 @@ export function EventsPage() {
     applyOfficialGroupToTrainingForm(nextGroupId);
   }, [
     availableOfficialGroups,
-    currentUser.role,
+    hasOfficialManagementScope,
     isCommunitySection,
     trainerEventForm.groupId,
   ]);
@@ -5873,11 +6845,9 @@ export function EventsPage() {
     return (
       <Navigate
         to={
-          canCreateOfficialTraining && currentUser.role === "participant"
+          canCreateOfficialTraining
             ? "/panel/szkolenia/utworz"
-            : canCreateOfficialTraining
-              ? "/panel/szkolenia/utworz"
-              : "/panel/wydarzenia-spolecznosci/utworz"
+            : "/panel/wydarzenia-spolecznosci/utworz"
         }
         replace
       />
@@ -5897,100 +6867,117 @@ export function EventsPage() {
       eyebrow={eyebrow}
       title={sectionTitle}
       description={sectionDescription}
-      action={
-        !isCreatorView && !isCommunitySection && isParticipant ? (
-          <button
-            type="button"
-            onClick={() => setShowConnectTrainerCard((current) => !current)}
-            className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
-          >
-            <Link2 size={16} />
-            Połącz się z trenerem
-          </button>
-        ) : undefined
-      }
+      showLeadText={!isCommunityListView}
     >
-      {!isCreatorView && isParticipant ? (
+      {shouldShowScopeSwitch ? (
         <div className="flex justify-start">
           <EventScopeSwitch
             activeScope={eventScope}
-            allLabel={
-              isCommunitySection
-                ? "Wydarzenia, w których biorę udział"
-                : "Szkolenia, w których biorę udział"
-            }
-            mineLabel={
-              isCommunitySection ? "Moje wydarzenia społeczności" : "Moje szkolenia Emandar"
-            }
+            joinedLabel="Uczestniczę"
+            ownedLabel="Organizuję"
             onChange={setEventScope}
           />
         </div>
       ) : null}
 
-      {!isCreatorView && !isCommunitySection && isParticipant && showConnectTrainerCard ? (
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <SectionBlockHeading
-            title="Połącz się z trenerem"
-            description="Wpisz aktualny kod trenera. Po poprawnym kodzie od razu odblokujesz własne szkolenia Emandar."
-          />
+      {isCreatorView ? (
+        isCommunitySection ? (
           <form
             onSubmit={async (event) => {
               event.preventDefault();
-              setConnectingTrainer(true);
+              setCreatingEvent(true);
 
               try {
-                await connectOrganizerToTrainerWithCode(trainerAuthorizationCode);
-                setTrainerAuthorizationCode("");
-                setShowConnectTrainerCard(false);
-                setEventScope("mine");
-                toast.success("Relacja z trenerem została aktywowana.");
+                await createTrainingEvent({
+                  title: trainerEventForm.title,
+                  eventImages: trainerEventForm.eventImages,
+                  useEventImageAsCover: trainerEventForm.useEventImageAsCover,
+                  summary: trainerEventForm.summary,
+                  description: trainerEventForm.description,
+                  tags: parseEventTags(trainerEventForm.tags),
+                  scheduleDays: buildScheduleDaysFromDrafts(
+                    trainerEventForm.firstDayDate,
+                    trainerEventForm.scheduleDays,
+                  ),
+                  type: "Wydarzenie społeczności",
+                  status: trainerEventForm.status,
+                  location: trainerEventForm.location,
+                  capacity: Number(trainerEventForm.capacity),
+                  minimumParticipants: Number(trainerEventForm.minimumParticipants),
+                  confirmationLeadTimeDays: Number(trainerEventForm.confirmationLeadTimeDays),
+                  isPublished: false,
+                  brandStatus: "supported",
+                });
+                toast.success("Wydarzenie zostało wysłane do moderacji.");
+                setTrainerEventForm((previous) => ({
+                  ...previous,
+                  ...createEmptyTrainingEventFormState(),
+                  isPublished: false,
+                }));
               } catch (error) {
                 toast.error(
                   error instanceof Error
                     ? error.message
-                    : "Nie udało się połączyć z trenerem.",
+                    : "Nie udało się zapisać wydarzenia.",
                 );
               } finally {
-                setConnectingTrainer(false);
+                setCreatingEvent(false);
               }
             }}
-            className="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_auto]"
+            className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
           >
-            <input
-              required
-              value={trainerAuthorizationCode}
-              onChange={(event) => setTrainerAuthorizationCode(event.target.value)}
-              placeholder="Kod trenera"
-              className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            <CommunityEventEditorFields
+              values={getCommunityEventEditorValuesFromTrainingForm(trainerEventForm)}
+              uploadingImages={uploadingCreatorImages}
+              disabled={creatingEvent}
+              onChange={(updater) =>
+                setTrainerEventForm((previous) =>
+                  applyCommunityEventEditorValuesToTrainingForm(
+                    previous,
+                    updater(getCommunityEventEditorValuesFromTrainingForm(previous)),
+                  ),
+                )
+              }
+              onUploadImages={async (files) => {
+                const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
+                const filesToUpload = files.slice(0, availableSlots);
+
+                if (filesToUpload.length === 0) {
+                  toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                  return;
+                }
+
+                setUploadingCreatorImages(true);
+
+                try {
+                  const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                  setTrainerEventForm((previous) => ({
+                    ...previous,
+                    eventImages: [...previous.eventImages, ...uploadedImages],
+                  }));
+                } finally {
+                  setUploadingCreatorImages(false);
+                }
+              }}
             />
+
+            <div className="mt-4 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted">
+              Po zapisie wydarzenie trafi do moderacji admina. Publikacja następuje dopiero po
+              akceptacji Dariusza albo roli admin.
+            </div>
+
             <button
               type="submit"
-              disabled={connectingTrainer}
-              className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+              disabled={creatingEvent}
+              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
             >
-              <ShieldCheck size={16} />
-              {connectingTrainer ? "Łączenie..." : "Aktywuj relację"}
+              {creatingEvent ? "Zapisywanie..." : "Wyślij wydarzenie do moderacji"}
             </button>
           </form>
-        </article>
-      ) : null}
-
-      {isCreatorView &&
-      (currentUser.role === "trainer" ||
-        currentUser.role === "organizer" ||
-        currentUser.role === "participant") ? (
-        !isCommunitySection && currentUser.role === "organizer" && availableOfficialGroups.length === 0 ? (
+        ) : !isCommunitySection && isOrganizerManager && availableOfficialGroups.length === 0 ? (
           <EmptyPanelState
             title="Najpierw utwórz grupę"
             description="Oficjalne szkolenie organizatora musi być przypięte do grupy. Najpierw dodaj grupę, a potem wróć do kreatora szkolenia."
-          />
-        ) : !isCommunitySection &&
-          currentUser.role === "participant" &&
-          organizerProfile &&
-          availableTrainers.length === 0 ? (
-          <EmptyPanelState
-            title="Najpierw aktywna relacja"
-            description="Aby dodać szkolenie, Przekazujący Wiedzę musi mieć przynajmniej jedną zaakceptowaną relację z organizatorem."
           />
         ) : (
           <form
@@ -6005,8 +6992,7 @@ export function EventsPage() {
                       ? trainerEventForm.groupId
                       : undefined,
                   trainerId:
-                    !isCommunitySection &&
-                    (currentUser.role === "organizer" || currentUser.role === "participant")
+                    !isCommunitySection && isOrganizerManager
                       ? trainerEventForm.trainerId
                       : undefined,
                   title: isCommunitySection ? trainerEventForm.title : undefined,
@@ -6014,7 +7000,7 @@ export function EventsPage() {
                   useEventImageAsCover:
                     isCommunitySection ? trainerEventForm.useEventImageAsCover : undefined,
                   organizerId:
-                    currentUser.role === "trainer" &&
+                    isTrainerManager &&
                     !isCommunitySection &&
                     !isCommunityTrainer &&
                     !trainerEventForm.selfManagedByTrainer
@@ -6034,18 +7020,15 @@ export function EventsPage() {
                   location: trainerEventForm.location,
                   capacity: Number(trainerEventForm.capacity),
                   minimumParticipants: Number(trainerEventForm.minimumParticipants),
+                  confirmationLeadTimeDays: Number(trainerEventForm.confirmationLeadTimeDays),
                   isPublished: isCommunitySection ? false : trainerEventForm.isPublished,
                   brandStatus: isCommunitySection ? "supported" : undefined,
                   eventTypeSystem:
                     !isCommunitySection && selectedOfficialGroup
                       ? selectedOfficialGroup.defaultEventType
                       : undefined,
-                  confirmationLeadTimeDays:
-                    !isCommunitySection && selectedOfficialGroup
-                      ? selectedOfficialGroup.defaultConfirmationLeadTimeDays
-                      : undefined,
                   selfManagedByTrainer:
-                    currentUser.role === "trainer" &&
+                    isTrainerManager &&
                     !isCommunitySection &&
                     !isCommunityTrainer
                       ? trainerEventForm.selfManagedByTrainer
@@ -6060,14 +7043,13 @@ export function EventsPage() {
                   ...createEmptyTrainingEventFormState(),
                   groupId:
                     !isCommunitySection &&
-                    (currentUser.role === "organizer" || currentUser.role === "trainer")
+                    hasOfficialManagementScope
                       ? previous.groupId
                       : "",
                   trainerId:
                     !isCommunitySection && selectedOfficialGroup
                       ? selectedOfficialGroup.trainerId
-                      : !isCommunitySection &&
-                          (currentUser.role === "organizer" || currentUser.role === "participant")
+                      : !isCommunitySection && isOrganizerManager
                         ? availableTrainers[0]?.id ?? ""
                       : previous.trainerId,
                   location:
@@ -6079,6 +7061,11 @@ export function EventsPage() {
                     typeof selectedOfficialGroup?.defaultCapacity === "number"
                       ? String(selectedOfficialGroup.defaultCapacity)
                       : "20",
+                  confirmationLeadTimeDays:
+                    !isCommunitySection &&
+                    typeof selectedOfficialGroup?.defaultConfirmationLeadTimeDays === "number"
+                      ? String(selectedOfficialGroup.defaultConfirmationLeadTimeDays)
+                      : "5",
                   tags:
                     !isCommunitySection &&
                     selectedOfficialGroup?.defaultTags &&
@@ -6087,7 +7074,7 @@ export function EventsPage() {
                       : "",
                   isPublished: !isCommunitySection,
                   selfManagedByTrainer:
-                    currentUser.role === "trainer" && !isCommunitySection
+                    isTrainerManager && !isCommunitySection
                       ? previous.selfManagedByTrainer
                       : false,
                 }));
@@ -6103,7 +7090,7 @@ export function EventsPage() {
             }}
             className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
           >
-            {currentUser.role === "trainer" &&
+            {isTrainerManager &&
               !isCommunitySection &&
               !isCommunityTrainer &&
               availableOrganizers.length === 0 && (
@@ -6139,16 +7126,16 @@ export function EventsPage() {
 
             <div className="grid gap-4 xl:grid-cols-2">
               {!isCommunitySection &&
-                (currentUser.role === "organizer" || currentUser.role === "trainer") && (
+                hasOfficialManagementScope && (
                 <label className="grid gap-2 xl:col-span-2">
                   <span className="text-sm font-semibold text-brand-navy">Grupa</span>
                   <select
-                    required={currentUser.role === "organizer"}
+                    required={isOrganizerManager}
                     value={trainerEventForm.groupId}
                     onChange={(event) => applyOfficialGroupToTrainingForm(event.target.value)}
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                   >
-                    {currentUser.role === "trainer" ? (
+                    {isTrainerManager ? (
                       <option value="">Bez przypiętej grupy</option>
                     ) : null}
                     {availableOfficialGroups.map((group) => (
@@ -6162,7 +7149,7 @@ export function EventsPage() {
 
               {!isCommunitySection &&
                 selectedOfficialGroup &&
-                (currentUser.role === "organizer" || currentUser.role === "trainer") && (
+                hasOfficialManagementScope && (
                 <div className="rounded-3xl border border-brand-line bg-brand-shell/70 p-4 xl:col-span-2">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -6206,8 +7193,7 @@ export function EventsPage() {
               )}
 
               {!isCommunitySection &&
-                (currentUser.role === "organizer" ||
-                  (currentUser.role === "participant" && organizerProfile)) && (
+                isOrganizerManager && (
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">
                     Przekazujący Wiedzę
@@ -6222,7 +7208,7 @@ export function EventsPage() {
                       }))
                     }
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    disabled={currentUser.role === "organizer" && Boolean(selectedOfficialGroup)}
+                    disabled={isOrganizerManager && Boolean(selectedOfficialGroup)}
                   >
                     {availableTrainers.map((trainer) => (
                       <option key={trainer.id} value={trainer.id}>
@@ -6233,7 +7219,7 @@ export function EventsPage() {
                 </label>
               )}
 
-              {!isCommunitySection && !isCommunityTrainer && currentUser.role === "trainer" && (
+              {!isCommunitySection && !isCommunityTrainer && isTrainerManager && (
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Organizator</span>
                   <select
@@ -6262,7 +7248,7 @@ export function EventsPage() {
                 </label>
               )}
 
-              {!isCommunitySection && !isCommunityTrainer && currentUser.role === "trainer" && (
+              {!isCommunitySection && !isCommunityTrainer && isTrainerManager && (
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Tryb organizacji</span>
                   <span className="flex min-h-[54px] items-center rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy">
@@ -6283,7 +7269,7 @@ export function EventsPage() {
                 </label>
               )}
 
-              {!isCommunitySection && !isCommunityTrainer && currentUser.role !== "participant" && (
+              {!isCommunitySection && !isCommunityTrainer && hasOfficialManagementScope && (
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
                   <input
@@ -6301,7 +7287,7 @@ export function EventsPage() {
               )}
 
               {isCommunitySection && (
-                <label className="grid gap-2 xl:col-span-2">
+                <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Tytuł wydarzenia</span>
                   <input
                     required
@@ -6318,77 +7304,7 @@ export function EventsPage() {
                 </label>
               )}
 
-              {isCommunitySection && (
-                <EventGalleryField
-                  images={trainerEventForm.eventImages}
-                  useEventImageAsCover={trainerEventForm.useEventImageAsCover}
-                  uploading={uploadingCreatorImages}
-                  disabled={creatingEvent}
-                  onUpload={async (files) => {
-                    const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
-                    const filesToUpload = files.slice(0, availableSlots);
-
-                    if (filesToUpload.length === 0) {
-                      toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
-                      return;
-                    }
-
-                    setUploadingCreatorImages(true);
-
-                    try {
-                      const uploadedImages = await uploadCommunityEventImages(filesToUpload);
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        eventImages: [...previous.eventImages, ...uploadedImages],
-                      }));
-                    } finally {
-                      setUploadingCreatorImages(false);
-                    }
-                  }}
-                  onRemove={(imageId) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      eventImages: previous.eventImages.filter((image) => image.id !== imageId),
-                      useEventImageAsCover:
-                        previous.eventImages.filter((image) => image.id !== imageId).length > 0
-                          ? previous.useEventImageAsCover
-                          : false,
-                    }))
-                  }
-                  onToggleUseEventImageAsCover={(nextValue) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      useEventImageAsCover: nextValue && previous.eventImages.length > 0,
-                    }))
-                  }
-                  onMakePrimary={(imageId) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      eventImages: moveEventImageToFront(previous.eventImages, imageId),
-                    }))
-                  }
-                />
-              )}
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
-                <select
-                  value={trainerEventForm.status}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      status: event.target.value as TrainingEventStatus,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                >
-                  <option value="active">Aktywne</option>
-                  <option value="confirmed">Potwierdzone zorganizowanie</option>
-                  <option value="cancelled">Anulowane</option>
-                </select>
-              </label>
-
-              <label className="grid gap-2 xl:col-span-2">
+              <label className={`grid gap-2 ${isCommunitySection ? "" : "xl:col-span-2"}`}>
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunitySection ? "Lokalizacja" : "Nagłówek miejsca"}
                 </span>
@@ -6404,6 +7320,24 @@ export function EventsPage() {
                   placeholder="np. Warszawa, dolnośląskie"
                   className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
+              </label>
+
+              <label className={`${isCommunitySection ? "grid gap-2 xl:col-span-2" : "grid gap-2"}`}>
+                <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
+                <select
+                  value={trainerEventForm.status}
+                  onChange={(event) =>
+                    setTrainerEventForm((previous) => ({
+                      ...previous,
+                      status: event.target.value as TrainingEventStatus,
+                    }))
+                  }
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                >
+                  <option value="active">Aktywne</option>
+                  <option value="confirmed">Potwierdzone zorganizowanie</option>
+                  <option value="cancelled">Anulowane</option>
+                </select>
               </label>
 
               <label className="grid gap-2 xl:col-span-2">
@@ -6425,24 +7359,6 @@ export function EventsPage() {
                   }
                   className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
-              </label>
-
-              <label className="grid gap-2 xl:col-span-2">
-                <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
-                <input
-                  value={trainerEventForm.tags}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      tags: event.target.value,
-                    }))
-                  }
-                  placeholder="np. ognisko, pożywienie, nocleg, samodzielna kuchnia"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <span className="text-sm text-brand-muted">
-                  Oddziel tagi przecinkami. Pokażą się publicznie jako chmura tagów.
-                </span>
               </label>
 
               <label className="grid gap-2 xl:col-span-2">
@@ -6469,6 +7385,78 @@ export function EventsPage() {
                   </span>
                 )}
               </label>
+
+              <label className="grid gap-2 xl:col-span-2">
+                <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
+                <input
+                  value={trainerEventForm.tags}
+                  onChange={(event) =>
+                    setTrainerEventForm((previous) => ({
+                      ...previous,
+                      tags: event.target.value,
+                    }))
+                  }
+                  placeholder="np. ognisko, pożywienie, nocleg, samodzielna kuchnia"
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+                <span className="text-sm text-brand-muted">
+                  Oddziel tagi przecinkami. Pokażą się publicznie jako chmura tagów.
+                </span>
+              </label>
+
+              <div className="grid gap-2 xl:col-span-2">
+                {isCommunitySection && (
+                  <EventGalleryField
+                    images={trainerEventForm.eventImages}
+                    useEventImageAsCover={trainerEventForm.useEventImageAsCover}
+                    uploading={uploadingCreatorImages}
+                    disabled={creatingEvent}
+                    onUpload={async (files) => {
+                      const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
+                      const filesToUpload = files.slice(0, availableSlots);
+
+                      if (filesToUpload.length === 0) {
+                        toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                        return;
+                      }
+
+                      setUploadingCreatorImages(true);
+
+                      try {
+                        const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          eventImages: [...previous.eventImages, ...uploadedImages],
+                        }));
+                      } finally {
+                        setUploadingCreatorImages(false);
+                      }
+                    }}
+                    onRemove={(imageId) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        eventImages: previous.eventImages.filter((image) => image.id !== imageId),
+                        useEventImageAsCover:
+                          previous.eventImages.filter((image) => image.id !== imageId).length > 0
+                            ? previous.useEventImageAsCover
+                            : false,
+                      }))
+                    }
+                    onToggleUseEventImageAsCover={(nextValue) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        useEventImageAsCover: nextValue && previous.eventImages.length > 0,
+                      }))
+                    }
+                    onMakePrimary={(imageId) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        eventImages: moveEventImageToFront(previous.eventImages, imageId),
+                      }))
+                    }
+                  />
+                )}
+              </div>
 
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Pierwszy dzień szkolenia</span>
@@ -6507,7 +7495,7 @@ export function EventsPage() {
                 />
               </label>
 
-              <div className="grid gap-4 xl:col-span-2">
+              <div className="grid gap-4 xl:col-span-2 xl:grid-cols-4">
                 {trainerEventForm.scheduleDays.map((day, index) => {
                   const draftScheduleDays = buildScheduleDaysFromDrafts(
                     trainerEventForm.firstDayDate,
@@ -6610,6 +7598,31 @@ export function EventsPage() {
                 />
               </label>
 
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-brand-navy">
+                  SMS potwierdzenia udziału
+                </span>
+                <input
+                  required
+                  min={0}
+                  type="number"
+                  value={trainerEventForm.confirmationLeadTimeDays}
+                  onChange={(event) =>
+                    setTrainerEventForm((previous) => ({
+                      ...previous,
+                      confirmationLeadTimeDays: event.target.value,
+                    }))
+                  }
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+                <span className="text-sm text-brand-muted">
+                  Ile dni przed wydarzeniem wysłać SMS z prośbą o potwierdzenie udziału.
+                  {!isCommunitySection && selectedOfficialGroup
+                    ? " Domyślnie ta wartość startuje z ustawień grupy."
+                    : ""}
+                </span>
+              </label>
+
               {isCommunitySection ? (
                 <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted xl:col-span-2">
                   Po zapisie wydarzenie trafi do moderacji admina. Publikacja następuje dopiero po akceptacji Dariusza albo roli admin.
@@ -6644,7 +7657,7 @@ export function EventsPage() {
             </button>
           </form>
         )
-      ) : !isCreatorView && isParticipantOfficialJoinedView ? (
+      ) : !isCreatorView && isOfficialJoinedView ? (
         <div className="space-y-6">
           {participantOfficialRecords.length === 0 && participantGroupRecords.length === 0 ? (
             <EmptyPanelState
@@ -6655,10 +7668,7 @@ export function EventsPage() {
             <>
               {participantGroupRecords.length > 0 ? (
                 <div className="space-y-4">
-                  <SectionBlockHeading
-                    title="Wydarzenia z Twoich grup"
-                    description="To szkolenia, do których organizator przypisał Cię z poziomu grupy."
-                  />
+                  <SectionBlockHeading />
                   {participantGroupRecords.map((record) => (
                     <ParticipantGroupEventCard
                       key={record.eventParticipant.id}
@@ -6682,85 +7692,34 @@ export function EventsPage() {
             </>
           )}
         </div>
-      ) : !isCreatorView && isParticipant && isCommunitySection ? (
-        <div className="space-y-6">
-          {isParticipantCommunityOwnedView ? (
-            <div className="space-y-4">
-              {ownCommunityEvents.length === 0 ? (
-                <EmptyPanelState
-                  title="Nie masz jeszcze własnych wydarzeń"
-                  description="Dodaj pierwsze wydarzenie społeczności, a pojawi się tutaj z bieżącym statusem moderacji."
-                />
-              ) : (
-                ownCommunityEvents.map((event) => (
-                  <article
-                    key={event.id}
-                    className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-4">
-                      <div className="max-w-3xl">
-                        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                          Wydarzenie społeczności
-                        </p>
-                        <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
-                          {event.title}
-                        </h3>
-                        <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                          {getPanelScheduleRangeLabel(event)}
-                        </p>
-                        <p className="mt-2 text-brand-muted">{event.summary}</p>
-                      </div>
-                      <div className="flex flex-col items-start gap-2 sm:items-end">
-                        <Link
-                          to={getPanelEventDetailPath(event)}
-                          className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                        >
-                          Otwórz wydarzenie
-                        </Link>
-                        <div className="flex flex-wrap gap-2 sm:justify-end">
-                          <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            {event.isPublished ? "opublikowane" : "ukryte"}
-                          </span>
-                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            {event.publicationApprovalStatus === "accepted"
-                              ? "moderacja zaakceptowana"
-                              : event.publicationApprovalStatus === "rejected"
-                                ? "moderacja odrzucona"
-                                : "w moderacji"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-5 space-y-3 text-sm text-brand-muted">
-                      <div className="flex flex-wrap gap-x-5 gap-y-2">
-                        <span>{getPanelScheduleRangeLabel(event)}</span>
-                        <span>{event.enrolledCount}/{event.capacity} miejsc</span>
-                        <span>Próg: {resolveMinimumParticipants(event)} osób</span>
-                        <span>Status: {getEventLifecycleLabel(event)}</span>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-2">
-                        {getTrainingEventScheduleDays(event).map((day, index) => (
-                          <div
-                            key={`${event.id}-participant-community-day-${index + 1}`}
-                            className="rounded-2xl bg-brand-shell px-4 py-3"
-                          >
-                            <div className="text-sm font-semibold text-brand-navy">
-                              Dzień {index + 1}
-                            </div>
-                            <p>{formatDate(day.startsAt)}</p>
-                            <p>
-                              {formatShortTime(day.startsAt)} - {formatShortTime(day.endsAt)}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </article>
-                ))
-              )}
-            </div>
+      ) : !isCreatorView && isCommunityModerationSection ? (
+        <div className="space-y-4">
+          {listedEvents.length === 0 ? (
+            <EmptyPanelState
+              title="Brak wydarzeń do moderacji"
+              description="Community eventy pojawią się tutaj automatycznie, gdy tylko trafią do systemu."
+            />
           ) : (
+            listedEvents.map((event) => (
+              <CommunityEventCard
+                key={event.id}
+                event={event}
+                statusItems={getCommunityStatusRowItems(event)}
+                renderActionSlot={() => (
+                  <Link
+                    to={`${getPanelEventDetailPath(event)}?view=moderation`}
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                  >
+                    Otwórz moderację
+                  </Link>
+                )}
+              />
+            ))
+          )}
+        </div>
+      ) : !isCreatorView && isCommunitySection ? (
+        <div className="space-y-6">
+          {isCommunityJoinedView ? (
             <div className="space-y-4">
               {participantCommunityRecords.length === 0 ? (
                 <EmptyPanelState
@@ -6769,7 +7728,85 @@ export function EventsPage() {
                 />
               ) : (
                 participantCommunityRecords.map((record) => (
-                  <ParticipantEnrollmentCard key={record.request.id} record={record} />
+                  <CommunityEventCard key={record.request.id} event={record.event} />
+                ))
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {ownCommunityEvents.length === 0 ? (
+                <EmptyPanelState
+                  title="Nie masz jeszcze własnych wydarzeń"
+                  description="Dodaj pierwsze wydarzenie społeczności, a pojawi się tutaj z bieżącym statusem moderacji."
+                />
+              ) : (
+                ownCommunityEvents.map((event) => (
+                  <CommunityEventCard
+                    key={event.id}
+                    event={event}
+                    statusItems={getCommunityStatusRowItems(event)}
+                    renderActionSlot={() => (
+                      <>
+                        <Link
+                          to={getPanelEventDetailPath(event)}
+                          className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                        >
+                          Edytuj wydarzenie
+                        </Link>
+                        {event.isPublished ? (
+                          <button
+                            type="button"
+                            disabled={togglingPublicationEventId === event.id}
+                            onClick={async () => {
+                              setTogglingPublicationEventId(event.id);
+                              try {
+                                await unpublishTrainingEvent(event.id);
+                                toast.success("Publikacja została wyłączona.");
+                              } catch (error) {
+                                toast.error(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "Nie udało się wyłączyć publikacji.",
+                                );
+                              } finally {
+                                setTogglingPublicationEventId(null);
+                              }
+                            }}
+                            className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                          >
+                            {togglingPublicationEventId === event.id
+                              ? "Wyłączanie..."
+                              : "Wyłącz z publikacji"}
+                          </button>
+                        ) : event.publicationApprovalStatus === "accepted" ? (
+                          <button
+                            type="button"
+                            disabled={togglingPublicationEventId === event.id}
+                            onClick={async () => {
+                              setTogglingPublicationEventId(event.id);
+                              try {
+                                await publishTrainingEvent(event.id);
+                                toast.success("Wydarzenie zostało opublikowane.");
+                              } catch (error) {
+                                toast.error(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "Nie udało się opublikować wydarzenia.",
+                                );
+                              } finally {
+                                setTogglingPublicationEventId(null);
+                              }
+                            }}
+                            className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                          >
+                            {togglingPublicationEventId === event.id
+                              ? "Publikowanie..."
+                              : "Publikuj wydarzenie"}
+                          </button>
+                        ) : null}
+                      </>
+                    )}
+                  />
                 ))
               )}
             </div>
@@ -6810,6 +7847,9 @@ export function EventsPage() {
             const scheduleDays = getTrainingEventScheduleDays(event);
             const canOpenEventDetails =
               !(currentUser.role === "organizer" && isTrainingEventArchived(event));
+            const eventDetailPath = isCommunityModerationSection
+              ? `${getPanelEventDetailPath(event)}?view=moderation`
+              : getPanelEventDetailPath(event);
 
             return (
               <article
@@ -6829,7 +7869,7 @@ export function EventsPage() {
                   <div className="flex flex-col items-start gap-3 sm:items-end">
                     {canOpenEventDetails ? (
                       <Link
-                        to={getPanelEventDetailPath(event)}
+                        to={eventDetailPath}
                         className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
                       >
                         {isCommunitySection ? "Otwórz wydarzenie" : "Otwórz szkolenie"}
@@ -6944,21 +7984,28 @@ export function EventsPage() {
 export function EventManagementPage() {
   const { eventId } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
+  const searchParams = new URLSearchParams(location.search);
   const {
     addEventParticipant,
     archiveTrainingEvent,
     currentUser,
+    deleteTrainingEvent,
     decideTrainingEventCollaboration,
     finalizeEventRoster,
     manageEnrollmentRequest,
+    publishTrainingEvent,
     store,
+    unpublishTrainingEvent,
     updateEventParticipantStatus,
     updateTrainingEventBrandStatus,
     updateTrainingEventManagement,
     uploadCommunityEventImages,
   } = useAppState();
   const [archivingEvent, setArchivingEvent] = useState(false);
+  const [deletingEvent, setDeletingEvent] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [unpublishingEvent, setUnpublishingEvent] = useState(false);
   const [uploadingSettingsImages, setUploadingSettingsImages] = useState(false);
   const [movingRequestId, setMovingRequestId] = useState<string | null>(null);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
@@ -6967,10 +8014,18 @@ export function EventManagementPage() {
   const [updatingEventParticipantId, setUpdatingEventParticipantId] = useState<string | null>(null);
   const [finalizingRoster, setFinalizingRoster] = useState(false);
   const [transferSelections, setTransferSelections] = useState<Record<string, string>>({});
-  const [settingsDraft, setSettingsDraft] = useState({
+  const hydratedSettingsEventIdRef = useRef<string | null>(null);
+  const hydratedSettingsSnapshotRef = useRef<string | null>(null);
+  const [isSettingsDirty, setIsSettingsDirty] = useState(false);
+  const [communityDetailTab, setCommunityDetailTab] = useState<
+    "requests" | "participants" | "edit"
+  >("requests");
+  const [publishingEvent, setPublishingEvent] = useState(false);
+  const [settingsDraft, setSettingsDraft] = useState<EventManagementSettingsDraft>({
     status: "active" as TrainingEventStatus,
     capacity: "1",
     minimumParticipants: "1",
+    confirmationLeadTimeDays: "5",
     title: "",
     location: "",
     eventImages: [] as TrainingEventImage[],
@@ -6981,36 +8036,67 @@ export function EventManagementPage() {
     scheduleDays: resizeScheduleDayDrafts(2, []),
   });
   const event = store.trainingEvents.find((item) => item.id === eventId);
+  const eventGroup = event?.groupId
+    ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
+    : null;
   const sectionEyebrow = location.pathname.startsWith("/panel/wydarzenia-spolecznosci")
     ? "Społeczność"
     : "Szkolenia";
   const fallbackListPath = event
-    ? getPanelEventListPath(event)
+    ? isCommunityPanelEvent(event) && searchParams.get("view") === "moderation"
+      ? "/panel/moderacja-wydarzen-spolecznosci"
+      : getPanelEventListPath(event)
     : location.pathname.startsWith("/panel/wydarzenia-spolecznosci")
       ? "/panel/wydarzenia-spolecznosci"
       : "/panel/szkolenia";
-  const backListLabel = fallbackListPath === "/panel/wydarzenia-spolecznosci"
-    ? "Wróć do wydarzeń społeczności"
-    : "Wróć do listy szkoleń";
+  const backListLabel =
+    fallbackListPath === "/panel/moderacja-wydarzen-spolecznosci"
+      ? "Wróć do moderacji"
+      : fallbackListPath === "/panel/wydarzenia-spolecznosci"
+        ? "Wróć do wydarzeń społeczności"
+        : "Wróć do listy szkoleń";
+
+  function createEventManagementSettingsDraft(sourceEvent: TrainingEvent) {
+    return {
+      status: resolveTrainingEventStatus(sourceEvent.status),
+      capacity: String(sourceEvent.capacity),
+      minimumParticipants: String(resolveMinimumParticipants(sourceEvent)),
+      confirmationLeadTimeDays: String(sourceEvent.confirmationLeadTimeDays ?? 5),
+      title: sourceEvent.title ?? "",
+      location: sourceEvent.location ?? "",
+      eventImages: sourceEvent.eventImages ?? [],
+      useEventImageAsCover: sourceEvent.useEventImageAsCover === true,
+      enrollmentPhotoRequirement: sourceEvent.enrollmentPhotoRequirement ?? "default",
+      tags: (sourceEvent.tags ?? []).join(", "),
+      ...getScheduleDraftsFromEvent(sourceEvent),
+    };
+  }
+
+  function updateSettingsDraft(
+    updater: (previous: typeof settingsDraft) => typeof settingsDraft,
+  ) {
+    setIsSettingsDirty(true);
+    setSettingsDraft((previous) => updater(previous));
+  }
 
   useEffect(() => {
     if (!event) {
       return;
     }
 
-    setSettingsDraft({
-      status: resolveTrainingEventStatus(event.status),
-      capacity: String(event.capacity),
-      minimumParticipants: String(resolveMinimumParticipants(event)),
-      title: event.title ?? "",
-      location: event.location ?? "",
-      eventImages: event.eventImages ?? [],
-      useEventImageAsCover: event.useEventImageAsCover === true,
-      enrollmentPhotoRequirement: event.enrollmentPhotoRequirement ?? "default",
-      tags: (event.tags ?? []).join(", "),
-      ...getScheduleDraftsFromEvent(event),
-    });
-  }, [event]);
+    const nextDraft = createEventManagementSettingsDraft(event);
+    const nextSnapshot = JSON.stringify(nextDraft);
+    const isDifferentEvent = hydratedSettingsEventIdRef.current !== event.id;
+    const isDifferentSnapshot = hydratedSettingsSnapshotRef.current !== nextSnapshot;
+
+    if (!isDifferentEvent && (isSettingsDirty || !isDifferentSnapshot)) {
+      return;
+    }
+
+    setSettingsDraft(nextDraft);
+    hydratedSettingsEventIdRef.current = event.id;
+    hydratedSettingsSnapshotRef.current = nextSnapshot;
+  }, [event, isSettingsDirty]);
 
   if (!currentUser || !eventId) {
     return <Navigate to={fallbackListPath} replace />;
@@ -7032,12 +8118,17 @@ export function EventManagementPage() {
   }
 
   const canManageEvent = canManageTrainingEvent(event, currentUser);
+  const canModerateEvent = canModerateTrainingEvent(event, currentUser);
   const eventIsArchived = isTrainingEventArchived(event);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const isEventOrganizerOwner =
+    Boolean(event.organizerId) && currentUser.organizerProfileId === event.organizerId;
+  const canUseOrganizerRosterTools =
+    (isEventOrganizerOwner || currentUser.role === "admin") && !eventIsArchived;
   const canDecideCollaboration =
     !isCommunityEvent && canDecideTrainingEventCollaboration(event, currentUser);
   const canModerateCommunityPublication =
-    currentUser.role === "admin" && isCommunityEvent;
+    canModerateEvent && isCommunityEvent && event.publicationApprovalStatus === "pending";
   const ownerLabels = getEventOwnerLabel(event, store);
   const detailTitle = getEventCardTitle(event, currentUser, store);
   const detailEyebrow = isCommunityEvent
@@ -7048,7 +8139,7 @@ export function EventManagementPage() {
   const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
   const scheduleDays = getTrainingEventScheduleDays(event);
 
-  if (!canManageEvent && !canDecideCollaboration) {
+  if (!canManageEvent && !canDecideCollaboration && !canModerateEvent) {
     return <Navigate to={fallbackListPath} replace />;
   }
 
@@ -7075,7 +8166,7 @@ export function EventManagementPage() {
       return left.participantDisplayName.localeCompare(right.participantDisplayName, "pl");
     });
   const assignableGroupMembers =
-    event.groupId && currentUser.role === "organizer"
+    event.groupId && (isEventOrganizerOwner || currentUser.role === "admin")
       ? (store.groupMembers ?? [])
           .filter(
             (member) =>
@@ -7101,21 +8192,503 @@ export function EventManagementPage() {
         return false;
       }
 
-      if (currentUser.role === "trainer") {
-        return item.trainerId === event.trainerId;
-      }
-
-      if (currentUser.role === "organizer") {
-        return item.organizerId === event.organizerId;
-      }
-
-      if (currentUser.role === "participant") {
-        return item.creatorUserId === currentUser.id;
-      }
-
-      return true;
+      return canManageTrainingEvent(item, currentUser);
     }),
   );
+  const pendingRequestsCount = requests.filter(
+    (item) => item.finalStatus === "pending" || item.finalStatus === "partial",
+  ).length;
+  const communityParticipantRequests = requests.filter(
+    (item) => item.finalStatus === "accepted" || item.finalStatus === "partial",
+  );
+
+  if (isCommunityEvent) {
+    const communityEditorValues = getCommunityEventEditorValuesFromManagementDraft(
+      settingsDraft,
+      event,
+    );
+
+    return (
+      <PanelSection
+        eyebrow={sectionEyebrow}
+        title={detailTitle}
+        description="Tutaj zarządzasz ustawieniami wydarzenia i listą osób, które chcą wziąć w nim udział."
+      >
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <p className="text-brand-muted">{event.summary}</p>
+              <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-brand-muted">
+                <span>{scheduleRangeLabel}</span>
+                <span>Maks. miejsc: {event.capacity}</span>
+                <span>Minimalny próg: {resolveMinimumParticipants(event)}</span>
+                <span>
+                  SMS: {event.confirmationLeadTimeDays ?? eventGroup?.defaultConfirmationLeadTimeDays ?? 0} dni
+                  przed wydarzeniem
+                </span>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-brand-muted">
+                {getCommunityStatusRowItems(event).map((item) => (
+                  <span key={`${item.label}-${item.value}`}>
+                    {item.label}: <span className="font-semibold text-brand-navy">{item.value}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div
+            className={`mt-5 grid gap-3 ${scheduleDays.length > 1 ? "md:grid-cols-2" : "md:grid-cols-1"}`}
+          >
+            {scheduleDays.map((day, index) => (
+              <div
+                key={`${event.id}-detail-day-${index + 1}`}
+                className="rounded-2xl bg-brand-shell px-4 py-3"
+              >
+                <div className="text-sm font-semibold text-brand-navy">Dzień {index + 1}</div>
+                <p>{formatDate(day.startsAt)}</p>
+                <p>
+                  {formatShortTime(day.startsAt)} - {formatShortTime(day.endsAt)}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-5 grid gap-3 text-sm text-brand-muted md:grid-cols-3">
+            <p>Gospodarz: {ownerLabels.trainerName}</p>
+            <p>Organizator: {ownerLabels.organizerName}</p>
+            <p>Pełna lokalizacja: {locationParts.primaryLocation}</p>
+          </div>
+
+          {locationParts.extraLocationLabel ? (
+            <p className="mt-3 text-sm text-brand-muted">
+              Dodatkowo: {locationParts.extraLocationLabel}
+            </p>
+          ) : null}
+
+          {canModerateCommunityPublication ? (
+            <div className="mt-5">
+              <CollaborationActionBar
+                pending={savingSettings}
+                acceptLabel="Zatwierdź publikację"
+                rejectLabel="Odrzuć wydarzenie"
+                onDecision={async (status) => {
+                  setSavingSettings(true);
+
+                  try {
+                    await updateTrainingEventManagement(
+                      event.id,
+                      settingsDraft.status,
+                      Number(settingsDraft.capacity) || event.capacity,
+                      Number(settingsDraft.minimumParticipants) || resolveMinimumParticipants(event),
+                      Number(settingsDraft.confirmationLeadTimeDays) || 0,
+                      settingsDraft.title,
+                      settingsDraft.location,
+                      event.summary,
+                      event.description,
+                      parseEventTags(settingsDraft.tags),
+                      settingsDraft.eventImages,
+                      settingsDraft.useEventImageAsCover,
+                      buildScheduleDaysFromDrafts(
+                        settingsDraft.firstDayDate,
+                        settingsDraft.scheduleDays,
+                      ),
+                      undefined,
+                      settingsDraft.enrollmentPhotoRequirement,
+                      status,
+                    );
+                    toast.success(
+                      status === "accepted"
+                        ? "Wydarzenie zostało zatwierdzone."
+                        : "Wydarzenie zostało odrzucone.",
+                    );
+                    setIsSettingsDirty(false);
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : "Nie udało się zapisać moderacji.",
+                    );
+                  } finally {
+                    setSavingSettings(false);
+                  }
+                }}
+              />
+            </div>
+          ) : null}
+
+          {(canManageEvent || canModerateEvent) ? (
+            <div className="mt-5 flex flex-wrap gap-3">
+              {canManageEvent && !eventIsArchived && !event.isPublished && event.publicationApprovalStatus === "accepted" ? (
+                <button
+                  type="button"
+                  disabled={publishingEvent || unpublishingEvent || deletingEvent}
+                  onClick={async () => {
+                    setPublishingEvent(true);
+                    try {
+                      await publishTrainingEvent(event.id);
+                      toast.success("Wydarzenie zostało opublikowane.");
+                    } catch (error) {
+                      toast.error(
+                        error instanceof Error
+                          ? error.message
+                          : "Nie udało się opublikować wydarzenia.",
+                      );
+                    } finally {
+                      setPublishingEvent(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {publishingEvent ? "Publikowanie..." : "Publikuj wydarzenie"}
+                </button>
+              ) : null}
+              {canModerateEvent && event.isPublished ? (
+                <button
+                  type="button"
+                  disabled={publishingEvent || unpublishingEvent || deletingEvent}
+                  onClick={async () => {
+                    if (!window.confirm("Wycofać publikację tego wydarzenia?")) {
+                      return;
+                    }
+
+                    setUnpublishingEvent(true);
+                    try {
+                      await unpublishTrainingEvent(event.id);
+                      toast.success("Publikacja została wycofana.");
+                      setIsSettingsDirty(false);
+                    } catch (error) {
+                      toast.error(
+                        error instanceof Error
+                          ? error.message
+                          : "Nie udało się wycofać publikacji.",
+                      );
+                    } finally {
+                      setUnpublishingEvent(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                >
+                  {unpublishingEvent ? "Wycofywanie..." : "Wyłącz z publikacji"}
+                </button>
+              ) : null}
+              {canModerateEvent ? (
+                <button
+                  type="button"
+                  disabled={publishingEvent || unpublishingEvent || deletingEvent}
+                  onClick={async () => {
+                    if (
+                      !window.confirm(
+                        "Usunąć to wydarzenie całkowicie razem ze zgłoszeniami i uczestnikami?",
+                      )
+                    ) {
+                      return;
+                    }
+
+                    setDeletingEvent(true);
+                    try {
+                      await deleteTrainingEvent(event.id);
+                      toast.success("Wydarzenie zostało usunięte.");
+                      navigate(fallbackListPath, { replace: true });
+                    } catch (error) {
+                      toast.error(
+                        error instanceof Error ? error.message : "Nie udało się usunąć wydarzenia.",
+                      );
+                    } finally {
+                      setDeletingEvent(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700 disabled:opacity-60"
+                >
+                  <Trash2 size={16} />
+                  {deletingEvent ? "Usuwanie..." : "Usuń całkowicie"}
+                </button>
+              ) : null}
+              <Link
+                to={fallbackListPath}
+                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+              >
+                {backListLabel}
+              </Link>
+            </div>
+          ) : null}
+
+          {canModerateEvent && !canManageEvent ? (
+            <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
+              Jesteś tutaj w trybie moderacji. Możesz przeglądać rekord, wycofać publikację albo
+              usunąć wydarzenie całkowicie, ale bez edycji ustawień organizacyjnych.
+            </p>
+          ) : null}
+        </article>
+
+        <EventDetailScopeSwitch
+          activeTab={communityDetailTab}
+          onChange={setCommunityDetailTab}
+          requestCount={pendingRequestsCount}
+          participantCountLabel={`${event.enrolledCount}/${event.capacity}`}
+        />
+
+        {communityDetailTab === "edit" ? (
+          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <CommunityEventEditorFields
+              values={communityEditorValues}
+              disabled={!canManageEvent || eventIsArchived}
+              uploadingImages={uploadingSettingsImages}
+              onChange={(updater) =>
+                updateSettingsDraft((previous) =>
+                  applyCommunityEventEditorValuesToManagementDraft(
+                    previous,
+                    updater(getCommunityEventEditorValuesFromManagementDraft(previous, event)),
+                  ),
+                )
+              }
+              onUploadImages={async (files) => {
+                const availableSlots = Math.max(0, 8 - settingsDraft.eventImages.length);
+                const filesToUpload = files.slice(0, availableSlots);
+
+                if (filesToUpload.length === 0) {
+                  toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                  return;
+                }
+
+                setUploadingSettingsImages(true);
+
+                try {
+                  const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                  updateSettingsDraft((previous) => ({
+                    ...previous,
+                    eventImages: [...previous.eventImages, ...uploadedImages],
+                  }));
+                } finally {
+                  setUploadingSettingsImages(false);
+                }
+              }}
+            />
+
+            {canManageEvent && !eventIsArchived ? (
+              <>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    disabled={savingSettings}
+                    onClick={async () => {
+                      setSavingSettings(true);
+
+                      try {
+                        await updateTrainingEventManagement(
+                          event.id,
+                          settingsDraft.status,
+                          Number(settingsDraft.capacity) || event.capacity,
+                          Number(settingsDraft.minimumParticipants) ||
+                            resolveMinimumParticipants(event),
+                          Number(settingsDraft.confirmationLeadTimeDays) || 0,
+                          settingsDraft.title,
+                          settingsDraft.location,
+                          communityEditorValues.summary,
+                          communityEditorValues.description,
+                          parseEventTags(settingsDraft.tags),
+                          settingsDraft.eventImages,
+                          settingsDraft.useEventImageAsCover,
+                          buildScheduleDaysFromDrafts(
+                            settingsDraft.firstDayDate,
+                            settingsDraft.scheduleDays,
+                          ),
+                          undefined,
+                          settingsDraft.enrollmentPhotoRequirement,
+                        );
+                        toast.success("Zapisano ustawienia wydarzenia.");
+                        setIsSettingsDirty(false);
+                      } catch (error) {
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Nie udało się zapisać ustawień wydarzenia.",
+                        );
+                      } finally {
+                        setSavingSettings(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    {savingSettings ? "Zapisywanie..." : "Zapisz ustawienia"}
+                  </button>
+                </div>
+                <p className="mt-3 text-sm text-brand-muted">
+                  Po osiągnięciu minimalnego progu status zmieni się automatycznie na potwierdzone.
+                </p>
+              </>
+            ) : (
+              <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
+                Moderator widzi ten formularz poglądowo. Edycja danych wydarzenia pozostaje po
+                stronie twórcy albo admina.
+              </p>
+            )}
+          </article>
+        ) : null}
+
+        {communityDetailTab === "participants" ? (
+          <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <SectionBlockHeading
+              title="Uczestnicy wydarzenia"
+              description="Lista osób, które mają już potwierdzony udział albo są częściowo przetworzone w tym wydarzeniu."
+            />
+            {communityParticipantRequests.length === 0 ? (
+              <EmptyPanelState
+                title="Brak potwierdzonych uczestników"
+                description="Zaakceptowane osoby pojawią się tutaj automatycznie."
+              />
+            ) : (
+              <div className="space-y-3">
+                {communityParticipantRequests.map((request) => (
+                  <article
+                    key={`participant-${request.id}`}
+                    className="rounded-[2rem] border border-brand-line bg-brand-shell/60 p-5"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-semibold text-brand-navy">
+                          {request.imieNazwisko}
+                        </h3>
+                        <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
+                          <span className="inline-flex items-center gap-2">
+                            <Phone size={14} />
+                            {request.telefon}
+                          </span>
+                          <span>Status: {request.finalStatus}</span>
+                          <span>
+                            SMS:{" "}
+                            {resolveAttendanceConfirmationStatusLabel(
+                              request.attendanceConfirmationStatus,
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="mt-4 rounded-3xl bg-white p-4 text-brand-muted">
+                      {request.wiadomosc || "Brak dodatkowej wiadomości."}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            )}
+          </article>
+        ) : null}
+
+        {communityDetailTab === "requests" ? (
+          <div className="space-y-4">
+            <SectionBlockHeading
+              title="Zgłoszenia do wydarzenia"
+              description="Tutaj widzisz wszystkie prośby o dołączenie, a licznik na zakładce pokazuje te, które nie zostały jeszcze przeprocesowane."
+            />
+            {requests.length === 0 ? (
+              <EmptyPanelState
+                title="Brak zgłoszeń"
+                description="Gdy pojawią się nowe prośby o dołączenie, zobaczysz je tutaj."
+              />
+            ) : (
+              requests.map((request) => (
+                <article
+                  key={request.id}
+                  className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-2xl font-semibold text-brand-navy">
+                        {request.imieNazwisko}
+                      </h3>
+                      <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
+                        <span className="inline-flex items-center gap-2">
+                          <Phone size={14} />
+                          {request.telefon}
+                        </span>
+                        <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
+                        <span>{formatDate(request.createdAt)}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
+                        {request.finalStatus}
+                      </span>
+                      <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                        SMS:{" "}
+                        {resolveAttendanceConfirmationStatusLabel(
+                          request.attendanceConfirmationStatus,
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                    {request.wiadomosc || "Brak dodatkowej wiadomości."}
+                  </p>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+                    <EnrollmentPhotoCard request={request} />
+                    <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                        Stan zgłoszenia
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                          trener: {request.trainerDecision}
+                        </span>
+                        {request.requiresOrganizerApproval !== false ? (
+                          <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                            organizator: {request.organizerDecision}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  {canManageEvent && !eventIsArchived ? (
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      {(["accepted", "pending", "rejected"] as const).map((decision) => (
+                        <button
+                          key={decision}
+                          type="button"
+                          disabled={updatingRequestId === request.id}
+                          onClick={async () => {
+                            setUpdatingRequestId(request.id);
+
+                            try {
+                              await manageEnrollmentRequest(request.id, decision);
+                              toast.success("Zmieniono status osoby w wydarzeniu.");
+                            } catch (error) {
+                              toast.error(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Nie udało się zmienić statusu osoby.",
+                              );
+                            } finally {
+                              setUpdatingRequestId(null);
+                            }
+                          }}
+                          className={
+                            decision === "accepted"
+                              ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                              : decision === "rejected"
+                                ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                                : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                          }
+                        >
+                          {decision === "accepted"
+                            ? "Zaakceptuj"
+                            : decision === "rejected"
+                              ? "Odrzuć"
+                              : "Ustaw oczekuje"}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ))
+            )}
+          </div>
+        ) : null}
+      </PanelSection>
+    );
+  }
 
   return (
     <PanelSection
@@ -7150,11 +8723,15 @@ export function EventManagementPage() {
           </div>
         </div>
 
-        <div className="mt-5 space-y-3 text-sm text-brand-muted">
+          <div className="mt-5 space-y-3 text-sm text-brand-muted">
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             <span>{scheduleRangeLabel}</span>
             <span>Maks. miejsc: {event.capacity}</span>
             <span>Minimalny prog: {resolveMinimumParticipants(event)}</span>
+            <span>
+              SMS: {event.confirmationLeadTimeDays ?? eventGroup?.defaultConfirmationLeadTimeDays ?? 0} dni
+              przed wydarzeniem
+            </span>
           </div>
           <div
             className={`grid gap-3 ${scheduleDays.length > 1 ? "md:grid-cols-2" : "md:grid-cols-1"}`}
@@ -7222,8 +8799,11 @@ export function EventManagementPage() {
                   settingsDraft.status,
                   Number(settingsDraft.capacity) || event.capacity,
                   Number(settingsDraft.minimumParticipants) || resolveMinimumParticipants(event),
+                  Number(settingsDraft.confirmationLeadTimeDays) || 0,
                   isCommunityEvent ? settingsDraft.title : undefined,
                   isCommunityEvent ? settingsDraft.location : undefined,
+                  undefined,
+                  undefined,
                   parseEventTags(settingsDraft.tags),
                   isCommunityEvent ? settingsDraft.eventImages : undefined,
                   isCommunityEvent ? settingsDraft.useEventImageAsCover : undefined,
@@ -7240,6 +8820,7 @@ export function EventManagementPage() {
                     ? "Wydarzenie zostało zatwierdzone."
                     : "Wydarzenie zostało odrzucone.",
                 );
+                setIsSettingsDirty(false);
               } catch (error) {
                 toast.error(
                   error instanceof Error
@@ -7252,6 +8833,13 @@ export function EventManagementPage() {
             }}
           />
         )}
+
+        {canModerateEvent && !canManageEvent ? (
+          <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
+            Jesteś tutaj w trybie moderacji. Możesz przeglądać rekord, wycofać publikację albo
+            usunąć wydarzenie całkowicie, ale bez edycji ustawień organizacyjnych.
+          </p>
+        ) : null}
 
         {collaborationNotice && (
           <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
@@ -7282,7 +8870,7 @@ export function EventManagementPage() {
               </div>
             )}
           </div>
-          <div className="grid gap-4 md:grid-cols-[1fr_220px_220px]">
+          <div className="grid gap-4 md:grid-cols-[1fr_220px_220px_220px]">
             {isCommunityEvent && (
               <>
                 <label className="grid gap-2 md:col-span-3">
@@ -7290,7 +8878,7 @@ export function EventManagementPage() {
                   <input
                     value={settingsDraft.title}
                     onChange={(changeEvent) =>
-                      setSettingsDraft((previous) => ({
+                      updateSettingsDraft((previous) => ({
                         ...previous,
                         title: changeEvent.target.value,
                       }))
@@ -7304,7 +8892,7 @@ export function EventManagementPage() {
                   <input
                     value={settingsDraft.location}
                     onChange={(changeEvent) =>
-                      setSettingsDraft((previous) => ({
+                      updateSettingsDraft((previous) => ({
                         ...previous,
                         location: changeEvent.target.value,
                       }))
@@ -7332,7 +8920,7 @@ export function EventManagementPage() {
 
                       try {
                         const uploadedImages = await uploadCommunityEventImages(filesToUpload);
-                        setSettingsDraft((previous) => ({
+                        updateSettingsDraft((previous) => ({
                           ...previous,
                           eventImages: [...previous.eventImages, ...uploadedImages],
                         }));
@@ -7341,7 +8929,7 @@ export function EventManagementPage() {
                       }
                     }}
                     onRemove={(imageId) =>
-                      setSettingsDraft((previous) => ({
+                      updateSettingsDraft((previous) => ({
                         ...previous,
                         eventImages: previous.eventImages.filter((image) => image.id !== imageId),
                         useEventImageAsCover:
@@ -7351,13 +8939,13 @@ export function EventManagementPage() {
                       }))
                     }
                     onToggleUseEventImageAsCover={(nextValue) =>
-                      setSettingsDraft((previous) => ({
+                      updateSettingsDraft((previous) => ({
                         ...previous,
                         useEventImageAsCover: nextValue && previous.eventImages.length > 0,
                       }))
                     }
                     onMakePrimary={(imageId) =>
-                      setSettingsDraft((previous) => ({
+                      updateSettingsDraft((previous) => ({
                         ...previous,
                         eventImages: moveEventImageToFront(previous.eventImages, imageId),
                       }))
@@ -7371,7 +8959,7 @@ export function EventManagementPage() {
               <select
                 value={settingsDraft.status}
                 onChange={(changeEvent) =>
-                  setSettingsDraft((previous) => ({
+                  updateSettingsDraft((previous) => ({
                     ...previous,
                     status: changeEvent.target.value as TrainingEventStatus,
                   }))
@@ -7390,7 +8978,7 @@ export function EventManagementPage() {
                 type="number"
                 value={settingsDraft.capacity}
                 onChange={(changeEvent) =>
-                  setSettingsDraft((previous) => ({
+                  updateSettingsDraft((previous) => ({
                     ...previous,
                     capacity: changeEvent.target.value,
                   }))
@@ -7405,13 +8993,35 @@ export function EventManagementPage() {
                 type="number"
                 value={settingsDraft.minimumParticipants}
                 onChange={(changeEvent) =>
-                  setSettingsDraft((previous) => ({
+                  updateSettingsDraft((previous) => ({
                     ...previous,
                     minimumParticipants: changeEvent.target.value,
                   }))
                 }
                 className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
               />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">
+                SMS potwierdzenia udziału
+              </span>
+              <input
+                min={0}
+                type="number"
+                value={settingsDraft.confirmationLeadTimeDays}
+                onChange={(changeEvent) =>
+                  updateSettingsDraft((previous) => ({
+                    ...previous,
+                    confirmationLeadTimeDays: changeEvent.target.value,
+                  }))
+                }
+                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+              />
+              <span className="text-xs text-brand-muted">
+                {eventGroup
+                  ? `Grupa bazowa ma teraz ustawione ${eventGroup.defaultConfirmationLeadTimeDays} dni.`
+                  : "Dla wydarzeń społeczności ustawiasz timing bezpośrednio tutaj."}
+              </span>
             </label>
           </div>
 
@@ -7423,7 +9033,7 @@ export function EventManagementPage() {
                 type="date"
                 value={settingsDraft.firstDayDate}
                 onChange={(changeEvent) =>
-                  setSettingsDraft((previous) => ({
+                  updateSettingsDraft((previous) => ({
                     ...previous,
                     firstDayDate: changeEvent.target.value,
                   }))
@@ -7440,7 +9050,7 @@ export function EventManagementPage() {
                 value={settingsDraft.scheduleDays.length}
                 onChange={(changeEvent) => {
                   const nextDayCount = Math.max(1, Number(changeEvent.target.value) || 1);
-                  setSettingsDraft((previous) => ({
+                  updateSettingsDraft((previous) => ({
                     ...previous,
                     scheduleDays: resizeScheduleDayDrafts(
                       nextDayCount,
@@ -7460,7 +9070,7 @@ export function EventManagementPage() {
             <select
               value={settingsDraft.enrollmentPhotoRequirement}
               onChange={(changeEvent) =>
-                setSettingsDraft((previous) => ({
+                updateSettingsDraft((previous) => ({
                   ...previous,
                   enrollmentPhotoRequirement: changeEvent.target.value as
                     | "default"
@@ -7476,7 +9086,7 @@ export function EventManagementPage() {
             </select>
           </label>
 
-          <div className="mt-4 grid gap-4">
+          <div className="mt-4 grid gap-4 xl:grid-cols-4">
             {settingsDraft.scheduleDays.map((day, index) => {
               const draftScheduleDays = buildScheduleDaysFromDrafts(
                 settingsDraft.firstDayDate,
@@ -7506,7 +9116,7 @@ export function EventManagementPage() {
                         type="time"
                         value={day.startTime}
                         onChange={(changeEvent) =>
-                          setSettingsDraft((previous) => ({
+                          updateSettingsDraft((previous) => ({
                             ...previous,
                             scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
                               itemIndex === index
@@ -7528,7 +9138,7 @@ export function EventManagementPage() {
                         type="time"
                         value={day.endTime}
                         onChange={(changeEvent) =>
-                          setSettingsDraft((previous) => ({
+                          updateSettingsDraft((previous) => ({
                             ...previous,
                             scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
                               itemIndex === index
@@ -7554,7 +9164,7 @@ export function EventManagementPage() {
             <input
               value={settingsDraft.tags}
               onChange={(changeEvent) =>
-                setSettingsDraft((previous) => ({
+                updateSettingsDraft((previous) => ({
                   ...previous,
                   tags: changeEvent.target.value,
                 }))
@@ -7580,8 +9190,11 @@ export function EventManagementPage() {
 	                    Number(settingsDraft.capacity) || event.capacity,
 	                    Number(settingsDraft.minimumParticipants) ||
 	                      resolveMinimumParticipants(event),
+	                    Number(settingsDraft.confirmationLeadTimeDays) || 0,
 	                    isCommunityEvent ? settingsDraft.title : undefined,
 	                    isCommunityEvent ? settingsDraft.location : undefined,
+	                    undefined,
+	                    undefined,
 	                    parseEventTags(settingsDraft.tags),
 	                    isCommunityEvent ? settingsDraft.eventImages : undefined,
 	                    isCommunityEvent ? settingsDraft.useEventImageAsCover : undefined,
@@ -7593,6 +9206,7 @@ export function EventManagementPage() {
                     settingsDraft.enrollmentPhotoRequirement,
                   );
                   toast.success("Zapisano ustawienia szkolenia.");
+                  setIsSettingsDirty(false);
                 } catch (error) {
                   toast.error(
                     error instanceof Error
@@ -7645,6 +9259,70 @@ export function EventManagementPage() {
             Po osiagnieciu minimalnego progu status zmieni sie automatycznie na potwierdzone.
           </p>
         </div>}
+
+        {canModerateEvent ? (
+          <div className="mt-6 flex flex-wrap gap-3">
+            {event.isPublished ? (
+              <button
+                type="button"
+                disabled={unpublishingEvent || deletingEvent}
+                onClick={async () => {
+                  if (!window.confirm("Wycofać publikację tego wydarzenia?")) {
+                    return;
+                  }
+
+                  setUnpublishingEvent(true);
+                  try {
+                    await unpublishTrainingEvent(event.id);
+                    toast.success("Publikacja została wycofana.");
+                    setIsSettingsDirty(false);
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : "Nie udało się wycofać publikacji.",
+                    );
+                  } finally {
+                    setUnpublishingEvent(false);
+                  }
+                }}
+                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+              >
+                {unpublishingEvent ? "Wycofywanie..." : "Wycofaj publikację"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={unpublishingEvent || deletingEvent}
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    "Usunąć to wydarzenie całkowicie razem ze zgłoszeniami i uczestnikami?",
+                  )
+                ) {
+                  return;
+                }
+
+                setDeletingEvent(true);
+                try {
+                  await deleteTrainingEvent(event.id);
+                  toast.success("Wydarzenie zostało usunięte.");
+                  navigate(fallbackListPath, { replace: true });
+                } catch (error) {
+                  toast.error(
+                    error instanceof Error ? error.message : "Nie udało się usunąć wydarzenia.",
+                  );
+                } finally {
+                  setDeletingEvent(false);
+                }
+              }}
+              className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700 disabled:opacity-60"
+            >
+              <Trash2 size={16} />
+              {deletingEvent ? "Usuwanie..." : "Usuń całkowicie"}
+            </button>
+          </div>
+        ) : null}
       </article>
 
       {event.groupId ? (
@@ -7664,7 +9342,7 @@ export function EventManagementPage() {
                   roster otwarty
                 </span>
               )}
-              {currentUser.role === "organizer" && !eventIsArchived ? (
+              {canUseOrganizerRosterTools ? (
                 <button
                   type="button"
                   disabled={finalizingRoster}
@@ -7691,7 +9369,7 @@ export function EventManagementPage() {
               ) : null}
             </div>
           </div>
-          {currentUser.role === "organizer" && !eventIsArchived ? (
+          {canUseOrganizerRosterTools ? (
             <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                 <select
@@ -7782,7 +9460,7 @@ export function EventManagementPage() {
                         ) : null}
                       </div>
                     </div>
-                    {currentUser.role !== "trainer" && !eventIsArchived ? (
+                    {(isEventOrganizerOwner || currentUser.role === "admin") && !eventIsArchived ? (
                       <div className="flex flex-wrap gap-2">
                         {(["invited", "confirmed", "declined", "removed"] as const).map((status) => (
                           <button
@@ -7922,15 +9600,11 @@ export function EventManagementPage() {
 
                       try {
                         const moveDecision =
-                          currentUser.role === "organizer"
-                            ? request.organizerDecision
-                            : currentUser.role === "admin"
-                              ? request.finalStatus === "accepted"
-                                ? "accepted"
-                                : request.finalStatus === "rejected"
-                                  ? "rejected"
-                                  : "pending"
-                              : request.trainerDecision;
+                          request.finalStatus === "accepted"
+                            ? "accepted"
+                            : request.finalStatus === "rejected"
+                              ? "rejected"
+                              : "pending";
 
                         await manageEnrollmentRequest(
                           request.id,
@@ -8120,7 +9794,6 @@ export function ProfileSettingsPage() {
     specialties: "",
     locations: "",
     authorizationCode: "",
-    avatarFile: null as File | null,
   });
   const [organizerForm, setOrganizerForm] = useState({
     displayName: "",
@@ -8132,11 +9805,18 @@ export function ProfileSettingsPage() {
     displayName: "",
     referralSource: "",
     notes: "",
-    avatarFile: null as File | null,
   });
+  const [participantAvatarDraft, setParticipantAvatarDraft] = useState<AvatarCropDraft>(
+    createEmptyAvatarCropDraft(),
+  );
+  const [participantAvatarInteracting, setParticipantAvatarInteracting] = useState(false);
+  const participantAvatarDragStateRef = useRef<AvatarCropDragState | null>(null);
+  const participantAvatarPinchStateRef = useRef<AvatarCropPinchState | null>(null);
+  const participantAvatarPointersRef = useRef(new Map<number, { clientX: number; clientY: number }>());
   const [appSettingsForm, setAppSettingsForm] = useState({
     signupPhotoMode: "optional" as PhotoMode,
     enrollmentPhotoMode: "optional" as PhotoMode,
+    confirmationSmsTemplate: "",
   });
   const [saving, setSaving] = useState(false);
 
@@ -8145,15 +9825,14 @@ export function ProfileSettingsPage() {
       return;
     }
 
-    setTrainerForm((previous) => ({
-      ...previous,
+    setTrainerForm({
       heroNote: trainerProfile.heroNote ?? "",
       bio: trainerProfile.bio ?? "",
       specialties: trainerProfile.specialties.join(", "),
       locations: trainerProfile.locations.join(", "),
       authorizationCode: "",
-    }));
-  }, [trainerProfile]);
+    });
+  }, [trainerProfile?.id]);
 
   useEffect(() => {
     if (!organizerProfile) {
@@ -8166,10 +9845,10 @@ export function ProfileSettingsPage() {
       location: organizerProfile.location ?? "",
       description: organizerProfile.description ?? "",
     });
-  }, [organizerProfile]);
+  }, [organizerProfile?.id]);
 
   useEffect(() => {
-    if (!currentUser || currentUser.role !== "participant") {
+    if (!currentUser) {
       return;
     }
 
@@ -8177,261 +9856,254 @@ export function ProfileSettingsPage() {
       displayName: currentUser.displayName ?? "",
       referralSource: currentUser.referralSource ?? "",
       notes: currentUser.notes ?? "",
-      avatarFile: null,
     });
-  }, [currentUser]);
+    setParticipantAvatarDraft(createEmptyAvatarCropDraft());
+    participantAvatarDragStateRef.current = null;
+    participantAvatarPinchStateRef.current = null;
+    participantAvatarPointersRef.current.clear();
+    setParticipantAvatarInteracting(false);
+  }, [currentUser?.id, currentUser?.displayName, currentUser?.notes, currentUser?.referralSource]);
 
   useEffect(() => {
+    return () => {
+      if (participantAvatarDraft.revokePreviewUrl && participantAvatarDraft.previewUrl) {
+        URL.revokeObjectURL(participantAvatarDraft.previewUrl);
+      }
+    };
+  }, [participantAvatarDraft.previewUrl, participantAvatarDraft.revokePreviewUrl]);
+
+  useEffect(() => {
+    const defaultNotificationSettings = normalizeNotificationSettings(
+      store.appSettings.defaultNotificationSettings,
+    );
     setAppSettingsForm({
       signupPhotoMode: store.appSettings.signupPhotoMode,
       enrollmentPhotoMode: store.appSettings.enrollmentPhotoMode,
+      confirmationSmsTemplate: defaultNotificationSettings.confirmationSmsTemplate,
     });
-  }, [store.appSettings.enrollmentPhotoMode, store.appSettings.signupPhotoMode]);
+  }, [
+    store.appSettings.defaultNotificationSettings,
+    store.appSettings.enrollmentPhotoMode,
+    store.appSettings.signupPhotoMode,
+  ]);
 
   if (!currentUser) {
     return null;
   }
 
-  if (currentUser.role === "participant") {
-    async function handleParticipantSubmit(event: FormEvent<HTMLFormElement>) {
-      event.preventDefault();
-      setSaving(true);
+  const participantAvatarPreviewStyle = getAvatarCropPreviewStyle(participantAvatarDraft);
 
-      try {
-        await updateParticipantProfile({
-          displayName: participantForm.displayName,
-          referralSource: participantForm.referralSource,
-          notes: participantForm.notes,
-          avatarFile: participantForm.avatarFile,
-        });
-        toast.success("Profil uczestnika został zapisany.");
-        setParticipantForm((previous) => ({
-          ...previous,
-          avatarFile: null,
-        }));
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
-        );
-      } finally {
-        setSaving(false);
+  async function loadParticipantAvatarDraft(
+    sourceUrl: string,
+    options?: {
+      file?: File | null;
+      crop?: AvatarCropSettings;
+      revokePreviewUrl?: boolean;
+    },
+  ) {
+    const dimensions =
+      options?.crop?.sourceWidth && options?.crop?.sourceHeight
+        ? {
+            width: options.crop.sourceWidth,
+            height: options.crop.sourceHeight,
+          }
+        : await readImageDimensions(sourceUrl);
+
+    setParticipantAvatarDraft((previous) => {
+      if (previous.revokePreviewUrl && previous.previewUrl) {
+        URL.revokeObjectURL(previous.previewUrl);
       }
-    }
 
-    return (
-      <PanelSection
-        eyebrow="Profil"
-        title="Mój profil"
-        description="Tutaj ustawisz swoje podstawowe dane, zdjęcie profilowe i informację, skąd trafiłeś do Emandar."
-      >
-        <form
-          onSubmit={handleParticipantSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
-        >
-          <div className="grid gap-4 sm:gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <div className="space-y-3 sm:space-y-4">
-              <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-brand-shell">
-                {currentUser.avatarUrl ? (
-                  <img
-                    src={currentUser.avatarUrl}
-                    alt={currentUser.displayName}
-                    className="h-52 w-full object-cover object-top sm:h-64"
-                  />
-                ) : (
-                  <div className="flex h-52 items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-5xl font-semibold text-brand-navy/70 sm:h-64 sm:text-6xl">
-                    {currentUser.displayName.slice(0, 1)}
-                  </div>
-                )}
-              </div>
-
-              <label className="grid gap-2 rounded-[1.75rem] border border-dashed border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy sm:rounded-3xl sm:py-4">
-                <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                  <ImagePlus size={16} />
-                  Nowe zdjęcie
-                </span>
-                <span className="inline-flex w-fit items-center justify-center rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
-                  Wybierz plik
-                </span>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={(event) =>
-                    setParticipantForm((previous) => ({
-                      ...previous,
-                      avatarFile: event.target.files?.[0] ?? null,
-                    }))
-                  }
-                  className="hidden"
-                />
-                <span className="text-sm text-brand-muted">
-                  {participantForm.avatarFile
-                    ? participantForm.avatarFile.name
-                    : "JPG, PNG lub WEBP do 5 MB"}
-                </span>
-              </label>
-            </div>
-
-            <div className="grid gap-4">
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
-                <input
-                  required
-                  value={participantForm.displayName}
-                  onChange={(event) =>
-                    setParticipantForm((previous) => ({
-                      ...previous,
-                      displayName: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Numer telefonu</span>
-                <input
-                  value={currentUser.phone ?? ""}
-                  disabled
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-muted outline-none"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Skąd do nas trafiłeś?</span>
-                <input
-                  value={participantForm.referralSource}
-                  onChange={(event) =>
-                    setParticipantForm((previous) => ({
-                      ...previous,
-                      referralSource: event.target.value,
-                    }))
-                  }
-                  placeholder="np. od znajomego, z warsztatu, z Instagrama"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Kilka słów o sobie</span>
-                <textarea
-                  rows={8}
-                  value={participantForm.notes}
-                  onChange={(event) =>
-                    setParticipantForm((previous) => ({
-                      ...previous,
-                      notes: event.target.value,
-                    }))
-                  }
-                  placeholder="To pole zostaje przy Twoim profilu i pomaga potem lepiej Cię rozpoznać."
-                  className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <button
-                type="submit"
-                disabled={saving}
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-              >
-                {saving ? "Zapisywanie..." : "Zapisz profil"}
-              </button>
-            </div>
-          </div>
-        </form>
-      </PanelSection>
-    );
+      return {
+        file: options?.file ?? null,
+        previewUrl: sourceUrl,
+        revokePreviewUrl: options?.revokePreviewUrl === true,
+        naturalWidth: dimensions.width,
+        naturalHeight: dimensions.height,
+        zoom: options?.crop?.zoom ?? 1,
+        panX: options?.crop?.panX ?? 0,
+        panY: options?.crop?.panY ?? 0,
+      };
+    });
+    participantAvatarDragStateRef.current = null;
+    participantAvatarPinchStateRef.current = null;
+    participantAvatarPointersRef.current.clear();
+    setParticipantAvatarInteracting(false);
   }
 
-  if (currentUser.role === "admin") {
-    async function handleSettingsSubmit(event: FormEvent<HTMLFormElement>) {
-      event.preventDefault();
-      setSaving(true);
+  async function handleParticipantAvatarSelection(event: ChangeEvent<HTMLInputElement>) {
+    const nextFile = event.target.files?.[0] ?? null;
+    event.target.value = "";
 
-      try {
-        await updateAppSettings(appSettingsForm);
-        toast.success("Ustawienia aplikacji zostały zapisane.");
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Nie udało się zapisać ustawień aplikacji.",
-        );
-      } finally {
-        setSaving(false);
-      }
+    if (!nextFile) {
+      return;
     }
 
-    return (
-      <PanelSection
-        eyebrow="Profil"
-        title="Mój profil"
-        description="Admin ustawia tutaj portalowe zasady zbierania zdjęć przy rejestracji konta i przy zapisie na szkolenie."
-      >
-        <form
-          onSubmit={handleSettingsSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
-        >
-          <div className="grid gap-4">
-            <div className="grid gap-4 rounded-3xl border border-brand-line bg-brand-shell p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-              <div className="grid gap-1">
-                <span className="text-sm font-semibold text-brand-navy">
-                  Zdjęcie uczestnika przy rejestracji konta
-                </span>
-                <span className="text-sm text-brand-muted">
-                  Steruje publiczną rejestracją SMS. Tryb wyłączony ukrywa pole zdjęcia i nie
-                  pozwala go wysłać w tym flow.
-                </span>
-              </div>
-              <PhotoModeSegmentedControl
-                value={appSettingsForm.signupPhotoMode}
-                onChange={(nextValue) =>
-                  setAppSettingsForm((previous) => ({
-                    ...previous,
-                    signupPhotoMode: nextValue,
-                  }))
-                }
-                disabled={saving}
-              />
-            </div>
+    const previewUrl = URL.createObjectURL(nextFile);
 
-            <div className="grid gap-4 rounded-3xl border border-brand-line bg-brand-shell p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-              <div className="grid gap-1">
-                <span className="text-sm font-semibold text-brand-navy">
-                  Zdjęcie uczestnika przy zapisie na szkolenie
-                </span>
-                <span className="text-sm text-brand-muted">
-                  To globalny domyślny tryb dla szkoleń z ustawieniem dziedziczenia.
-                  Nadpisanie na poziomie konkretnego szkolenia nadal wygrywa.
-                </span>
-              </div>
-              <PhotoModeSegmentedControl
-                value={appSettingsForm.enrollmentPhotoMode}
-                onChange={(nextValue) =>
-                  setAppSettingsForm((previous) => ({
-                    ...previous,
-                    enrollmentPhotoMode: nextValue,
-                  }))
-                }
-                disabled={saving}
-              />
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-          >
-            {saving ? "Zapisywanie..." : "Zapisz ustawienia"}
-          </button>
-        </form>
-      </PanelSection>
-    );
+    try {
+      await loadParticipantAvatarDraft(previewUrl, {
+        file: nextFile,
+        revokePreviewUrl: true,
+      });
+    } catch (error) {
+      URL.revokeObjectURL(previewUrl);
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się wczytać zdjęcia.",
+      );
+    }
   }
 
-  if ((currentUser.role === "trainer" || currentUser.role === "admin") && trainerProfile) {
-    async function handleTrainerSubmit(event: FormEvent<HTMLFormElement>) {
-      event.preventDefault();
-      setSaving(true);
+  function handleParticipantAvatarPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!participantAvatarDraft.previewUrl) {
+      return;
+    }
 
-      try {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    participantAvatarPointersRef.current.set(event.pointerId, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+
+    const pointers = Array.from(participantAvatarPointersRef.current.values());
+    if (pointers.length >= 2) {
+      const [first, second] = pointers;
+      participantAvatarDragStateRef.current = null;
+      participantAvatarPinchStateRef.current = {
+        startDistance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        startZoom: participantAvatarDraft.zoom,
+        startCenterX: (first.clientX + second.clientX) / 2,
+        startCenterY: (first.clientY + second.clientY) / 2,
+        startPanX: participantAvatarDraft.panX,
+        startPanY: participantAvatarDraft.panY,
+      };
+    } else {
+      participantAvatarPinchStateRef.current = null;
+      participantAvatarDragStateRef.current = {
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startPanX: participantAvatarDraft.panX,
+        startPanY: participantAvatarDraft.panY,
+      };
+    }
+    setParticipantAvatarInteracting(true);
+  }
+
+  function handleParticipantAvatarPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!participantAvatarPointersRef.current.has(event.pointerId)) {
+      return;
+    }
+
+    participantAvatarPointersRef.current.set(event.pointerId, {
+      clientX: event.clientX,
+      clientY: event.clientY,
+    });
+
+    const frameWidth = Math.max(event.currentTarget.clientWidth, 1);
+    const frameHeight = Math.max(event.currentTarget.clientHeight, 1);
+    const pointers = Array.from(participantAvatarPointersRef.current.values());
+
+    if (pointers.length >= 2) {
+      const [first, second] = pointers;
+      const pinchState = participantAvatarPinchStateRef.current;
+      if (!pinchState) {
+        return;
+      }
+
+      const nextDistance = Math.max(
+        Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        1,
+      );
+      const nextCenterX = (first.clientX + second.clientX) / 2;
+      const nextCenterY = (first.clientY + second.clientY) / 2;
+      const distanceRatio = nextDistance / Math.max(pinchState.startDistance, 1);
+      const deltaX = ((nextCenterX - pinchState.startCenterX) / frameWidth) * 200;
+      const deltaY = ((nextCenterY - pinchState.startCenterY) / frameHeight) * 200;
+
+      setParticipantAvatarDraft((previous) => ({
+        ...previous,
+        zoom: Math.max(1, Math.min(2.2, Math.round(pinchState.startZoom * distanceRatio * 100) / 100)),
+        panX: clampAvatarPan(pinchState.startPanX + deltaX),
+        panY: clampAvatarPan(pinchState.startPanY + deltaY),
+      }));
+      return;
+    }
+
+    const dragState = participantAvatarDragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const deltaX = ((event.clientX - dragState.startClientX) / frameWidth) * 200;
+    const deltaY = ((event.clientY - dragState.startClientY) / frameHeight) * 200;
+
+    setParticipantAvatarDraft((previous) => ({
+      ...previous,
+      panX: clampAvatarPan(dragState.startPanX + deltaX),
+      panY: clampAvatarPan(dragState.startPanY + deltaY),
+    }));
+  }
+
+  function handleParticipantAvatarPointerEnd(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    participantAvatarPointersRef.current.delete(event.pointerId);
+    const pointers = Array.from(participantAvatarPointersRef.current.values());
+
+    if (pointers.length >= 2) {
+      const [first, second] = pointers;
+      participantAvatarPinchStateRef.current = {
+        startDistance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        startZoom: participantAvatarDraft.zoom,
+        startCenterX: (first.clientX + second.clientX) / 2,
+        startCenterY: (first.clientY + second.clientY) / 2,
+        startPanX: participantAvatarDraft.panX,
+        startPanY: participantAvatarDraft.panY,
+      };
+      participantAvatarDragStateRef.current = null;
+      setParticipantAvatarInteracting(true);
+      return;
+    }
+
+    if (pointers.length === 1) {
+      const [pointer] = pointers;
+      const [[pointerId]] = Array.from(participantAvatarPointersRef.current.entries());
+      participantAvatarPinchStateRef.current = null;
+      participantAvatarDragStateRef.current = {
+        pointerId,
+        startClientX: pointer.clientX,
+        startClientY: pointer.clientY,
+        startPanX: participantAvatarDraft.panX,
+        startPanY: participantAvatarDraft.panY,
+      };
+      setParticipantAvatarInteracting(true);
+      return;
+    }
+
+    participantAvatarDragStateRef.current = null;
+    participantAvatarPinchStateRef.current = null;
+    setParticipantAvatarInteracting(false);
+  }
+
+  async function handleProfileSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+
+    try {
+      const avatarCrop = buildAvatarCropSettings(participantAvatarDraft);
+
+      await updateParticipantProfile({
+        displayName: participantForm.displayName,
+        referralSource: participantForm.referralSource,
+        notes: participantForm.notes,
+        avatarFile: participantAvatarDraft.file,
+        avatarCrop,
+      });
+
+      if (trainerProfile) {
         await updateTrainerProfile({
           heroNote: trainerForm.heroNote,
           bio: trainerForm.bio,
@@ -8444,223 +10116,479 @@ export function ProfileSettingsPage() {
             .map((item) => item.trim())
             .filter(Boolean),
           authorizationCode: trainerForm.authorizationCode,
-          avatarFile: trainerForm.avatarFile,
+          avatarFile: participantAvatarDraft.file,
+          avatarCrop,
         });
-        toast.success("Profil Przekazującego Wiedzę został zapisany.");
-        setTrainerForm((previous) => ({
-          ...previous,
-          authorizationCode: "",
-          avatarFile: null,
-        }));
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
-        );
-      } finally {
-        setSaving(false);
       }
-    }
 
-    function handleTrainerAvatarChange(event: ChangeEvent<HTMLInputElement>) {
-      const nextFile = event.target.files?.[0] ?? null;
+      toast.success(trainerProfile ? "Profil został zapisany." : "Profil uczestnika został zapisany.");
+      participantAvatarDragStateRef.current = null;
+      participantAvatarPinchStateRef.current = null;
+      participantAvatarPointersRef.current.clear();
+      setParticipantAvatarInteracting(false);
+      setParticipantAvatarDraft((previous) => {
+        if (previous.revokePreviewUrl && previous.previewUrl) {
+          URL.revokeObjectURL(previous.previewUrl);
+        }
+
+        return createEmptyAvatarCropDraft();
+      });
       setTrainerForm((previous) => ({
         ...previous,
-        avatarFile: nextFile,
+        authorizationCode: "",
       }));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
+      );
+    } finally {
+      setSaving(false);
     }
-
-    return (
-      <PanelSection
-        eyebrow="Profil"
-        title="Mój profil"
-        description="Tutaj zmienisz zdjęcie, krótkie motto, opis, tagi i lokalizacje szkoleń. Po zapisie zmiany od razu trafią na publiczny widok Przekazujących Wiedzę."
-      >
-        <form
-          onSubmit={handleTrainerSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
-        >
-          <div className="grid gap-4 sm:gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
-            <div className="space-y-3 sm:space-y-4">
-              <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-brand-shell">
-                {trainerProfile.avatarUrl ? (
-                  <img
-                    src={trainerProfile.avatarUrl}
-                    alt={trainerProfile.displayName}
-                    className="h-52 w-full object-cover object-top sm:h-64"
-                  />
-                ) : (
-                  <div className="flex h-52 items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-5xl font-semibold text-brand-navy/70 sm:h-64 sm:text-6xl">
-                    {trainerProfile.displayName.slice(0, 1)}
-                  </div>
-                )}
-              </div>
-
-              <label className="grid gap-2 rounded-[1.75rem] border border-dashed border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy sm:rounded-3xl sm:py-4">
-                <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                  <ImagePlus size={16} />
-                  Nowe zdjęcie
-                </span>
-                <span className="inline-flex w-fit items-center justify-center rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
-                  Wybierz plik
-                </span>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={handleTrainerAvatarChange}
-                  className="hidden"
-                />
-                <span className="text-sm text-brand-muted">
-                  {trainerForm.avatarFile
-                    ? trainerForm.avatarFile.name
-                    : "JPG, PNG lub WEBP do 5 MB"}
-                </span>
-              </label>
-            </div>
-
-            <div className="grid gap-4">
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Krotkie motto</span>
-                <input
-                  required
-                  value={trainerForm.heroNote}
-                  onChange={(event) =>
-                    setTrainerForm((previous) => ({
-                      ...previous,
-                      heroNote: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">
-                  Dłuższy opis o sobie
-                </span>
-                <textarea
-                  required
-                  rows={8}
-                  value={trainerForm.bio}
-                  onChange={(event) =>
-                    setTrainerForm((previous) => ({
-                      ...previous,
-                      bio: event.target.value,
-                    }))
-                  }
-                  className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">
-                  Tagi szkoleń
-                </span>
-                <input
-                  required
-                  value={trainerForm.specialties}
-                  onChange={(event) =>
-                    setTrainerForm((previous) => ({
-                      ...previous,
-                      specialties: event.target.value,
-                    }))
-                  }
-                  placeholder="np. Oddech, Regeneracja, Praca z grupą"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <span className="text-sm text-brand-muted">
-                  Oddziel tagi przecinkami.
-                </span>
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">
-                  Lokalizacje szkoleń
-                </span>
-                <input
-                  required
-                  value={trainerForm.locations}
-                  onChange={(event) =>
-                    setTrainerForm((previous) => ({
-                      ...previous,
-                      locations: event.target.value,
-                    }))
-                  }
-                  placeholder="np. Warszawa, Łódź, Online"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <span className="text-sm text-brand-muted">
-                  Oddziel lokalizacje przecinkami.
-                </span>
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">
-                  Kod autoryzacyjny trenera
-                </span>
-                <input
-                  value={trainerForm.authorizationCode}
-                  onChange={(event) =>
-                    setTrainerForm((previous) => ({
-                      ...previous,
-                      authorizationCode: event.target.value,
-                    }))
-                  }
-                  placeholder={
-                    trainerProfile.authorizationCodeConfigured
-                      ? "Wpisz nowy kod, aby nadpisać obecny"
-                      : "Ustaw kod dla uczestników i organizatorów"
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <span className="text-sm text-brand-muted">
-                  {trainerProfile.authorizationCodeConfigured
-                    ? "Aktualny kod jest ukryty. Wpisz nowy tylko wtedy, gdy chcesz go zmienić."
-                    : "Bez ustawionego kodu nowe konta i nowe relacje organizatorów nie zostaną aktywowane."}
-                </span>
-              </label>
-
-              <button
-                type="submit"
-                disabled={saving}
-                className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-              >
-                {saving ? "Zapisywanie..." : "Zapisz profil"}
-              </button>
-            </div>
-          </div>
-        </form>
-      </PanelSection>
-    );
   }
 
-  if (currentUser.role === "organizer" && organizerProfile) {
-    async function handleOrganizerSubmit(event: FormEvent<HTMLFormElement>) {
-      event.preventDefault();
-      setSaving(true);
+  const participantProfileFormContent = (
+    <form
+      onSubmit={handleProfileSubmit}
+      className="min-w-0 overflow-hidden rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
+    >
+      <div className="mb-5">
+        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+          {trainerProfile ? "Profil bazowy" : "Uczestnik"}
+        </p>
+        <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+          {trainerProfile ? "Mój profil" : "Profil uczestnika"}
+        </h3>
+        <p className="mt-2 text-sm text-brand-muted">
+          {trainerProfile
+            ? "To nadal jest jeden profil użytkownika. Przekazujący wiedzę ma tu po prostu dodatkowe ustawienia publicznego profilu i szkoleń."
+            : "Ta sekcja zostaje dostępna także na wyższych poziomach roli, bo każdy organizator, trener i admin nadal zachowuje bazowe capability uczestnika."}
+        </p>
+      </div>
 
-      try {
-        await updateOrganizerProfile(organizerForm);
-        toast.success("Profil organizatora został zapisany.");
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
-        );
-      } finally {
-        setSaving(false);
-      }
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="space-y-3 sm:space-y-4">
+          <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-brand-shell">
+            {participantAvatarDraft.previewUrl ? (
+              <div
+                onPointerDown={handleParticipantAvatarPointerDown}
+                onPointerMove={handleParticipantAvatarPointerMove}
+                onPointerUp={handleParticipantAvatarPointerEnd}
+                onPointerCancel={handleParticipantAvatarPointerEnd}
+                className={`relative aspect-[4/5] w-full overflow-hidden bg-brand-shell touch-none ${
+                  participantAvatarInteracting ? "cursor-grabbing" : "cursor-grab"
+                }`}
+              >
+                <img
+                  src={participantAvatarDraft.previewUrl}
+                  alt="Podgląd nowego zdjęcia profilowego"
+                  style={participantAvatarPreviewStyle}
+                  className="select-none"
+                  draggable={false}
+                />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/75 via-brand-navy/25 to-transparent px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-white">
+                  Przesuń zdjęcie lub użyj pinch
+                </div>
+                <div className="absolute right-3 top-3 flex gap-2">
+                  <button
+                    type="button"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setParticipantAvatarDraft((previous) => ({
+                        ...previous,
+                        zoom: Math.max(1, Math.round((previous.zoom - 0.1) * 100) / 100),
+                      }));
+                    }}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-semibold text-brand-navy shadow-soft backdrop-blur"
+                    aria-label="Zmniejsz zdjęcie"
+                  >
+                    -
+                  </button>
+                  <button
+                    type="button"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setParticipantAvatarDraft((previous) => ({
+                        ...previous,
+                        zoom: Math.min(2.2, Math.round((previous.zoom + 0.1) * 100) / 100),
+                      }));
+                    }}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-lg font-semibold text-brand-navy shadow-soft backdrop-blur"
+                    aria-label="Powiększ zdjęcie"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+            ) : currentUser.avatarUrl ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void loadParticipantAvatarDraft(currentUser.avatarUrl!, {
+                    crop: currentUser.avatarCrop,
+                  });
+                }}
+                className="relative block h-52 w-full overflow-hidden text-left sm:h-64"
+              >
+                <AvatarMedia
+                  src={currentUser.avatarUrl}
+                  alt={currentUser.displayName}
+                  crop={currentUser.avatarCrop}
+                  className="h-full w-full"
+                />
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/70 to-transparent px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.2em] text-white">
+                  Dotknij zdjęcia, żeby poprawić kadr
+                </div>
+              </button>
+            ) : (
+              <div className="flex h-52 items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-5xl font-semibold text-brand-navy/70 sm:h-64 sm:text-6xl">
+                {currentUser.displayName.slice(0, 1)}
+              </div>
+            )}
+          </div>
+
+          <label className="grid gap-2 rounded-[1.75rem] border border-dashed border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy sm:rounded-3xl sm:py-4">
+            <span className="inline-flex items-center gap-2 text-sm font-semibold">
+              <ImagePlus size={16} />
+              Nowe zdjęcie
+            </span>
+            <span className="inline-flex w-fit items-center justify-center rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
+              Wybierz plik
+            </span>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              onChange={(event) => {
+                void handleParticipantAvatarSelection(event);
+              }}
+              className="hidden"
+            />
+            <span className="text-sm text-brand-muted">
+              {participantAvatarDraft.file
+                ? participantAvatarDraft.file.name
+                : "JPG, PNG lub WEBP do 5 MB"}
+            </span>
+          </label>
+
+          {participantAvatarDraft.previewUrl ? (
+            <div className="rounded-[1.5rem] border border-brand-line/70 bg-white/80 px-4 py-3 text-brand-navy shadow-soft">
+              <p className="text-sm text-brand-muted">
+                {participantAvatarDraft.file
+                  ? "Ustaw kadr bezpośrednio na zdjęciu. Przeciągnij palcem lub myszą, użyj pinch na mobile albo `+/-` na obrazie. Zapis nastąpi dopiero po kliknięciu `Zapisz profil uczestnika`."
+                  : "Poprawiasz kadr obecnego zdjęcia. Przeciągnij obraz albo użyj pinch i `+/-` na zdjęciu. Zapis nastąpi dopiero po kliknięciu `Zapisz profil uczestnika`."}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setParticipantAvatarDraft((previous) => ({
+                      ...previous,
+                      zoom: 1,
+                      panX: 0,
+                      panY: 0,
+                    }))
+                  }
+                  className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft"
+                >
+                  Resetuj kadr
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    participantAvatarDragStateRef.current = null;
+                    participantAvatarPinchStateRef.current = null;
+                    participantAvatarPointersRef.current.clear();
+                    setParticipantAvatarInteracting(false);
+                    setParticipantAvatarDraft((previous) => {
+                      if (previous.revokePreviewUrl && previous.previewUrl) {
+                        URL.revokeObjectURL(previous.previewUrl);
+                      }
+
+                      return createEmptyAvatarCropDraft();
+                    });
+                  }}
+                  className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft"
+                >
+                  Cofnij nowe zdjęcie
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="grid min-w-0 gap-4">
+          <label className="grid min-w-0 gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
+            <input
+              required
+              value={participantForm.displayName}
+              onChange={(event) =>
+                setParticipantForm((previous) => ({
+                  ...previous,
+                  displayName: event.target.value,
+                }))
+              }
+              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            />
+          </label>
+
+          <label className="grid min-w-0 gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Numer telefonu</span>
+            <input
+              value={currentUser.phone ?? ""}
+              disabled
+              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-muted outline-none"
+            />
+          </label>
+
+          <label className="grid min-w-0 gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Skąd do nas trafiłeś?</span>
+            <input
+              value={participantForm.referralSource}
+              onChange={(event) =>
+                setParticipantForm((previous) => ({
+                  ...previous,
+                  referralSource: event.target.value,
+                }))
+              }
+              placeholder="np. od znajomego, z warsztatu, z Instagrama"
+              className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            />
+          </label>
+
+          <label className="grid min-w-0 gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Kilka słów o sobie</span>
+            <textarea
+              rows={8}
+              value={participantForm.notes}
+              onChange={(event) =>
+                setParticipantForm((previous) => ({
+                  ...previous,
+                  notes: event.target.value,
+                }))
+              }
+              placeholder="To pole zostaje przy Twoim profilu i pomaga potem lepiej Cię rozpoznać."
+              className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+            />
+          </label>
+
+          {trainerProfile ? (
+            <div className="mt-2 rounded-[1.75rem] border border-brand-line bg-brand-shell/40 p-4 sm:rounded-[2rem] sm:p-5">
+              <div className="mb-4">
+                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                  Przekazujący Wiedzę
+                </p>
+                <h4 className="mt-2 text-lg font-semibold text-brand-navy sm:text-xl">
+                  Dodatkowe ustawienia profilu trenera
+                </h4>
+                <p className="mt-2 text-sm text-brand-muted">
+                  Te pola rozszerzają Twój bazowy profil i sterują kartą publiczną, filtrowaniem
+                  szkoleń oraz kodem do łączenia organizatorów.
+                </p>
+              </div>
+
+              <div className="grid min-w-0 gap-4">
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Krótkie motto</span>
+                  <input
+                    required
+                    value={trainerForm.heroNote}
+                    onChange={(event) =>
+                      setTrainerForm((previous) => ({
+                        ...previous,
+                        heroNote: event.target.value,
+                      }))
+                    }
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                </label>
+
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Dłuższy opis o sobie</span>
+                  <textarea
+                    required
+                    rows={8}
+                    value={trainerForm.bio}
+                    onChange={(event) =>
+                      setTrainerForm((previous) => ({
+                        ...previous,
+                        bio: event.target.value,
+                      }))
+                    }
+                    className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                </label>
+
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Tagi szkoleń</span>
+                  <input
+                    required
+                    value={trainerForm.specialties}
+                    onChange={(event) =>
+                      setTrainerForm((previous) => ({
+                        ...previous,
+                        specialties: event.target.value,
+                      }))
+                    }
+                    placeholder="np. Oddech, Regeneracja, Praca z grupą"
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                  <span className="text-sm text-brand-muted">Oddziel tagi przecinkami.</span>
+                </label>
+
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Lokalizacje szkoleń</span>
+                  <input
+                    required
+                    value={trainerForm.locations}
+                    onChange={(event) =>
+                      setTrainerForm((previous) => ({
+                        ...previous,
+                        locations: event.target.value,
+                      }))
+                    }
+                    placeholder="np. Warszawa, Łódź, Online"
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                  <span className="text-sm text-brand-muted">Oddziel lokalizacje przecinkami.</span>
+                </label>
+
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">
+                    Kod autoryzacyjny trenera
+                  </span>
+                  <input
+                    value={trainerForm.authorizationCode}
+                    onChange={(event) =>
+                      setTrainerForm((previous) => ({
+                        ...previous,
+                        authorizationCode: event.target.value,
+                      }))
+                    }
+                    placeholder={
+                      trainerProfile.authorizationCodeConfigured
+                        ? "Wpisz nowy kod, aby nadpisać obecny"
+                        : "Ustaw kod dla uczestników i organizatorów"
+                    }
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                  <span className="text-sm text-brand-muted">
+                    {trainerProfile.authorizationCodeConfigured
+                      ? "Aktualny kod jest ukryty. Wpisz nowy tylko wtedy, gdy chcesz go zmienić."
+                      : "Bez ustawionego kodu nowe konta i nowe relacje organizatorów nie zostaną aktywowane."}
+                  </span>
+                </label>
+              </div>
+            </div>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={saving}
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+          >
+            {saving ? "Zapisywanie..." : trainerProfile ? "Zapisz profil" : "Zapisz profil uczestnika"}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+
+  async function handleSettingsSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const normalizedConfirmationTemplate = appSettingsForm.confirmationSmsTemplate.trim();
+    if (!normalizedConfirmationTemplate) {
+      toast.error("Uzupełnij globalny wzór SMS potwierdzenia.");
+      return;
     }
 
-    return (
-      <PanelSection
-        eyebrow="Profil"
-        title="Mój profil"
-        description="Tutaj uzupełnisz nazwę organizatora, osobę kontaktową, lokalizację i opis."
-      >
-        <form
-          onSubmit={handleOrganizerSubmit}
-          className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
-        >
-          <div className="grid gap-4 xl:grid-cols-2">
+    if (
+      !normalizedConfirmationTemplate.includes("{{confirm_url}}") ||
+      !normalizedConfirmationTemplate.includes("{{decline_url}}")
+    ) {
+      toast.error("Globalny szablon SMS musi zawierać link TAK i NIE.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await updateAppSettings({
+        signupPhotoMode: appSettingsForm.signupPhotoMode,
+        enrollmentPhotoMode: appSettingsForm.enrollmentPhotoMode,
+        defaultNotificationSettings: {
+          ...normalizeNotificationSettings(store.appSettings.defaultNotificationSettings),
+          confirmationSmsTemplate: normalizedConfirmationTemplate,
+        },
+      });
+      toast.success("Ustawienia aplikacji zostały zapisane.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zapisać ustawień aplikacji.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleOrganizerSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+
+    try {
+      await updateOrganizerProfile(organizerForm);
+      toast.success("Profil organizatora został zapisany.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <PanelSection
+      eyebrow="Ustawienia"
+      title="Ustawienia"
+      description="To jedno miejsce zbiera profil, dostęp organizatora Emandar i rzadkie konfiguracje systemowe."
+    >
+      <div className="space-y-6">
+        {participantProfileFormContent}
+
+        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+          <div className="mb-5">
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+              Dostęp organizatora
+            </p>
+            <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+              Organizator Emandar i relacje
+            </h3>
+            <p className="mt-2 text-sm text-brand-muted">
+              To rzadziej używana konfiguracja dostępu. Tutaj połączysz się z trenerem kodem,
+              sprawdzisz aktywne relacje i zobaczysz, czy masz odblokowane funkcje organizatora.
+            </p>
+          </div>
+          <RelationsHubContent />
+        </article>
+
+        {organizerProfile ? (
+          <form
+            onSubmit={handleOrganizerSubmit}
+            className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
+          >
+            <div className="mb-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                Organizator
+              </p>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-2">
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">
                 Nazwa organizatora
@@ -8723,31 +10651,153 @@ export function ProfileSettingsPage() {
                 className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
               />
             </label>
+            </div>
 
-          </div>
+            <button
+              type="submit"
+              disabled={saving}
+              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+            >
+              {saving ? "Zapisywanie..." : "Zapisz profil organizatora"}
+            </button>
+          </form>
+        ) : null}
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+        {hasModeratorAccess(currentUser) ? (
+          <form
+            onSubmit={handleSettingsSubmit}
+            className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
           >
-            {saving ? "Zapisywanie..." : "Zapisz profil"}
-          </button>
-        </form>
-      </PanelSection>
-    );
-  }
+            <div className="mb-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                SMS
+              </p>
+              <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+                Globalny wzór SMS potwierdzenia
+              </h3>
+              <p className="mt-2 text-sm text-brand-muted">
+                Ten szablon jest wspólny dla całej aplikacji. Organizatorzy i trenerzy ustawiają
+                tylko czas wysyłki na grupach oraz wydarzeniach.
+              </p>
+            </div>
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-brand-navy">
+                  Treść SMS potwierdzenia udziału
+                </span>
+                <textarea
+                  rows={7}
+                  value={appSettingsForm.confirmationSmsTemplate}
+                  onChange={(event) =>
+                    setAppSettingsForm((previous) => ({
+                      ...previous,
+                      confirmationSmsTemplate: event.target.value,
+                    }))
+                  }
+                  className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+                <span className="text-sm text-brand-muted">
+                  Szablon musi zawierać linki <code>{"{{confirm_url}}"}</code> i{" "}
+                  <code>{"{{decline_url}}"}</code>.
+                </span>
+              </label>
+              <div className="rounded-[1.75rem] border border-brand-line bg-brand-shell p-5">
+                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                  Placeholdery
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {NOTIFICATION_TEMPLATE_PLACEHOLDERS.map((item) => (
+                    <span
+                      key={item}
+                      className="rounded-full border border-brand-line bg-white px-3 py-1 text-xs font-semibold text-brand-navy"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
 
-  return (
-    <PanelSection
-      eyebrow="Profil"
-      title="Ustawienia profilu"
-      description="Ten ekran jest dostępny dla Przekazującego Wiedzę i organizatora."
-    >
-      <EmptyPanelState
-        title="Brak dostępnego profilu"
-        description="Zaloguj się jako Przekazujący Wiedzę albo organizator, aby edytować ustawienia."
-      />
+            <button
+              type="submit"
+              disabled={saving}
+              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+            >
+              {saving ? "Zapisywanie..." : "Zapisz wzór SMS"}
+            </button>
+          </form>
+        ) : null}
+
+        {currentUser.role === "admin" ? (
+          <form
+            onSubmit={handleSettingsSubmit}
+            className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
+          >
+            <div className="mb-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                Admin
+              </p>
+              <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+                Ustawienia systemowe
+              </h3>
+            </div>
+            <div className="grid gap-4">
+              <div className="grid gap-4 rounded-3xl border border-brand-line bg-brand-shell p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                <div className="grid gap-1">
+                  <span className="text-sm font-semibold text-brand-navy">
+                    Zdjęcie uczestnika przy rejestracji konta
+                  </span>
+                  <span className="text-sm text-brand-muted">
+                    Steruje publiczną rejestracją uczestnika. Tryb wyłączony ukrywa pole
+                    zdjęcia, a pozostałe tryby określają, czy zdjęcie jest opcjonalne czy
+                    wymagane.
+                  </span>
+                </div>
+                <PhotoModeSegmentedControl
+                  value={appSettingsForm.signupPhotoMode}
+                  onChange={(nextValue) =>
+                    setAppSettingsForm((previous) => ({
+                      ...previous,
+                      signupPhotoMode: nextValue,
+                    }))
+                  }
+                  disabled={saving}
+                />
+              </div>
+
+              <div className="grid gap-4 rounded-3xl border border-brand-line bg-brand-shell p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                <div className="grid gap-1">
+                  <span className="text-sm font-semibold text-brand-navy">
+                    Zdjęcie uczestnika przy zapisie na szkolenie
+                  </span>
+                  <span className="text-sm text-brand-muted">
+                    To globalny domyślny tryb dla szkoleń. Nadpisanie na poziomie konkretnego
+                    wydarzenia nadal wygrywa.
+                  </span>
+                </div>
+                <PhotoModeSegmentedControl
+                  value={appSettingsForm.enrollmentPhotoMode}
+                  onChange={(nextValue) =>
+                    setAppSettingsForm((previous) => ({
+                      ...previous,
+                      enrollmentPhotoMode: nextValue,
+                    }))
+                  }
+                  disabled={saving}
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+            >
+              {saving ? "Zapisywanie..." : "Zapisz ustawienia"}
+            </button>
+          </form>
+        ) : null}
+      </div>
     </PanelSection>
   );
 }
@@ -8856,6 +10906,150 @@ export function AccountRequestsPage() {
             )}
           </article>
         ))}
+      </div>
+    </PanelSection>
+  );
+}
+
+export function UserManagementPage() {
+  const {
+    currentUser,
+    store,
+    updateUserModeratorRole,
+    updateUserOrganizerFunctionsBlocked,
+  } = useAppState();
+
+  if (!currentUser || !hasModeratorAccess(currentUser)) {
+    return (
+      <PanelSection
+        eyebrow="Konta"
+        title="Konta i blokady"
+        description="Ten ekran jest dostępny tylko dla moderatora albo admina."
+      >
+        <EmptyPanelState
+          title="Brak dostępu"
+          description="Moderator lub admin może zarządzać blokadami organizatora i rolą moderatora."
+        />
+      </PanelSection>
+    );
+  }
+
+  const canGrantModeratorRole = currentUser.role === "admin";
+  const users = [...store.users]
+    .filter((user) => user.id !== currentUser.id || currentUser.role === "admin")
+    .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
+
+  return (
+    <PanelSection
+      eyebrow="Konta"
+      title="Konta i blokady"
+      description="Moderator może blokować funkcje organizatora bez odpinania relacji. Admin dodatkowo nadaje i odbiera rolę moderatora."
+    >
+      <div className="space-y-4">
+        {users.map((user) => {
+          const userRoles = Array.from(new Set(["participant", ...(user.roles ?? [])])).sort(
+            (left, right) => getRoleLabel(left).localeCompare(getRoleLabel(right), "pl"),
+          );
+          const organizerProfile = store.organizers.find((item) => item.userId === user.id);
+          const organizerFunctionsAreBlocked = isOrganizerFunctionsBlocked(user);
+          const canToggleOrganizerBlock = Boolean(organizerProfile);
+          const hasModeratorRole = user.roles?.includes("moderator") ?? false;
+
+          return (
+            <article
+              key={user.id}
+              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-2xl font-semibold text-brand-navy">{user.displayName}</p>
+                  <div className="mt-3 space-y-1 text-sm text-brand-muted">
+                    <p>{user.email ?? "Konto bez emaila"}</p>
+                    <p>{user.phone}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {userRoles.map((role) => (
+                    <span
+                      key={`${user.id}-${role}`}
+                      className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy"
+                    >
+                      {getRoleLabel(role)}
+                    </span>
+                  ))}
+                  {organizerFunctionsAreBlocked ? (
+                    <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-900">
+                      organizer zablokowany
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-3">
+                {canGrantModeratorRole && user.role !== "admin" ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await updateUserModeratorRole(user.id, !hasModeratorRole);
+                        toast.success(
+                          hasModeratorRole
+                            ? "Rola moderatora została odebrana."
+                            : "Rola moderatora została nadana.",
+                        );
+                      } catch (error) {
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Nie udało się zmienić roli moderatora.",
+                        );
+                      }
+                    }}
+                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+                  >
+                    <ShieldCheck size={16} />
+                    {hasModeratorRole ? "Odbierz moderatora" : "Nadaj moderatora"}
+                  </button>
+                ) : null}
+
+                {canToggleOrganizerBlock ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await updateUserOrganizerFunctionsBlocked(
+                          user.id,
+                          !organizerFunctionsAreBlocked,
+                        );
+                        toast.success(
+                          organizerFunctionsAreBlocked
+                            ? "Odblokowano funkcje organizatora."
+                            : "Zablokowano funkcje organizatora.",
+                        );
+                      } catch (error) {
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Nie udało się zmienić blokady organizatora.",
+                        );
+                      }
+                    }}
+                    className={`inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-semibold ${
+                      organizerFunctionsAreBlocked
+                        ? "border border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : "border border-amber-200 bg-amber-50 text-amber-900"
+                    }`}
+                  >
+                    <Users size={16} />
+                    {organizerFunctionsAreBlocked
+                      ? "Odblokuj organizatora"
+                      : "Zablokuj organizatora"}
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
       </div>
     </PanelSection>
   );

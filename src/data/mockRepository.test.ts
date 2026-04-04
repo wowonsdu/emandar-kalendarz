@@ -125,24 +125,72 @@ function mockSession(userId: string) {
 
 function mockStoreFetch(initialStore: DemoStore) {
   let currentStore = structuredClone(initialStore);
+  let currentVersion = 1;
+  const patchBodies: Array<{ baseVersion: number; collections: Partial<DemoStore> }> = [];
+
+  let conflictSnapshot:
+    | {
+        store: DemoStore;
+        version: number;
+      }
+    | null = null;
 
   const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes("/api/mock/store") && (!init?.method || init.method === "GET")) {
-      return new Response(JSON.stringify({ store: currentStore, version: 1 }), {
+    if (url.includes("/api/mock/state") && (!init?.method || init.method === "GET")) {
+      return new Response(JSON.stringify({ store: currentStore, version: currentVersion }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    if (url.includes("/api/mock/save") && init?.method === "POST") {
-      const parsed = JSON.parse(String(init.body)) as { store: DemoStore };
-      currentStore = structuredClone(parsed.store);
-
-      return new Response(JSON.stringify({ store: currentStore, version: 2 }), {
+    if (url.includes("/api/mock/version") && (!init?.method || init.method === "GET")) {
+      return new Response(JSON.stringify({ version: currentVersion }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
+    }
+
+    if (url.includes("/api/mock/patch") && init?.method === "POST") {
+      const parsed = JSON.parse(String(init.body)) as {
+        baseVersion: number;
+        collections: Partial<DemoStore>;
+      };
+      patchBodies.push(parsed);
+
+      if (conflictSnapshot) {
+        currentStore = structuredClone(conflictSnapshot.store);
+        currentVersion = conflictSnapshot.version;
+        const payload = {
+          error: "version-conflict",
+          currentVersion,
+        };
+        conflictSnapshot = null;
+
+        return new Response(JSON.stringify(payload), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      for (const [collectionKey, value] of Object.entries(parsed.collections)) {
+        currentStore = {
+          ...currentStore,
+          [collectionKey]: structuredClone(value),
+        };
+      }
+      currentVersion += 1;
+
+      return new Response(
+        JSON.stringify({
+          version: currentVersion,
+          writtenCollections: Object.keys(parsed.collections),
+        }),
+        {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+        },
+      );
     }
 
     return new Response(JSON.stringify({ error: "not-found" }), {
@@ -156,29 +204,36 @@ function mockStoreFetch(initialStore: DemoStore) {
   return {
     fetchMock,
     getStore: () => structuredClone(currentStore),
+    getPatchBodies: () => structuredClone(patchBodies),
+    queueVersionConflict: (store: DemoStore, version = currentVersion + 1) => {
+      conflictSnapshot = {
+        store: structuredClone(store),
+        version,
+      };
+    },
   };
 }
 
 describe("resolveMockApiUrls", () => {
   it("prefers the emandar base path when dev routing is nested under /emandar", () => {
-    const urls = resolveMockApiUrls("save.php", {
+    const urls = resolveMockApiUrls("patch.php", {
       baseUrl: "/",
       pathname: "/emandar/panel/wydarzenia-spolecznosci/event-anita-community-sierpien",
     });
 
-    expect(urls[0]).toBe("/emandar/api/mock/save.php");
-    expect(urls).toContain("/api/mock/save.php");
-    expect(urls).toContain("/emandar/api/mock/save");
+    expect(urls[0]).toBe("/emandar/api/mock/patch.php");
+    expect(urls).toContain("/api/mock/patch.php");
+    expect(urls).toContain("/emandar/api/mock/patch");
   });
 
   it("adds php and non-php variants without duplicates", () => {
-    const urls = resolveMockApiUrls("store", {
+    const urls = resolveMockApiUrls("state", {
       baseUrl: "/emandar/",
       pathname: "/emandar/panel/moderacja-wydarzen-spolecznosci",
     });
 
-    expect(urls[0]).toBe("/emandar/api/mock/store");
-    expect(urls).toContain("/emandar/api/mock/store.php");
+    expect(urls[0]).toBe("/emandar/api/mock/state");
+    expect(urls).toContain("/emandar/api/mock/state.php");
     expect(new Set(urls).size).toBe(urls.length);
   });
 });
@@ -193,6 +248,8 @@ describe("publishTrainingEvent", () => {
 
     expect(mockedApi.fetchMock).toHaveBeenCalled();
     expect(mockedApi.getStore().trainingEvents[0]?.isPublished).toBe(true);
+    expect(mockedApi.getPatchBodies()[0]?.collections).toHaveProperty("trainingEvents");
+    expect(mockedApi.getPatchBodies()[0]?.collections).not.toHaveProperty("publicTrainingEvents");
   });
 
   it("rejects archived events with a business error", async () => {
@@ -270,6 +327,27 @@ describe("publishTrainingEvent", () => {
     const publishedEvent = mockedApi.getStore().trainingEvents[0];
     expect(publishedEvent?.isPublished).toBe(true);
     expect(publishedEvent?.trainerCollaborationStatus).toBe("accepted");
+  });
+
+  it("refreshes local cache after a version conflict before returning a retry error", async () => {
+    const { publishTrainingEvent } = await import("./mockRepository");
+    const actor = createActor();
+    const mockedApi = mockStoreFetch(createStore());
+    mockedApi.queueVersionConflict(
+      createStore({
+        id: "event-community",
+        archivedAt: "2026-04-23T12:00:00.000Z",
+      }),
+      2,
+    );
+
+    await expect(publishTrainingEvent("event-community", actor)).rejects.toThrow(
+      "Dane zostały zmienione w innym oknie. Widok został odświeżony, spróbuj ponownie.",
+    );
+
+    await expect(publishTrainingEvent("event-community", actor)).rejects.toThrow(
+      "Nie możesz opublikować zarchiwizowanego wydarzenia.",
+    );
   });
 });
 

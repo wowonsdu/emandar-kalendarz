@@ -9,6 +9,39 @@ const mockSeedStorePath = path.join(mockDataDir, "seed-store.json");
 const mockRuntimeStorePath =
   process.env.EMANDAR_RUNTIME_STORE_PATH?.trim() ||
   path.resolve(__dirname, ".local-state/emandar/runtime-store.json");
+const mockRuntimeShardsDir = path.join(
+  path.dirname(mockRuntimeStorePath),
+  path.basename(mockRuntimeStorePath, path.extname(mockRuntimeStorePath)) || "runtime-store",
+);
+const persistedCollectionKeys = [
+  "users",
+  "trainers",
+  "organizers",
+  "participantProfiles",
+  "groups",
+  "groupMembers",
+  "eventParticipants",
+  "relations",
+  "trainingEvents",
+  "availabilitySlots",
+  "trainerSharedSlots",
+  "trainerCalendarFeeds",
+  "organizerCalendarFeeds",
+  "trainerOrganizerCalendarFeeds",
+  "trainerExternalBusyMonths",
+  "organizerExternalBusyMonths",
+  "enrollmentRequests",
+  "notifications",
+  "accountRequests",
+  "trainerAccountApprovals",
+  "appSettings",
+] as const;
+
+type PersistedCollectionKey = (typeof persistedCollectionKeys)[number];
+type MockRuntimeMeta = {
+  version: number;
+  updatedAt: string;
+};
 
 async function readMockJsonFile(filePath: string) {
   try {
@@ -18,60 +51,266 @@ async function readMockJsonFile(filePath: string) {
   }
 }
 
-async function getMockStoreVersion(filePath: string) {
+async function hasPath(filePath: string) {
   try {
-    const metadata = await stat(filePath);
-    return Math.round(metadata.mtimeMs);
+    await stat(filePath);
+    return true;
   } catch {
-    return Date.now();
+    return false;
   }
 }
 
-async function writeMockStorePayload(store: unknown) {
-  await mkdir(path.dirname(mockRuntimeStorePath), { recursive: true });
-  await writeFile(mockRuntimeStorePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-
+function getDefaultNotificationSettings() {
   return {
-    store,
-    version: await getMockStoreVersion(mockRuntimeStorePath),
+    reminderLeadDays: 7,
+    sendToTrainer: true,
+    sendToOrganizer: true,
+    sendToParticipants: true,
+    requireParticipantSmsConfirmation: false,
+    reminderSmsTemplate:
+      "Przypomnienie o szkoleniu {{event_title}} dnia {{event_date}} w {{event_location}}.",
+    confirmationSmsTemplate:
+      "Czy bierzesz udział w szkoleniu {{event_title}} dnia {{event_date}}? Tak: {{confirm_url}} Nie: {{decline_url}}",
   };
 }
 
-async function readOrBootstrapMockStorePayload() {
-  const runtimeStore = await readMockJsonFile(mockRuntimeStorePath);
-  if (runtimeStore && typeof runtimeStore === "object") {
+function createDefaultMockStore() {
+  return {
+    users: [],
+    trainers: [],
+    organizers: [],
+    participantProfiles: [],
+    groups: [],
+    groupMembers: [],
+    eventParticipants: [],
+    relations: [],
+    trainingEvents: [],
+    publicTrainingEvents: [],
+    availabilitySlots: [],
+    trainerSharedSlots: [],
+    trainerCalendarFeeds: [],
+    organizerCalendarFeeds: [],
+    trainerOrganizerCalendarFeeds: [],
+    trainerExternalBusyMonths: [],
+    organizerExternalBusyMonths: [],
+    enrollmentRequests: [],
+    notifications: [],
+    accountRequests: [],
+    trainerAccountApprovals: [],
+    appSettings: {
+      signupPhotoMode: "optional",
+      enrollmentPhotoMode: "optional",
+      defaultNotificationSettings: getDefaultNotificationSettings(),
+    },
+  };
+}
+
+function toPersistedCollections(store: Record<string, unknown>) {
+  const defaults = createDefaultMockStore();
+
+  return Object.fromEntries(
+    persistedCollectionKeys.map((collectionKey) => {
+      const value = store[collectionKey];
+      return [collectionKey, typeof value === "object" && value !== null ? value : defaults[collectionKey]];
+    }),
+  ) as Record<PersistedCollectionKey, unknown>;
+}
+
+function fromPersistedCollections(collections: Record<string, unknown>) {
+  const defaults = createDefaultMockStore();
+  const store = { ...defaults } as Record<string, unknown>;
+
+  persistedCollectionKeys.forEach((collectionKey) => {
+    const value = collections[collectionKey];
+    store[collectionKey] =
+      typeof value === "object" && value !== null ? value : defaults[collectionKey];
+  });
+
+  store.publicTrainingEvents = [];
+  return store;
+}
+
+function getCollectionPath(collectionKey: PersistedCollectionKey) {
+  return path.join(mockRuntimeShardsDir, `${collectionKey}.json`);
+}
+
+async function readRuntimeMeta(): Promise<MockRuntimeMeta> {
+  const meta = await readMockJsonFile(path.join(mockRuntimeShardsDir, "meta.json"));
+  if (meta && typeof meta === "object") {
+    const version = Number((meta as { version?: number }).version ?? 1);
+    const updatedAt =
+      typeof (meta as { updatedAt?: string }).updatedAt === "string"
+        ? (meta as { updatedAt?: string }).updatedAt
+        : new Date().toISOString();
+
     return {
-      store: runtimeStore,
-      version: await getMockStoreVersion(mockRuntimeStorePath),
+      version,
+      updatedAt,
     };
   }
 
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function writeRuntimeMeta(version: number) {
+  const payload: MockRuntimeMeta = {
+    version,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeFile(path.join(mockRuntimeShardsDir, "meta.json"), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return payload;
+}
+
+async function writeRuntimeCollections(
+  collections: Partial<Record<PersistedCollectionKey, unknown>>,
+  version: number,
+) {
+  await mkdir(mockRuntimeShardsDir, { recursive: true });
+
+  await Promise.all(
+    Object.entries(collections).map(async ([collectionKey, value]) => {
+      await writeFile(
+        getCollectionPath(collectionKey as PersistedCollectionKey),
+        `${JSON.stringify(value, null, 2)}\n`,
+        "utf8",
+      );
+    }),
+  );
+
+  await writeRuntimeMeta(version);
+}
+
+async function hasRuntimeShards() {
+  if (!(await hasPath(path.join(mockRuntimeShardsDir, "meta.json")))) {
+    return false;
+  }
+
+  const collectionChecks = await Promise.all(
+    persistedCollectionKeys.map((collectionKey) => hasPath(getCollectionPath(collectionKey))),
+  );
+  return collectionChecks.every(Boolean);
+}
+
+async function readRuntimeCollections() {
+  await ensureBootstrapRuntimeShards();
+  const defaults = createDefaultMockStore();
+  const entries = await Promise.all(
+    persistedCollectionKeys.map(async (collectionKey) => {
+      const value = await readMockJsonFile(getCollectionPath(collectionKey));
+      return [
+        collectionKey,
+        value && typeof value === "object" ? value : defaults[collectionKey],
+      ] as const;
+    }),
+  );
+
+  return Object.fromEntries(entries) as Record<PersistedCollectionKey, unknown>;
+}
+
+async function ensureBootstrapRuntimeShards() {
+  if (await hasRuntimeShards()) {
+    return;
+  }
+
+  const legacyRuntimeStore = await readMockJsonFile(mockRuntimeStorePath);
+  if (legacyRuntimeStore && typeof legacyRuntimeStore === "object") {
+    const collections = toPersistedCollections(legacyRuntimeStore as Record<string, unknown>);
+    await writeRuntimeCollections(collections, 1);
+    return;
+  }
+
   const seedStore = JSON.parse(await readFile(mockSeedStorePath, "utf8")) as unknown;
-  return writeMockStorePayload(seedStore);
+  const collections = toPersistedCollections(seedStore as Record<string, unknown>);
+  await writeRuntimeCollections(collections, 1);
+}
+
+async function readOrBootstrapMockStorePayload() {
+  const collections = await readRuntimeCollections();
+  const meta = await readRuntimeMeta();
+
+  return {
+    store: fromPersistedCollections(collections),
+    version: meta.version,
+  };
+}
+
+async function readMockVersionPayload() {
+  await ensureBootstrapRuntimeShards();
+  const meta = await readRuntimeMeta();
+  return {
+    version: meta.version,
+  };
+}
+
+async function applyMockPatch(baseVersion: number, collections: Partial<Record<PersistedCollectionKey, unknown>>) {
+  await ensureBootstrapRuntimeShards();
+  const meta = await readRuntimeMeta();
+
+  if (baseVersion !== meta.version) {
+    return {
+      status: 409,
+      payload: {
+        error: "version-conflict",
+        currentVersion: meta.version,
+      },
+    };
+  }
+
+  const invalidCollectionKey = Object.keys(collections).find(
+    (collectionKey) => !persistedCollectionKeys.includes(collectionKey as PersistedCollectionKey),
+  );
+  if (invalidCollectionKey) {
+    return {
+      status: 400,
+      payload: {
+        error: "invalid-collections",
+      },
+    };
+  }
+
+  const nextCollections = collections;
+
+  if (Object.keys(nextCollections).length === 0) {
+    return {
+      status: 200,
+      payload: {
+        version: meta.version,
+        writtenCollections: [],
+      },
+    };
+  }
+
+  await writeRuntimeCollections(nextCollections, meta.version + 1);
+  return {
+    status: 200,
+    payload: {
+      version: meta.version + 1,
+      writtenCollections: Object.keys(nextCollections),
+    },
+  };
 }
 
 function mockStoreApiPlugin() {
-  const storeRoutes = new Set([
-    "/emandar/api/mock/store",
-    "/api/mock/store",
-    "/emandar/api/mock/store.php",
-    "/api/mock/store.php",
+  const stateRoutes = new Set([
+    "/emandar/api/mock/state",
+    "/api/mock/state",
+    "/emandar/api/mock/state.php",
+    "/api/mock/state.php",
   ]);
-  const saveRoutes = new Set([
-    "/emandar/api/mock/save",
-    "/api/mock/save",
-    "/emandar/api/mock/save.php",
-    "/api/mock/save.php",
+  const versionRoutes = new Set([
+    "/emandar/api/mock/version",
+    "/api/mock/version",
+    "/emandar/api/mock/version.php",
+    "/api/mock/version.php",
   ]);
-  const resetRoutes = new Set([
-    "/emandar/api/mock/reset",
-    "/api/mock/reset",
-    "/emandar/api/mock/reset.php",
-    "/api/mock/reset.php",
-  ]);
-  const legacyRuntimeStoreRoutes = new Set([
-    "/emandar/api/mock/runtime-store",
-    "/api/mock/runtime-store",
+  const patchRoutes = new Set([
+    "/emandar/api/mock/patch",
+    "/api/mock/patch",
+    "/emandar/api/mock/patch.php",
+    "/api/mock/patch.php",
   ]);
 
   return {
@@ -80,12 +319,7 @@ function mockStoreApiPlugin() {
       server.middlewares.use(async (req, res, next) => {
         const requestPath = req.url?.split("?")[0] ?? "";
 
-        if (
-          !storeRoutes.has(requestPath) &&
-          !saveRoutes.has(requestPath) &&
-          !resetRoutes.has(requestPath) &&
-          !legacyRuntimeStoreRoutes.has(requestPath)
-        ) {
+        if (!stateRoutes.has(requestPath) && !versionRoutes.has(requestPath) && !patchRoutes.has(requestPath)) {
           next();
           return;
         }
@@ -93,22 +327,21 @@ function mockStoreApiPlugin() {
         res.setHeader("Content-Type", "application/json; charset=utf-8");
         res.setHeader("Cache-Control", "no-store");
 
-        if (storeRoutes.has(requestPath) && req.method === "GET") {
+        if (stateRoutes.has(requestPath) && req.method === "GET") {
           const payload = await readOrBootstrapMockStorePayload();
           res.statusCode = 200;
           res.end(JSON.stringify(payload));
           return;
         }
 
-        if (resetRoutes.has(requestPath) && req.method === "POST") {
-          const seedStore = JSON.parse(await readFile(mockSeedStorePath, "utf8")) as unknown;
-          const payload = await writeMockStorePayload(seedStore);
+        if (versionRoutes.has(requestPath) && req.method === "GET") {
+          const payload = await readMockVersionPayload();
           res.statusCode = 200;
           res.end(JSON.stringify(payload));
           return;
         }
 
-        if ((saveRoutes.has(requestPath) || legacyRuntimeStoreRoutes.has(requestPath)) && req.method === "POST") {
+        if (patchRoutes.has(requestPath) && req.method === "POST") {
           const body = await new Promise<string>((resolve, reject) => {
             let raw = "";
             req.on("data", (chunk) => {
@@ -119,15 +352,24 @@ function mockStoreApiPlugin() {
           });
 
           const parsed = body ? JSON.parse(body) : {};
-          const store = parsed?.store;
-          if (!store || typeof store !== "object") {
+          const baseVersion = Number(parsed?.baseVersion);
+          const collections = parsed?.collections;
+          if (
+            !Number.isInteger(baseVersion) ||
+            !collections ||
+            typeof collections !== "object" ||
+            Array.isArray(collections)
+          ) {
             res.statusCode = 400;
-            res.end(JSON.stringify({ error: "invalid-store" }));
+            res.end(JSON.stringify({ error: "invalid-patch" }));
             return;
           }
 
-          const payload = await writeMockStorePayload(store);
-          res.statusCode = 200;
+          const { status, payload } = await applyMockPatch(
+            baseVersion,
+            collections as Partial<Record<PersistedCollectionKey, unknown>>,
+          );
+          res.statusCode = status;
           res.end(JSON.stringify(payload));
           return;
         }

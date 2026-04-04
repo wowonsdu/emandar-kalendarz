@@ -72,10 +72,56 @@ import {
 
 export type Unsubscribe = () => void;
 type StorePatch = Partial<DemoStore>;
+type PersistedCollectionKey =
+  | "users"
+  | "trainers"
+  | "organizers"
+  | "participantProfiles"
+  | "groups"
+  | "groupMembers"
+  | "eventParticipants"
+  | "relations"
+  | "trainingEvents"
+  | "availabilitySlots"
+  | "trainerSharedSlots"
+  | "trainerCalendarFeeds"
+  | "organizerCalendarFeeds"
+  | "trainerOrganizerCalendarFeeds"
+  | "trainerExternalBusyMonths"
+  | "organizerExternalBusyMonths"
+  | "enrollmentRequests"
+  | "notifications"
+  | "accountRequests"
+  | "trainerAccountApprovals"
+  | "appSettings";
+type PersistedCollectionsPatch = Partial<Pick<DemoStore, PersistedCollectionKey>>;
 
 const authSessionStorageKey = "emandar:mock-auth-session";
 const smsSessionStorageKey = "emandar:mock-sms-session";
 const pollIntervalMs = 5000;
+const persistedCollectionKeys: PersistedCollectionKey[] = [
+  "users",
+  "trainers",
+  "organizers",
+  "participantProfiles",
+  "groups",
+  "groupMembers",
+  "eventParticipants",
+  "relations",
+  "trainingEvents",
+  "availabilitySlots",
+  "trainerSharedSlots",
+  "trainerCalendarFeeds",
+  "organizerCalendarFeeds",
+  "trainerOrganizerCalendarFeeds",
+  "trainerExternalBusyMonths",
+  "organizerExternalBusyMonths",
+  "enrollmentRequests",
+  "notifications",
+  "accountRequests",
+  "trainerAccountApprovals",
+  "appSettings",
+];
 
 let cachedStore: DemoStore | null = null;
 let cachedVersion = 0;
@@ -89,6 +135,16 @@ const publicListeners = new Map<number, (patch: StorePatch) => void>();
 const privateListeners = new Map<number, (patch: StorePatch) => void>();
 const userProfileListeners = new Map<number, { userId: string; callback: (user: AppUser | null) => void }>();
 const authListeners = new Map<number, (userId: string | null) => void>();
+
+class MockVersionConflictError extends Error {
+  snapshot: { store: DemoStore; version: number };
+
+  constructor(snapshot: { store: DemoStore; version: number }) {
+    super("Dane zostały zmienione w innym oknie. Widok został odświeżony, spróbuj ponownie.");
+    this.name = "MockVersionConflictError";
+    this.snapshot = snapshot;
+  }
+}
 
 function getBasePath() {
   return import.meta.env.BASE_URL || "/";
@@ -176,6 +232,10 @@ function removeStorageValue(key: string) {
 
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function serializeForDiff(value: unknown) {
+  return JSON.stringify(value);
 }
 
 function nowIso() {
@@ -330,7 +390,7 @@ function getCurrentSmsSession() {
 }
 
 async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number }> {
-  for (const url of resolveMockApiUrls("store.php")) {
+  for (const url of resolveMockApiUrls("state.php")) {
     const payload = await fetchJsonOrNull<{
       store?: Partial<DemoStore>;
       version?: number;
@@ -349,12 +409,46 @@ async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number 
   throw new Error("Nie udało się wczytać mock store.");
 }
 
-async function persistStore(store: DemoStore) {
-  const payload = cloneValue(store);
+async function readStoreVersion() {
+  for (const url of resolveMockApiUrls("version.php")) {
+    const payload = await fetchJsonOrNull<{
+      version?: number;
+    }>(url);
+
+    if (typeof payload?.version !== "undefined") {
+      return Number(payload.version);
+    }
+  }
+
+  throw new Error("Nie udało się pobrać wersji mock store.");
+}
+
+function buildPersistedCollectionsPatch(
+  previousStore: DemoStore,
+  nextStore: DemoStore,
+): PersistedCollectionsPatch {
+  const patch: PersistedCollectionsPatch = {};
+
+  persistedCollectionKeys.forEach((collectionKey) => {
+    if (serializeForDiff(previousStore[collectionKey]) === serializeForDiff(nextStore[collectionKey])) {
+      return;
+    }
+
+    patch[collectionKey] = cloneValue(nextStore[collectionKey]);
+  });
+
+  return patch;
+}
+
+async function persistStore(
+  collections: PersistedCollectionsPatch,
+  baseVersion: number,
+) {
+  const payload = cloneValue(collections);
   const pendingSave = savePromise.then(async () => {
     let lastError: unknown = null;
 
-    for (const url of resolveMockApiUrls("save.php")) {
+    for (const url of resolveMockApiUrls("patch.php")) {
       try {
         const response = await fetch(url, {
           method: "POST",
@@ -362,29 +456,42 @@ async function persistStore(store: DemoStore) {
             "Content-Type": "application/json",
           },
           credentials: "same-origin",
-          body: JSON.stringify({ store: payload }),
+          body: JSON.stringify({ baseVersion, collections: payload }),
         });
 
+        if (response.status === 409) {
+          const snapshot = await readStoreSnapshot();
+          throw new MockVersionConflictError(snapshot);
+        }
+
         if (!response.ok) {
-          lastError = new Error(`mock-save-${response.status}`);
+          lastError = new Error(`mock-patch-${response.status}`);
           continue;
         }
 
         const saved = (await response.json()) as {
-          store?: Partial<DemoStore>;
           version?: number;
+          writtenCollections?: string[];
         };
 
         return {
-          store: normalizePublicStore(saved.store ?? payload),
           version: Number(saved.version ?? Date.now()),
+          writtenCollections: saved.writtenCollections ?? Object.keys(payload),
         };
       } catch (error) {
+        if (error instanceof MockVersionConflictError) {
+          throw error;
+        }
+
         lastError = error;
       }
     }
 
-    if (lastError instanceof Error && lastError.message.startsWith("mock-save-")) {
+    if (lastError instanceof MockVersionConflictError) {
+      throw lastError;
+    }
+
+    if (lastError instanceof Error && lastError.message.startsWith("mock-patch-")) {
       throw lastError;
     }
 
@@ -477,11 +584,12 @@ async function refreshStoreIfChanged() {
   await savePromise;
 
   try {
-    const snapshot = await readStoreSnapshot();
-    if (snapshot.version === cachedVersion) {
+    const latestVersion = await readStoreVersion();
+    if (latestVersion === cachedVersion) {
       return;
     }
 
+    const snapshot = await readStoreSnapshot();
     cachedStore = snapshot.store;
     cachedVersion = snapshot.version;
     emitStoreListeners();
@@ -528,17 +636,27 @@ function maybeStopPolling() {
 }
 
 async function mutateStore<T>(updater: (store: DemoStore) => T | Promise<T>) {
-  const previousVersion = cachedVersion;
   const previous = cloneValue(await ensureStoreLoaded());
+  const previousVersion = cachedVersion;
   const current = cloneValue(previous);
   const result = await updater(current);
   const nextStore = rebuildDerivedStore(current);
+  const collectionsPatch = buildPersistedCollectionsPatch(previous, nextStore);
 
   try {
-    const persisted = await persistStore(nextStore);
-    cachedStore = persisted.store;
-    cachedVersion = persisted.version;
+    if (Object.keys(collectionsPatch).length > 0) {
+      const persisted = await persistStore(collectionsPatch, previousVersion);
+      cachedVersion = persisted.version;
+    }
+    cachedStore = nextStore;
   } catch (error) {
+    if (error instanceof MockVersionConflictError) {
+      cachedStore = error.snapshot.store;
+      cachedVersion = error.snapshot.version;
+      emitStoreListeners();
+      throw new Error(error.message);
+    }
+
     cachedStore = previous;
     cachedVersion = previousVersion;
     throw error;

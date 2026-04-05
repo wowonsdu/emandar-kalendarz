@@ -104,14 +104,14 @@ describe("participant enrollment status", () => {
 });
 
 describe("enrollment intent", () => {
-  it("defaults missing intent to contact", () => {
-    expect(resolveEnrollmentIntent(undefined)).toBe("contact");
-    expect(getEnrollmentIntentLabel(undefined)).toBe("Proszą o kontakt");
+  it("defaults missing intent to participating", () => {
+    expect(resolveEnrollmentIntent(undefined)).toBe("participating");
+    expect(getEnrollmentIntentLabel(undefined)).toBe("Chcę wziąć udział");
   });
 
   it("keeps participating intent explicit", () => {
     expect(resolveEnrollmentIntent("participating")).toBe("participating");
-    expect(getEnrollmentIntentLabel("participating")).toBe("Biorą udział");
+    expect(getEnrollmentIntentLabel("participating")).toBe("Chcę wziąć udział");
   });
 });
 

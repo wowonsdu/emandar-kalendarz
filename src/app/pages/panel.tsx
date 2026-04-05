@@ -1862,7 +1862,7 @@ function getEventParticipantSourceLabel(source: EventParticipant["source"]) {
     case "organizer":
       return "Dopisany ręcznie";
     default:
-      return "Publiczny intake";
+      return "Chcę wziąć udział";
   }
 }
 
@@ -1931,45 +1931,31 @@ function parseGroupMemberPriorityPromptValue(value: string | null) {
   return null;
 }
 
-type EnrollmentIntentFilter = "all" | EnrollmentIntent;
+type EnrollmentIntentFilter = EnrollmentIntent;
 
 function matchesEnrollmentIntentFilter(
   request: Pick<EnrollmentRequest, "intent">,
   filter: EnrollmentIntentFilter,
 ) {
-  if (filter === "all") {
-    return true;
-  }
-
   return resolveEnrollmentIntent(request.intent) === filter;
 }
 
 function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
-  const contactRequests = requests.filter(
-    (request) => resolveEnrollmentIntent(request.intent) === "contact",
-  );
-  const participatingRequests = requests.filter(
-    (request) => resolveEnrollmentIntent(request.intent) === "participating",
+  const participatingRequests = requests.filter((request) =>
+    resolveEnrollmentIntent(request.intent) === "participating",
   );
 
   return [
     {
-      key: "contact",
-      title: "Proszą o kontakt",
-      requests: contactRequests,
-    },
-    {
       key: "participating",
-      title: "Biorą udział",
+      title: "Chcą wziąć udział",
       requests: participatingRequests,
     },
   ].filter((section) => section.requests.length > 0);
 }
 
-function getEnrollmentIntentBadgeClass(intent: EnrollmentIntent | null | undefined) {
-  return resolveEnrollmentIntent(intent) === "participating"
-    ? "rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white"
-    : "rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy";
+function getEnrollmentIntentBadgeClass() {
+  return "rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white";
 }
 
 function EnrollmentIntentFilterSwitch({
@@ -1982,14 +1968,9 @@ function EnrollmentIntentFilterSwitch({
   onChange: (nextValue: EnrollmentIntentFilter) => void;
 }) {
   const options: Array<{ value: EnrollmentIntentFilter; label: string }> = [
-    { value: "all", label: `Wszyscy (${requests.length})` },
-    {
-      value: "contact",
-      label: `Proszą o kontakt (${requests.filter((request) => resolveEnrollmentIntent(request.intent) === "contact").length})`,
-    },
     {
       value: "participating",
-      label: `Biorą udział (${requests.filter((request) => resolveEnrollmentIntent(request.intent) === "participating").length})`,
+      label: `Chcą wziąć udział (${requests.length})`,
     },
   ];
 
@@ -2483,7 +2464,7 @@ function EventDetailScopeSwitch({
   const items = [
     {
       id: "requests" as const,
-      label: "Zgłoszenia",
+      label: "Chcą wziąć udział",
       badge: requestCount > 0 ? String(requestCount) : undefined,
       icon: <Bell size={15} />,
     },
@@ -3736,7 +3717,7 @@ export function DashboardPage() {
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
-        <StatCard label="Intake" value={relevantOperationalRequests.length} icon={Bell} />
+        <StatCard label="Chcą wziąć udział" value={relevantOperationalRequests.length} icon={Bell} />
         <StatCard label="Powiadomienia" value={notificationsCount} icon={ShieldCheck} />
         <StatCard label="Relacje" value={relationsCount} icon={Users} />
       </div>
@@ -3895,11 +3876,11 @@ export function DashboardPage() {
             </div>
             <div className="grid gap-4 xl:grid-cols-3">
               <DashboardChartCard
-                title="Intake w miesiacach"
-                description="Nowe prosby o dolaczenie do wydarzen albo publiczny intake grup policzony po miesiacu utworzenia."
+                title="Zgłoszenia udziału w miesiącach"
+                description="Nowe prośby o dołączenie do wydarzeń policzone po miesiącu utworzenia."
               >
                 {analyticsRequestsInRange.length === 0 ? (
-                  <DashboardChartEmptyState message="Brak intake w biezacym oknie 3 miesiecy." />
+                  <DashboardChartEmptyState message="Brak zgłoszeń udziału w bieżącym oknie 3 miesięcy." />
                 ) : (
                   <div className="h-[220px] sm:h-[280px]">
                     <ResponsiveContainer width="100%" height="100%">
@@ -3916,11 +3897,11 @@ export function DashboardPage() {
               </DashboardChartCard>
 
               <DashboardChartCard
-                title="Statusy intake w miesiacach"
-                description="Widac, ile wpisow intake nadal czeka, a ile jest juz rozstrzygnietych."
+                title="Statusy zgłoszeń udziału w miesiącach"
+                description="Widać, ile zgłoszeń nadal czeka, a ile jest już rozstrzygniętych."
               >
                 {analyticsRequestsInRange.length === 0 ? (
-                  <DashboardChartEmptyState message="Brak intake do pokazania w tym okresie." />
+                  <DashboardChartEmptyState message="Brak zgłoszeń udziału do pokazania w tym okresie." />
                 ) : (
                   <>
                     <DashboardLegend
@@ -4154,7 +4135,7 @@ export function RequestsPage() {
     decideTrainerAccountApproval,
     store,
   } = useAppState();
-  const [intentFilter, setIntentFilter] = useState<EnrollmentIntentFilter>("all");
+  const [intentFilter, setIntentFilter] = useState<EnrollmentIntentFilter>("participating");
 
   if (!currentUser) {
     return null;
@@ -4193,8 +4174,8 @@ export function RequestsPage() {
 
   return (
     <PanelSection
-      eyebrow="Zgłoszenia"
-      title="Nowe osoby i publiczny intake"
+      eyebrow="Chcą wziąć udział"
+      title="Osoby, które chcą wziąć udział"
       showLeadText={false}
     >
       <div className="space-y-4">
@@ -4221,11 +4202,7 @@ export function RequestsPage() {
           <div key={section.key} className="space-y-4">
             <SectionBlockHeading
               title={section.title}
-              description={
-                section.key === "contact"
-                  ? "Osoby, które chcą najpierw porozmawiać i uzyskać odpowiedź na pytania."
-                  : "Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję managera."
-              }
+              description="Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
             />
             {section.requests.map((request) => {
           const event = store.trainingEvents.find((item) => item.id === request.eventId);
@@ -4258,7 +4235,7 @@ export function RequestsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <span className={getEnrollmentIntentBadgeClass(request.intent)}>
+                  <span className={getEnrollmentIntentBadgeClass()}>
                     {getEnrollmentIntentLabel(request.intent)}
                   </span>
                   <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
@@ -4979,6 +4956,16 @@ export function GroupsPage() {
       (store.trainingEvents ?? []).filter((event) => event.groupId === selectedGroup.id),
     );
   }, [selectedGroup, store.trainingEvents]);
+  const selectedGroupFutureOpenEvents = useMemo(
+    () =>
+      selectedGroupEvents.filter(
+        (event) =>
+          !isTrainingEventArchived(event) &&
+          !event.rosterFinalizedAt &&
+          new Date(event.startsAt).getTime() > Date.now(),
+      ),
+    [selectedGroupEvents],
+  );
   const availableTrainers = useMemo(() => {
     if (!organizerProfile) {
       return [];
@@ -5505,6 +5492,12 @@ export function GroupsPage() {
 
     try {
       setSavingMember(true);
+      const shouldSyncFutureEvents =
+        selectedGroupFutureOpenEvents.length > 0
+          ? window.confirm(
+              `Dodać tę osobę automatycznie także do ${selectedGroupFutureOpenEvents.length} przyszłych otwartych szkoleń tej grupy?`,
+            )
+          : false;
       await addGroupMember({
         groupId: selectedGroup.id,
         participantProfileId: memberForm.participantProfileId || undefined,
@@ -5513,6 +5506,7 @@ export function GroupsPage() {
         notes: memberForm.notes,
         referralSource: selectedMemberProfile ? undefined : memberForm.referralSource,
         priority: memberForm.priority,
+        syncFutureEvents: shouldSyncFutureEvents,
       });
       toast.success("Dodano członka grupy.");
       setMemberForm(createEmptyGroupMemberFormState());
@@ -8744,10 +8738,7 @@ export function EventsPage() {
                     <span>{scheduleRangeLabel}</span>
                     <span>{event.enrolledCount}/{event.capacity} miejsc</span>
                     <span>Próg: {resolveMinimumParticipants(event)} osób</span>
-                    <span>
-                      {event.groupId ? "Publiczny intake" : "Aktywne zgłoszenia"}:{" "}
-                      {activeRequestsCount}
-                    </span>
+                    <span>Chcą wziąć udział: {activeRequestsCount}</span>
                     {isCommunitySection ? (
                       <span>Gospodarz: {ownerLabels.trainerName}</span>
                     ) : currentUser.role !== "organizer" ? (
@@ -8863,7 +8854,7 @@ export function EventManagementPage() {
   const [communityDetailTab, setCommunityDetailTab] = useState<
     "requests" | "participants" | "edit"
   >("requests");
-  const [requestIntentFilter, setRequestIntentFilter] = useState<EnrollmentIntentFilter>("all");
+  const [requestIntentFilter, setRequestIntentFilter] = useState<EnrollmentIntentFilter>("participating");
   const [publishingEvent, setPublishingEvent] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<EventManagementSettingsDraft>({
     status: "active" as TrainingEventStatus,
@@ -9052,6 +9043,18 @@ export function EventManagementPage() {
       return canManageTrainingEvent(item, currentUser);
     }),
   );
+  const futureOpenGroupEvents = event.groupId
+    ? sortEventsByDate(
+        store.trainingEvents.filter(
+          (item) =>
+            item.groupId === event.groupId &&
+            item.id !== event.id &&
+            !isTrainingEventArchived(item) &&
+            !item.rosterFinalizedAt &&
+            new Date(item.startsAt).getTime() > Date.now(),
+        ),
+      )
+    : [];
   const pendingRequestsCount = requests.filter(
     (item) => item.finalStatus === "pending" || item.finalStatus === "partial",
   ).length;
@@ -9107,10 +9110,18 @@ export function EventManagementPage() {
       return false;
     }
 
+    const shouldSyncFutureEvents =
+      futureOpenGroupEvents.length > 0
+        ? window.confirm(
+            `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
+          )
+        : false;
+
     await addGroupMember({
       groupId: event.groupId,
       participantProfileId: request.participantProfileId,
       priority,
+      syncFutureEvents: shouldSyncFutureEvents,
     });
 
     return true;
@@ -9558,8 +9569,8 @@ export function EventManagementPage() {
         {communityDetailTab === "requests" ? (
           <div className="space-y-4">
             <SectionBlockHeading
-              title="Zgłoszenia do wydarzenia"
-              description="Tutaj widzisz wszystkie prośby o dołączenie, a licznik na zakładce pokazuje te, które nie zostały jeszcze przeprocesowane."
+              title="Chcą wziąć udział"
+              description="Tutaj widzisz wszystkie osoby, które chcą wziąć udział, a licznik na zakładce pokazuje te, które nie zostały jeszcze przeprocesowane."
             />
             {requests.length > 0 ? (
               <EnrollmentIntentFilterSwitch
@@ -9583,11 +9594,7 @@ export function EventManagementPage() {
                 <div key={section.key} className="space-y-4">
                   <SectionBlockHeading
                     title={section.title}
-                    description={
-                      section.key === "contact"
-                        ? "Osoby, które czekają na odpowiedź i rozmowę z organizatorem."
-                        : "Osoby deklarujące gotowość udziału, ale nadal oczekujące na decyzję."
-                    }
+                    description="Osoby deklarujące gotowość udziału, ale nadal oczekujące na decyzję."
                   />
                   {section.requests.map((request) => (
                     <article
@@ -9609,7 +9616,7 @@ export function EventManagementPage() {
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <span className={getEnrollmentIntentBadgeClass(request.intent)}>
+                          <span className={getEnrollmentIntentBadgeClass()}>
                             {getEnrollmentIntentLabel(request.intent)}
                           </span>
                           <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
@@ -10531,7 +10538,7 @@ export function EventManagementPage() {
                                       setUpdatingEventParticipantId(null);
                                     }
                                   }}
-                                  className="h-9 w-[136px] shrink-0 appearance-none rounded-xl border border-brand-line bg-white px-3 text-xs font-semibold text-brand-navy outline-none disabled:opacity-60 sm:h-12 sm:w-[184px] sm:rounded-2xl sm:px-4 sm:text-sm"
+                                  className="h-9 w-auto max-w-full shrink-0 appearance-none rounded-xl border border-brand-line bg-white pl-3 pr-8 text-xs font-semibold text-brand-navy outline-none disabled:opacity-60 sm:h-12 sm:rounded-2xl sm:pl-4 sm:pr-10 sm:text-sm"
                                 >
                                   {MANAGEABLE_EVENT_PARTICIPANT_STATUSES.map((status) => (
                                     <option key={status} value={status}>
@@ -10623,7 +10630,7 @@ export function EventManagementPage() {
         event.groupId ? (
           <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
-              title="Publiczny intake i zgłoszenia"
+              title="Chcą wziąć udział"
               description="Domyślny roster jest prowadzony wyżej. Tutaj zostają tylko nowe osoby z formularza, które możesz przejrzeć, zaakceptować albo przenieść."
             />
             {requests.length > 0 ? (
@@ -10671,7 +10678,7 @@ export function EventManagementPage() {
                               </p>
                             </div>
 
-                            <span className={getEnrollmentIntentBadgeClass(request.intent)}>
+                            <span className={getEnrollmentIntentBadgeClass()}>
                               {getEnrollmentIntentLabel(request.intent)}
                             </span>
 
@@ -10815,7 +10822,7 @@ export function EventManagementPage() {
         ) : (
           <div className="space-y-4">
             <SectionBlockHeading
-              title="Uczestnicy i zgłoszenia"
+              title="Uczestnicy i osoby, które chcą wziąć udział"
               description="Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy."
             />
             {requests.length > 0 && (
@@ -10842,11 +10849,7 @@ export function EventManagementPage() {
               <div key={section.key} className="space-y-4">
                 <SectionBlockHeading
                   title={section.title}
-                  description={
-                    section.key === "contact"
-                      ? "Osoby, które chcą najpierw porozmawiać z organizatorem albo trenerem."
-                      : "Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
-                  }
+                  description="Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
                 />
                 {section.requests.map((request) => {
                   const transferTargetEventId = transferSelections[request.id] ?? "";
@@ -10871,7 +10874,7 @@ export function EventManagementPage() {
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <span className={getEnrollmentIntentBadgeClass(request.intent)}>
+                          <span className={getEnrollmentIntentBadgeClass()}>
                             {getEnrollmentIntentLabel(request.intent)}
                           </span>
                           <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">

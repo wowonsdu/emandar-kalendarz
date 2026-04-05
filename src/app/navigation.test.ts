@@ -105,6 +105,12 @@ describe("navigation sections", () => {
       "/panel/zgloszenia",
       "/panel/ustawienia",
     ]);
+    expect(sections[1].items[4]).toEqual(
+      expect.objectContaining({
+        to: "/panel/zgloszenia",
+        label: "Chcą wziąć udział",
+      }),
+    );
   });
 
   it("keeps role sections after the base panel section and shows moderator badge count", () => {

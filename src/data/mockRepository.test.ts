@@ -515,6 +515,107 @@ describe("addGroupMember", () => {
       ),
     ).rejects.toThrow("Nie możesz dodawać członków do tej grupy.");
   });
+
+  it("can sync a newly added member into future open group events", async () => {
+    const { addGroupMember } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const store = createOrganizerStore(actor);
+    store.trainingEvents = [
+      createEvent({
+        id: "event-future-open",
+        title: "Przyszłe szkolenie",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: actor.id,
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "Grupa oddechowa",
+        startsAt: "2099-04-24T13:00:00.000Z",
+        endsAt: "2099-04-24T15:00:00.000Z",
+      }),
+      createEvent({
+        id: "event-future-closed",
+        title: "Zamknięte szkolenie",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: actor.id,
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "Grupa oddechowa",
+        startsAt: "2099-04-25T13:00:00.000Z",
+        endsAt: "2099-04-25T15:00:00.000Z",
+        rosterFinalizedAt: "2099-04-20T10:00:00.000Z",
+      }),
+      createEvent({
+        id: "event-past-open",
+        title: "Przeszłe szkolenie",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: actor.id,
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "Grupa oddechowa",
+        startsAt: "2025-04-24T13:00:00.000Z",
+        endsAt: "2025-04-24T15:00:00.000Z",
+      }),
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      addGroupMember(
+        {
+          groupId: "group-1",
+          displayName: "Helena Koral",
+          phone: "+48 600 444 555",
+          priority: "regularni",
+          syncFutureEvents: true,
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      memberId: "group-1__participant-48600444555",
+      participantProfileId: "participant-48600444555",
+    });
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.groupMembers[0]).toMatchObject({
+      groupId: "group-1",
+      participantProfileId: "participant-48600444555",
+      priority: "regularni",
+      membershipStatus: "active",
+    });
+    expect(updatedStore.participantProfiles[0]).toMatchObject({
+      id: "participant-48600444555",
+      activeGroupIds: ["group-1"],
+      groupIds: ["group-1"],
+    });
+    expect(updatedStore.eventParticipants).toHaveLength(1);
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      eventId: "event-future-open",
+      participantProfileId: "participant-48600444555",
+      priority: "regularni",
+      status: "invited",
+      source: "auto-core",
+    });
+    const futureOpenEvent = updatedStore.trainingEvents.find((item) => item.id === "event-future-open");
+    expect(futureOpenEvent?.enrolledCount).toBe(0);
+  });
 });
 
 describe("submitEnrollment", () => {
@@ -551,7 +652,7 @@ describe("submitEnrollment", () => {
     expect(request?.finalStatus).toBe("pending");
   });
 
-  it("defaults missing intent to contact for legacy submitters", async () => {
+  it("defaults missing intent to participating for legacy submitters", async () => {
     const actorId = "user-participant";
     mockSession(actorId);
     const mockedApi = mockStoreFetch(
@@ -588,7 +689,7 @@ describe("submitEnrollment", () => {
     ).resolves.toBeUndefined();
 
     const request = mockedApi.getStore().enrollmentRequests[0];
-    expect(request?.intent).toBe("contact");
+    expect(request?.intent).toBe("participating");
     expect(request?.finalStatus).toBe("pending");
   });
 });
@@ -860,5 +961,245 @@ describe("manageEnrollmentRequest", () => {
       participantProfileId: "participant-2",
       status: "invited",
     });
+  });
+});
+
+describe("group event roster defaults", () => {
+  it("creates a full invited roster from the group when a grouped training event is created", async () => {
+    const { createTrainingEvent } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const store = createOrganizerStore(actor, {
+      participantProfiles: [
+        {
+          id: "participant-1",
+          linkedUserId: null,
+          displayName: "Anna Nowak",
+          firstName: "Anna",
+          lastName: "Nowak",
+          phone: "+48 605 100 304",
+          phoneLookupKey: "48605100304",
+          confirmationStatus: "confirmed",
+          status: "active",
+          createdAt: "2026-04-01T10:00:00.000Z",
+        },
+        {
+          id: "participant-2",
+          linkedUserId: null,
+          displayName: "Grzegorz Emanowicz",
+          firstName: "Grzegorz",
+          lastName: "Emanowicz",
+          phone: "+48 605 100 301",
+          phoneLookupKey: "48605100301",
+          confirmationStatus: "confirmed",
+          status: "active",
+          createdAt: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+      groupMembers: [
+        {
+          id: "group-1__participant-1",
+          groupId: "group-1",
+          organizerId: "organizer-1",
+          organizerUserId: actor.id,
+          trainerId: "trainer-1",
+          trainerUserId: "user-trainer-1",
+          participantProfileId: "participant-1",
+          participantUserId: null,
+          participantDisplayName: "Anna Nowak",
+          participantPhone: "+48 605 100 304",
+          priority: "stali",
+          membershipStatus: "active",
+          joinedAt: "2026-04-01T10:00:00.000Z",
+        },
+        {
+          id: "group-1__participant-2",
+          groupId: "group-1",
+          organizerId: "organizer-1",
+          organizerUserId: actor.id,
+          trainerId: "trainer-1",
+          trainerUserId: "user-trainer-1",
+          participantProfileId: "participant-2",
+          participantUserId: null,
+          participantDisplayName: "Grzegorz Emanowicz",
+          participantPhone: "+48 605 100 301",
+          priority: "rezerwowi",
+          membershipStatus: "active",
+          joinedAt: "2026-04-01T10:00:00.000Z",
+        },
+      ],
+    });
+    store.organizers = [
+      {
+        id: "organizer-1",
+        userId: actor.id,
+        displayName: "Anita",
+        description: "Opis",
+        isVisible: true,
+      },
+    ];
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: "user-trainer-1",
+        slug: "jacek",
+        displayName: "Jacek",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Łódź"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      createTrainingEvent(
+        {
+          trainerId: "trainer-1",
+          groupId: "group-1",
+          title: "Nowe szkolenie grupowe",
+          summary: "Opis skrócony",
+          description: "Opis pełny",
+          type: "Szkolenie",
+          eventTypeSystem: "training",
+          scheduleDays: [
+            {
+              startsAt: "2099-05-10T08:00:00.000Z",
+              endsAt: "2099-05-10T14:00:00.000Z",
+            },
+          ],
+          location: "Łódź",
+          capacity: 20,
+          isPublished: true,
+          brandStatus: "official",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    const createdEvent = updatedStore.trainingEvents[0];
+    expect(createdEvent).toMatchObject({
+      groupId: "group-1",
+      groupName: "Grupa oddechowa",
+      enrolledCount: 0,
+    });
+    expect(updatedStore.eventParticipants).toHaveLength(2);
+    expect(updatedStore.eventParticipants.map((item) => ({
+      participantProfileId: item.participantProfileId,
+      priority: item.priority,
+      status: item.status,
+      source: item.source,
+    }))).toEqual(
+      expect.arrayContaining([
+        {
+          participantProfileId: "participant-1",
+          priority: "stali",
+          status: "invited",
+          source: "auto-core",
+        },
+        {
+          participantProfileId: "participant-2",
+          priority: "rezerwowi",
+          status: "invited",
+          source: "auto-core",
+        },
+      ]),
+    );
+  });
+
+  it("counts only confirmed participants in enrolledCount for grouped events", async () => {
+    const { updateEventParticipantStatus } = await import("./mockRepository");
+    const actor = createActor();
+    const store = createStore(
+      {
+        id: "event-group-count",
+        title: "Szkolenie grupowe",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "Grupa oddechowa",
+      },
+      actor,
+    );
+    store.eventParticipants = [
+      {
+        id: "event-group-count__participant-1",
+        eventId: "event-group-count",
+        eventTitle: "Szkolenie grupowe",
+        groupId: "group-1",
+        groupName: "Grupa oddechowa",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        participantProfileId: "participant-1",
+        participantDisplayName: "Anna Nowak",
+        participantPhone: "+48 605 100 304",
+        participantUserId: null,
+        priority: "stali",
+        status: "invited",
+        source: "auto-core",
+        invitedAt: "2026-04-01T10:00:00.000Z",
+      },
+      {
+        id: "event-group-count__participant-2",
+        eventId: "event-group-count",
+        eventTitle: "Szkolenie grupowe",
+        groupId: "group-1",
+        groupName: "Grupa oddechowa",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        participantProfileId: "participant-2",
+        participantDisplayName: "Grzegorz Emanowicz",
+        participantPhone: "+48 605 100 301",
+        participantUserId: null,
+        priority: "regularni",
+        status: "invited",
+        source: "auto-core",
+        invitedAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      updateEventParticipantStatus(
+        {
+          eventParticipantId: "event-group-count__participant-1",
+          status: "confirmed",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    let updatedStore = mockedApi.getStore();
+    expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(1);
+
+    await expect(
+      updateEventParticipantStatus(
+        {
+          eventParticipantId: "event-group-count__participant-1",
+          status: "declined",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    updatedStore = mockedApi.getStore();
+    expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
   });
 });

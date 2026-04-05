@@ -66,6 +66,7 @@ import {
   isTrainingEventArchived,
   isTrainingEventPubliclyVisible,
   isOrganizerFunctionsBlocked,
+  resolveEnrollmentIntent,
   resolveOrganizerCollaborationStatus,
   resolveTrainerCollaborationStatus,
 } from "@/domain/utils";
@@ -313,6 +314,166 @@ function buildGroupMemberId(groupId: string, participantProfileId: string) {
 
 function buildEventParticipantId(eventId: string, participantProfileId: string) {
   return `${eventId}__${participantProfileId}`;
+}
+
+function isFutureOpenGroupEvent(event: TrainingEvent) {
+  return (
+    Boolean(event.groupId) &&
+    !isTrainingEventArchived(event) &&
+    !event.rosterFinalizedAt &&
+    new Date(event.startsAt).getTime() > Date.now()
+  );
+}
+
+function recomputeEventEnrolledCount(store: DemoStore, eventId: string) {
+  const event = store.trainingEvents.find((item) => item.id === eventId);
+  if (!event) {
+    return;
+  }
+
+  if (event.groupId) {
+    event.enrolledCount = store.eventParticipants.filter(
+      (participant) => participant.eventId === eventId && participant.status === "confirmed",
+    ).length;
+    return;
+  }
+
+  const requestCount = store.enrollmentRequests.filter(
+    (request) =>
+      request.eventId === eventId &&
+      request.participantStatus !== "cancelled" &&
+      request.finalStatus !== "rejected",
+  ).length;
+  const participantCount = store.eventParticipants.filter(
+    (participant) =>
+      participant.eventId === eventId &&
+      (participant.status === "confirmed" || participant.status === "invited"),
+  ).length;
+
+  event.enrolledCount = Math.max(requestCount, participantCount);
+}
+
+function syncParticipantProfileGroupMembership(
+  profile: ParticipantProfile,
+  group: Group,
+  member: GroupMember,
+) {
+  profile.groupIds = Array.from(new Set([...(profile.groupIds ?? []), group.id]));
+
+  if (member.membershipStatus === "active") {
+    profile.activeGroupIds = Array.from(new Set([...(profile.activeGroupIds ?? []), group.id]));
+  } else {
+    profile.activeGroupIds = (profile.activeGroupIds ?? []).filter((item) => item !== group.id);
+  }
+
+  profile.managerOrganizerIds = Array.from(
+    new Set([...(profile.managerOrganizerIds ?? []), group.organizerId]),
+  );
+  if (group.organizerUserId) {
+    profile.managerOrganizerUserIds = Array.from(
+      new Set([...(profile.managerOrganizerUserIds ?? []), group.organizerUserId]),
+    );
+  }
+
+  profile.managerTrainerIds = Array.from(new Set([...(profile.managerTrainerIds ?? []), group.trainerId]));
+  if (group.trainerUserId) {
+    profile.managerTrainerUserIds = Array.from(
+      new Set([...(profile.managerTrainerUserIds ?? []), group.trainerUserId]),
+    );
+  }
+
+  profile.updatedAt = nowIso();
+}
+
+function syncGroupMemberToEvent(
+  store: DemoStore,
+  event: TrainingEvent,
+  member: GroupMember,
+  source: EventParticipant["source"] = "auto-core",
+) {
+  if (!event.groupId || member.membershipStatus !== "active") {
+    return null;
+  }
+
+  const group = store.groups.find((item) => item.id === event.groupId);
+  const profile = store.participantProfiles.find((item) => item.id === member.participantProfileId);
+  if (!group || !profile) {
+    return null;
+  }
+
+  const eventParticipantId = buildEventParticipantId(event.id, profile.id);
+  const existingIndex = store.eventParticipants.findIndex((item) => item.id === eventParticipantId);
+  const existingParticipant = existingIndex >= 0 ? store.eventParticipants[existingIndex] : null;
+  const payload: EventParticipant = {
+    id: eventParticipantId,
+    eventId: event.id,
+    eventTitle: event.title || event.location,
+    groupId: group.id,
+    groupName: group.name,
+    organizerId: group.organizerId,
+    organizerUserId: group.organizerUserId ?? event.organizerUserId ?? "",
+    trainerId: group.trainerId,
+    trainerUserId: group.trainerUserId ?? event.trainerUserId ?? "",
+    participantProfileId: profile.id,
+    participantDisplayName: profile.displayName,
+    participantPhone: profile.phone,
+    participantUserId: profile.linkedUserId ?? null,
+    priority: member.priority,
+    status: existingParticipant?.status === "confirmed" ? "confirmed" : "invited",
+    source: existingParticipant?.source ?? source,
+    overCapacity: existingParticipant?.overCapacity,
+    invitedAt: existingParticipant?.invitedAt ?? nowIso(),
+    attendanceConfirmationStatus: existingParticipant?.attendanceConfirmationStatus,
+    attendanceConfirmationRequestedAt: existingParticipant?.attendanceConfirmationRequestedAt,
+    attendanceConfirmationRespondedAt: existingParticipant?.attendanceConfirmationRespondedAt,
+    attendanceConfirmationExpiresAt: existingParticipant?.attendanceConfirmationExpiresAt,
+    confirmedAt: existingParticipant?.status === "confirmed"
+      ? existingParticipant.confirmedAt ?? nowIso()
+      : undefined,
+    declinedAt: existingParticipant?.status === "declined" ? existingParticipant.declinedAt : undefined,
+    removedAt: existingParticipant?.status === "removed" ? existingParticipant.removedAt : undefined,
+    updatedAt: nowIso(),
+  };
+
+  if (existingIndex >= 0) {
+    store.eventParticipants[existingIndex] = {
+      ...store.eventParticipants[existingIndex],
+      ...payload,
+    };
+  } else {
+    store.eventParticipants.unshift(payload);
+  }
+
+  recomputeEventEnrolledCount(store, event.id);
+  return eventParticipantId;
+}
+
+function syncGroupMemberToFutureOpenEvents(
+  store: DemoStore,
+  group: Group,
+  member: GroupMember,
+) {
+  store.trainingEvents
+    .filter((event) => event.groupId === group.id && isFutureOpenGroupEvent(event))
+    .forEach((event) => {
+      syncGroupMemberToEvent(store, event, member, "auto-core");
+    });
+}
+
+function syncGroupRosterToEvent(store: DemoStore, event: TrainingEvent) {
+  if (!event.groupId) {
+    return;
+  }
+
+  const members = store.groupMembers.filter(
+    (member) => member.groupId === event.groupId && member.membershipStatus === "active",
+  );
+
+  members.forEach((member) => {
+    syncGroupMemberToEvent(store, event, member, "auto-core");
+  });
+
+  recomputeEventEnrolledCount(store, event.id);
 }
 
 function splitDisplayName(value: string) {
@@ -753,10 +914,15 @@ function rebuildEventDerivedFields(store: DemoStore) {
   store.trainingEvents = store.trainingEvents.map((event) => {
     const requestCount = activeRequests.filter((item) => item.eventId === event.id).length;
     const participantCount = activeParticipants.filter((item) => item.eventId === event.id).length;
+    const confirmedParticipantCount = store.eventParticipants.filter(
+      (item) => item.eventId === event.id && item.status === "confirmed",
+    ).length;
 
     return {
       ...event,
-      enrolledCount: Math.max(requestCount, participantCount),
+      enrolledCount: event.groupId
+        ? confirmedParticipantCount
+        : Math.max(requestCount, participantCount),
     };
   });
 
@@ -1215,7 +1381,7 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       normalizedPhone: normalizePhoneLookupKey(input.telefon),
       trainerUserId: trainer?.userId ?? null,
       organizerUserId: organizer?.userId ?? null,
-      intent: input.intent === "participating" ? "participating" : "contact",
+      intent: resolveEnrollmentIntent(input.intent),
       imieNazwisko: input.imieNazwisko.trim(),
       telefon: input.telefon.trim(),
       polecenieOdKogo: input.polecenieOdKogo.trim(),
@@ -1282,6 +1448,12 @@ function syncEventParticipantFromEnrollment(
   const participantProfile = store.participantProfiles.find(
     (item) => item.id === request.participantProfileId,
   );
+  const activeGroupMember = store.groupMembers.find(
+    (item) =>
+      item.groupId === event.groupId &&
+      item.participantProfileId === request.participantProfileId &&
+      item.membershipStatus === "active",
+  );
 
   if (!group || !participantProfile) {
     return;
@@ -1306,7 +1478,7 @@ function syncEventParticipantFromEnrollment(
     participantDisplayName: participantProfile.displayName,
     participantPhone: participantProfile.phone,
     participantUserId: participantProfile.linkedUserId ?? null,
-    priority: "regularni",
+    priority: activeGroupMember?.priority ?? "regularni",
     status: resolvedStatus,
     source: "public-form",
     invitedAt: nowIso(),
@@ -1325,6 +1497,7 @@ function syncEventParticipantFromEnrollment(
   }
 
   request.eventParticipantId = eventParticipantId;
+  recomputeEventEnrolledCount(store, event.id);
 }
 
 function resolveEnrollmentDecisionState(
@@ -1495,6 +1668,8 @@ export async function manageEnrollmentRequest(
     } else {
       request.participantStatus = "active";
     }
+
+    recomputeEventEnrolledCount(store, event.id);
   });
 }
 
@@ -1565,6 +1740,7 @@ export async function manageOwnGroupEventParticipation(
       entry.status = "declined";
       entry.declinedAt = nowIso();
       entry.updatedAt = nowIso();
+      recomputeEventEnrolledCount(store, entry.eventId);
       return;
     }
 
@@ -1575,6 +1751,7 @@ export async function manageOwnGroupEventParticipation(
     entry.status = "declined";
     entry.declinedAt = nowIso();
     entry.updatedAt = nowIso();
+    recomputeEventEnrolledCount(store, entry.eventId);
     store.enrollmentRequests.unshift({
       id: createId("enrollment"),
       eventId: input.transferTargetEventId,
@@ -1837,6 +2014,10 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
       existingMember.priority = asParticipantPriority(input.priority);
       existingMember.notes = input.notes?.trim();
       existingMember.updatedAt = nowIso();
+      syncParticipantProfileGroupMembership(profile, group, existingMember);
+      if (input.syncFutureEvents) {
+        syncGroupMemberToFutureOpenEvents(store, group, existingMember);
+      }
       return {
         ok: true as const,
         memberId,
@@ -1860,6 +2041,10 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
       notes: input.notes?.trim(),
       joinedAt: nowIso(),
     });
+    syncParticipantProfileGroupMembership(profile, group, store.groupMembers[0]);
+    if (input.syncFutureEvents) {
+      syncGroupMemberToFutureOpenEvents(store, group, store.groupMembers[0]);
+    }
 
     return {
       ok: true as const,
@@ -1908,6 +2093,12 @@ export async function removeGroupMember(memberId: string, actor: AppUser) {
     member.membershipStatus = "removed";
     member.removedAt = nowIso();
     member.updatedAt = nowIso();
+
+    const profile = store.participantProfiles.find((item) => item.id === member.participantProfileId);
+    if (profile) {
+      profile.activeGroupIds = (profile.activeGroupIds ?? []).filter((item) => item !== member.groupId);
+      profile.updatedAt = nowIso();
+    }
   });
 }
 
@@ -1920,6 +2111,12 @@ export async function addEventParticipant(input: EventParticipantInput, actor: A
 
     const group = store.groups.find((item) => item.id === event.groupId);
     const profile = store.participantProfiles.find((item) => item.id === input.participantProfileId);
+    const activeGroupMember = store.groupMembers.find(
+      (item) =>
+        item.groupId === event.groupId &&
+        item.participantProfileId === input.participantProfileId &&
+        item.membershipStatus === "active",
+    );
     if (!group || !profile) {
       throw new Error("Nie znaleziono wymaganych danych.");
     }
@@ -1946,12 +2143,13 @@ export async function addEventParticipant(input: EventParticipantInput, actor: A
       participantDisplayName: profile.displayName,
       participantPhone: profile.phone,
       participantUserId: profile.linkedUserId ?? null,
-      priority: "regularni",
+      priority: activeGroupMember?.priority ?? "regularni",
       status: "invited",
       source: "organizer",
       overCapacity: input.overCapacity === true,
       invitedAt: nowIso(),
     });
+    recomputeEventEnrolledCount(store, event.id);
 
     return {
       ok: true as const,
@@ -1986,6 +2184,11 @@ export async function updateEventParticipantStatus(
     if (input.status === "declined" || input.status === "removed") {
       participant.declinedAt = nowIso();
     }
+    if (input.status !== "confirmed") {
+      participant.confirmedAt = input.status === "confirmed" ? participant.confirmedAt : undefined;
+    }
+
+    recomputeEventEnrolledCount(store, participant.eventId);
   });
 }
 
@@ -2461,7 +2664,7 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
       Boolean(base.trainerId) &&
       canOrganizerAccessTrainer(base.organizerId, base.trainerId, store.relations);
 
-    store.trainingEvents.unshift({
+    const nextEvent: TrainingEvent = {
       id: createId("event"),
       ...base,
       groupId: input.groupId ?? null,
@@ -2491,7 +2694,15 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
         : undefined,
       enrollmentPhotoRequirement: "optional",
       joinAudienceSetting: input.joinAudienceSetting ?? "default",
-    });
+    };
+
+    store.trainingEvents.unshift(nextEvent);
+
+    if (nextEvent.groupId) {
+      syncGroupRosterToEvent(store, nextEvent);
+    } else {
+      recomputeEventEnrolledCount(store, nextEvent.id);
+    }
   });
 }
 

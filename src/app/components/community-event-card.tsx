@@ -311,7 +311,7 @@ export function CommunityEventCard({
           to={`/kalendarz/${event.id}`}
           className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
         >
-          Poproś o kontakt
+          Chcę wziąć udział
           <ArrowRight size={16} />
         </Link>
       </>

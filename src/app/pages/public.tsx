@@ -43,8 +43,10 @@ import {
   isTrainingEventCollaborationAccepted,
   isCommunityBrandStatus,
   isTrainingEventPubliclyVisible,
+  getTrainingJoinAudienceLabel,
   resolveEnrollmentPhotoModeForEvent,
   resolveBrandStatus,
+  resolveTrainingJoinAudienceForEvent,
   resolveTrainingEventStatus,
   sortEventsByDate,
 } from "@/domain/utils";
@@ -220,6 +222,16 @@ function getPublicLeadName(event: TrainingEvent, trainerName?: string) {
 
 function getEventTags(event: TrainingEvent) {
   return (event.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+}
+
+function getTrainingJoinAudienceBadgeText(value: "existing-practitioners" | "new-people") {
+  return getTrainingJoinAudienceLabel(value);
+}
+
+function getTrainingJoinAudienceBadgeClassName(value: "existing-practitioners" | "new-people") {
+  return value === "existing-practitioners"
+    ? "border border-violet-200 bg-violet-50 text-violet-800"
+    : "border border-emerald-200 bg-emerald-50 text-emerald-800";
 }
 
 function canManagePublicEvent(event: TrainingEvent, currentUser: AppUser | null) {
@@ -533,6 +545,9 @@ function EventCard({
   }
 
   const trainer = store.trainers.find((item) => item.id === event.trainerId);
+  const eventGroup = event.groupId
+    ? store.groups.find((item) => item.id === event.groupId) ?? null
+    : null;
   const eventTags = getEventTags(event);
   const scheduleRows = getScheduleRows(event);
   const scheduleRangeLabel = getScheduleRangeLabel(event);
@@ -554,7 +569,13 @@ function EventCard({
     ? getCompactCommunityEventTitle(event.title, event.location)
     : getCompactLocationTitle(event.location);
   const compactLocation = event.location;
+  const desktopGroupName = eventGroup?.name?.trim() || event.groupName?.trim() || null;
+  const desktopTitle = desktopGroupName || event.location;
+  const shouldShowDesktopLocationRow = Boolean(desktopGroupName && event.location.trim());
   const durationDaysLabel = getEventDurationDaysLabel(event);
+  const resolvedJoinAudience = resolveTrainingJoinAudienceForEvent(event, eventGroup);
+  const joinAudienceBadgeText = getTrainingJoinAudienceBadgeText(resolvedJoinAudience);
+  const joinAudienceBadgeClassName = getTrainingJoinAudienceBadgeClassName(resolvedJoinAudience);
   const mobileSummarySchedule = scheduleRows.slice(0, 2);
   const compactTags = eventTags.slice(0, 2);
   const hasMoreCompactTags = eventTags.length > compactTags.length;
@@ -617,6 +638,15 @@ function EventCard({
                 {durationDaysLabel}
               </span>
             </div>
+            {!isCommunityEvent ? (
+              <div>
+                <span
+                  className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${joinAudienceBadgeClassName}`}
+                >
+                  {joinAudienceBadgeText}
+                </span>
+              </div>
+            ) : null}
           </div>
           {compactTags.length > 0 && !isMobileExpanded && (
             <div className="mt-3 flex flex-nowrap gap-2 overflow-hidden">
@@ -745,19 +775,45 @@ function EventCard({
         )}
 
         <div className="flex h-full flex-col p-6">
-          <div>
-            <h3 className="text-2xl font-semibold text-brand-navy">
-              {isCommunityEvent ? event.title || event.location : event.location}
-            </h3>
-            {isCommunityEvent && (
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <h3 className="break-words text-2xl font-semibold text-brand-navy">
+                {isCommunityEvent ? event.title || event.location : desktopTitle}
+              </h3>
+              {isCommunityEvent && (
+                <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                  {event.location}
+                </p>
+              )}
+              {!isCommunityEvent && shouldShowDesktopLocationRow && (
+                <div className="mt-2 flex items-center gap-2 text-sm text-brand-muted">
+                  <MapPin size={15} className="shrink-0 text-brand-sky-deep" />
+                  <span>{event.location}</span>
+                </div>
+              )}
               <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                {event.location}
+                {scheduleRangeLabel}
               </p>
-            )}
-            <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-            {scheduleRangeLabel}
-            </p>
-            <p className="mt-3 line-clamp-2 text-brand-muted">{event.summary}</p>
+              <p className="mt-3 line-clamp-2 text-brand-muted">{event.summary}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {canManage && (
+                <Link
+                  to={managementPath}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                >
+                  Edytuj szkolenie
+                </Link>
+              )}
+              <Link
+                to={`/kalendarz/${event.id}`}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+              >
+                Poproś o kontakt
+                <ArrowRight size={16} />
+              </Link>
+            </div>
           </div>
           <div
             className={`mt-6 grid gap-3 ${
@@ -780,16 +836,6 @@ function EventCard({
               </div>
             ))}
           </div>
-          {!(isCommunityEvent || isSelfManagedTrainingEvent(event)) && (
-            <div className="mt-5 text-sm text-brand-muted">
-              <div>
-                Organizator:{" "}
-                <span className="font-semibold text-brand-navy">
-                  {getPublicOrganizerName(event, undefined, trainer?.displayName)}
-                </span>
-              </div>
-            </div>
-          )}
           {isCommunityEvent && eventImages.length > 0 && (
             <div className="mt-5 flex flex-wrap gap-4">
               {eventImages.map((image, index) => (
@@ -806,38 +852,46 @@ function EventCard({
               ))}
             </div>
           )}
-          <div className="mt-auto flex flex-wrap items-end justify-between gap-4 pt-5">
+          <div className="mt-auto pt-5">
             {eventTags.length > 0 ? (
               <div className="flex flex-wrap gap-2">
-              {eventTags.map((tag) => (
-                <span
-                  key={`${event.id}-${tag}`}
-                  className="rounded-full bg-brand-sky/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy"
-                >
-                  {tag}
-                </span>
-              ))}
+                {!isCommunityEvent ? (
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${joinAudienceBadgeClassName}`}
+                  >
+                    {joinAudienceBadgeText}
+                  </span>
+                ) : null}
+                {eventTags.map((tag) => (
+                  <span
+                    key={`${event.id}-${tag}`}
+                    className="rounded-full bg-brand-sky/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy"
+                  >
+                    {tag}
+                  </span>
+                ))}
               </div>
             ) : (
-              <div />
+              <div>
+                {!isCommunityEvent ? (
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${joinAudienceBadgeClassName}`}
+                  >
+                    {joinAudienceBadgeText}
+                  </span>
+                ) : null}
+              </div>
             )}
-            <div className="flex flex-wrap items-center gap-3">
-              {canManage && (
-                <Link
-                  to={managementPath}
-                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
-                >
-                  Edytuj szkolenie
-                </Link>
-              )}
-              <Link
-                to={`/kalendarz/${event.id}`}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-              >
-                Poproś o kontakt
-                <ArrowRight size={16} />
-              </Link>
-            </div>
+            {!(isCommunityEvent || isSelfManagedTrainingEvent(event)) && (
+              <div className="mt-5 text-sm text-brand-muted">
+                <div>
+                  Organizator:{" "}
+                  <span className="font-semibold text-brand-navy">
+                    {getPublicOrganizerName(event, undefined, trainer?.displayName)}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1046,6 +1100,12 @@ export function EventDetailsPage() {
   const enrollmentPhotoEnabled = isPhotoModeEnabled(enrollmentPhotoMode);
   const leadName = getPublicLeadName(event, trainer?.displayName);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const eventGroup = event.groupId
+    ? store.groups.find((item) => item.id === event.groupId) ?? null
+    : null;
+  const resolvedJoinAudience = resolveTrainingJoinAudienceForEvent(event, eventGroup);
+  const joinAudienceBadgeText = getTrainingJoinAudienceBadgeText(resolvedJoinAudience);
+  const joinAudienceBadgeClassName = getTrainingJoinAudienceBadgeClassName(resolvedJoinAudience);
   const eventImages = event.eventImages ?? [];
   const detailEventTitle = event.title || event.location;
   const managementPath = isCommunityEvent
@@ -1062,6 +1122,13 @@ export function EventDetailsPage() {
     participantProfile?.phone?.trim() ||
     getCurrentSessionPhone() ||
     "";
+  const recipientMessage = isCommunityEvent
+    ? "Zgłoszenie trafi do organizatora."
+    : `Zgłoszenie trafi do Przekazującego Wiedzę${organizer ? " i organizatora." : "."}`;
+  const joinAudienceMessage =
+    resolvedJoinAudience === "existing-practitioners"
+      ? "To szkolenie jest opisane jako termin dla osób już ćwiczących."
+      : "To szkolenie jest otwarte także dla nowych osób.";
 
   useEffect(() => {
     return () => {
@@ -1301,33 +1368,23 @@ export function EventDetailsPage() {
               {event.location}
             </PublicDetailEyebrow>
           ) : null}
+          {!isCommunityEvent ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span
+                className={`rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] sm:text-xs sm:tracking-[0.18em] ${joinAudienceBadgeClassName}`}
+              >
+                {joinAudienceBadgeText}
+              </span>
+            </div>
+          ) : null}
 
           {isCommunityEvent && eventImages.length > 0 && (
             <div className="mt-6 rounded-[1.75rem] border border-brand-line bg-brand-shell/55 p-4 sm:mt-8 sm:rounded-[2rem] sm:p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <PublicDetailEyebrow>
-                    Galeria wydarzenia
-                  </PublicDetailEyebrow>
-                  <p className="mt-2 text-sm text-brand-muted">
-                    Kliknij zdjęcie, żeby otworzyć pełny podgląd i przejść po całej galerii.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setGalleryLightboxIndex(0)}
-                  className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2.5 text-sm font-semibold text-brand-navy shadow-soft"
-                >
-                  <Images size={16} />
-                  Zobacz wszystkie
-                </button>
-              </div>
-
               <button
                 type="button"
                 onClick={() => setGalleryLightboxIndex(0)}
                 aria-label="Otwórz galerię wydarzenia"
-                className="group relative mt-5 block w-full overflow-hidden rounded-[1.8rem] border border-brand-line bg-white text-left shadow-soft"
+                className="group relative block w-full overflow-hidden rounded-[1.8rem] border border-brand-line bg-white text-left shadow-soft"
               >
                 <img
                   src={eventImages[0].url}
@@ -1335,12 +1392,6 @@ export function EventDetailsPage() {
                   className="h-[20rem] w-full object-cover transition duration-300 group-hover:scale-[1.02] sm:h-[26rem]"
                 />
                 <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
-                <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/30 to-transparent px-5 py-5 text-white">
-                  <span className="inline-flex items-center gap-2 rounded-full bg-white/14 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                    <Images size={14} />
-                    Kliknij, aby powiększyć
-                  </span>
-                </span>
               </button>
 
               {eventImages.length > 1 && (
@@ -1412,37 +1463,52 @@ export function EventDetailsPage() {
               {event.description}
             </p>
 
-            <div className="grid grid-cols-2 gap-3 border-t border-brand-line/70 pt-4 sm:gap-4 sm:pt-5">
-              <Link
-                to={trainer?.slug ? `/trenerzy/${trainer.slug}` : "/trenerzy"}
-                state={trainer?.slug ? { publicBackPath: `/kalendarz/${event.id}` } : undefined}
-                className="group min-w-0 rounded-[1.65rem] border border-brand-line bg-white px-4 py-4 shadow-soft transition hover:-translate-y-0.5 hover:border-brand-sky-deep/35 hover:bg-brand-shell/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky/40"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.22em]">
-                    Przekazujący
-                  </p>
-                  <ArrowRight
-                    size={15}
-                    className="mt-0.5 shrink-0 text-brand-sky-deep transition-transform group-hover:translate-x-0.5"
-                  />
-                </div>
-                <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
-                  {leadName}
-                </p>
-              </Link>
-
-              <div className="min-w-0 rounded-[1.65rem] border border-brand-line bg-white px-4 py-4 shadow-soft">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.22em]">
-                    Organizator
+            {isCommunityEvent ? (
+              <div className="grid grid-cols-1 gap-3 border-t border-brand-line/70 pt-4 sm:gap-4 sm:pt-5">
+                <div className="min-w-0 rounded-[1.65rem] border border-brand-line bg-white px-4 py-4 shadow-soft">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.22em]">
+                      Organizator
+                    </p>
+                  </div>
+                  <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
+                    {getPublicOrganizerName(event, organizer?.displayName, leadName)}
                   </p>
                 </div>
-                <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
-                  {getPublicOrganizerName(event, organizer?.displayName, leadName)}
-                </p>
               </div>
-            </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 border-t border-brand-line/70 pt-4 sm:gap-4 sm:pt-5">
+                <Link
+                  to={trainer?.slug ? `/trenerzy/${trainer.slug}` : "/trenerzy"}
+                  state={trainer?.slug ? { publicBackPath: `/kalendarz/${event.id}` } : undefined}
+                  className="group min-w-0 rounded-[1.65rem] border border-brand-line bg-white px-4 py-4 shadow-soft transition hover:-translate-y-0.5 hover:border-brand-sky-deep/35 hover:bg-brand-shell/65 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky/40"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.22em]">
+                      Przekazujący
+                    </p>
+                    <ArrowRight
+                      size={15}
+                      className="mt-0.5 shrink-0 text-brand-sky-deep transition-transform group-hover:translate-x-0.5"
+                    />
+                  </div>
+                  <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
+                    {leadName}
+                  </p>
+                </Link>
+
+                <div className="min-w-0 rounded-[1.65rem] border border-brand-line bg-white px-4 py-4 shadow-soft">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.22em]">
+                      Organizator
+                    </p>
+                  </div>
+                  <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
+                    {getPublicOrganizerName(event, organizer?.displayName, leadName)}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {eventTags.length > 0 && (
               <div>
@@ -1471,7 +1537,9 @@ export function EventDetailsPage() {
           </PublicDetailEyebrow>
           {!isLoggedInEnrollmentFlow ? (
             <p className="mt-3 text-sm leading-6 text-brand-muted sm:text-base">
-              {`Zgłoszenie trafi do Przekazującego Wiedzę${organizer ? " i organizatora." : "."} ${
+              {`${recipientMessage} ${
+                !isCommunityEvent ? `${joinAudienceMessage} ` : ""
+              }${
                 enrollmentPhotoMode === "required"
                   ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
                   : enrollmentPhotoMode === "optional"

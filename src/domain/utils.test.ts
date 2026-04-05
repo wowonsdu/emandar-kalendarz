@@ -19,6 +19,7 @@ import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventWorkflowStatusLabel,
+  groupParticipantRecordsByPriority,
   isPhotoModeEnabled,
   isPhotoModeRequired,
   isParticipantEnrollmentActive,
@@ -28,12 +29,16 @@ import {
   isTrainingEventArchived,
   isTrainingEventCollaborationAccepted,
   isTrainingEventPubliclyVisible,
+  getTrainingJoinAudienceLabel,
   resolveEnrollmentPhotoModeForEvent,
   resolveEnrollmentIntent,
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveParticipantEnrollmentStatus,
+  resolveTrainingJoinAudience,
+  resolveTrainingJoinAudienceForEvent,
   resolveTrainingEventWorkflowStatus,
+  sortParticipantRecordsByPriorityAndName,
   sortEventsByFillRate,
   sortEventsByDate,
 } from "./utils";
@@ -110,6 +115,37 @@ describe("enrollment intent", () => {
   });
 });
 
+describe("participant priority helpers", () => {
+  const records = [
+    { id: "rezerwowi-z", priority: "rezerwowi" as const, participantDisplayName: "Zenon" },
+    { id: "regularni-a", priority: "regularni" as const, participantDisplayName: "Adam" },
+    { id: "stali-b", priority: "stali" as const, participantDisplayName: "Beata" },
+    { id: "stali-a", priority: "stali" as const, participantDisplayName: "Adam" },
+  ];
+
+  it("sorts records by section priority and participant name", () => {
+    expect(sortParticipantRecordsByPriorityAndName(records).map((record) => record.id)).toEqual([
+      "stali-a",
+      "stali-b",
+      "regularni-a",
+      "rezerwowi-z",
+    ]);
+  });
+
+  it("groups records into non-empty priority sections in the expected order", () => {
+    expect(
+      groupParticipantRecordsByPriority(records).map((section) => ({
+        priority: section.priority,
+        ids: section.records.map((record) => record.id),
+      })),
+    ).toEqual([
+      { priority: "stali", ids: ["stali-a", "stali-b"] },
+      { priority: "regularni", ids: ["regularni-a"] },
+      { priority: "rezerwowi", ids: ["rezerwowi-z"] },
+    ]);
+  });
+});
+
 describe("photo mode resolution", () => {
   it("normalizes unsupported values to optional by default", () => {
     expect(resolvePhotoMode("required")).toBe("required");
@@ -160,6 +196,64 @@ describe("photo mode resolution", () => {
     expect(isPhotoModeRequired("optional")).toBe(false);
     expect(isPhotoModeEnabled("disabled")).toBe(false);
     expect(isPhotoModeEnabled("optional")).toBe(true);
+  });
+});
+
+describe("training join audience resolution", () => {
+  it("normalizes unsupported values to new-people by default", () => {
+    expect(resolveTrainingJoinAudience("existing-practitioners")).toBe("existing-practitioners");
+    expect(resolveTrainingJoinAudience("bogus")).toBe("new-people");
+  });
+
+  it("uses event override before group default", () => {
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: "existing-practitioners",
+        },
+        {
+          defaultJoinAudience: "new-people",
+        },
+      ),
+    ).toBe("existing-practitioners");
+
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: "new-people",
+        },
+        {
+          defaultJoinAudience: "existing-practitioners",
+        },
+      ),
+    ).toBe("new-people");
+  });
+
+  it("falls back to the group default and then to new people for legacy records", () => {
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: "default",
+        },
+        {
+          defaultJoinAudience: "existing-practitioners",
+        },
+      ),
+    ).toBe("existing-practitioners");
+
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: undefined,
+        },
+        null,
+      ),
+    ).toBe("new-people");
+  });
+
+  it("exposes polish labels for badges and form copy", () => {
+    expect(getTrainingJoinAudienceLabel("existing-practitioners")).toBe("Tylko Ćwiczący");
+    expect(getTrainingJoinAudienceLabel("new-people")).toBe("Nowe osoby");
   });
 });
 

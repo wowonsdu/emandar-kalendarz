@@ -75,6 +75,15 @@ function BrandMark({ inverted = false }: { inverted?: boolean }) {
   );
 }
 
+function getPublicHeaderBackPath(state: unknown) {
+  if (!state || typeof state !== "object") {
+    return null;
+  }
+
+  const candidate = (state as { publicBackPath?: unknown }).publicBackPath;
+  return typeof candidate === "string" && candidate.trim() ? candidate : null;
+}
+
 export function PublicLayout() {
   const {
     currentUser,
@@ -89,6 +98,7 @@ export function PublicLayout() {
     ? getPanelHomePath(currentUser?.role ?? "participant")
     : "/login";
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const publicHeaderBackPath = getPublicHeaderBackPath(location.state);
   const authenticatedSections = currentUser
     ? buildAuthenticatedNavigationSections(currentUser, store)
     : [];
@@ -180,14 +190,25 @@ export function PublicLayout() {
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setIsMobileMenuOpen(true)}
-            className="ml-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft md:hidden"
-            aria-label="Otwórz menu"
-          >
-            <Menu size={22} />
-          </button>
+          <div className="ml-auto flex items-center gap-2 md:hidden">
+            {publicHeaderBackPath ? (
+              <Link
+                to={publicHeaderBackPath}
+                className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft"
+                aria-label="Wróć"
+              >
+                <ArrowLeft size={20} />
+              </Link>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft"
+              aria-label="Otwórz menu"
+            >
+              <Menu size={22} />
+            </button>
+          </div>
         </div>
       </header>
 

@@ -45,6 +45,8 @@ export type EventCollaborationStatus =
   | "not-required";
 export type EnrollmentPhotoRequirement = "default" | "required" | "optional";
 export type PhotoMode = "required" | "optional" | "disabled";
+export type TrainingJoinAudience = "existing-practitioners" | "new-people";
+export type TrainingJoinAudienceSetting = "default" | TrainingJoinAudience;
 export type TrainerSharedSlotSource = "manual" | "ical-derived";
 export type TrainerSharedSlotStatus = "active" | "archived";
 
@@ -191,6 +193,7 @@ export interface Group {
   defaultCapacity?: number;
   defaultTags?: string[];
   defaultConfirmationLeadTimeDays: number;
+  defaultJoinAudience: TrainingJoinAudience;
   createdAt: string;
   updatedAt?: string;
   archivedAt?: string;
@@ -286,6 +289,7 @@ export interface TrainingEvent {
   archivedReason?: "relation-detached" | "manual";
   archivedForOrganizerId?: string | null;
   enrollmentPhotoRequirement?: EnrollmentPhotoRequirement;
+  joinAudienceSetting?: TrainingJoinAudienceSetting;
 }
 
 export interface EventParticipant {
@@ -730,6 +734,7 @@ export interface TrainingEventInput {
   eventTypeSystem?: GroupEventType;
   eligibleGroupPriorities?: GroupMemberPriority[];
   confirmationLeadTimeDays?: number;
+  joinAudienceSetting?: TrainingJoinAudienceSetting;
   selfManagedByTrainer?: boolean;
 }
 
@@ -742,6 +747,7 @@ export interface GroupInput {
   defaultCapacity?: number;
   defaultTags?: string[];
   defaultConfirmationLeadTimeDays: number;
+  defaultJoinAudience: TrainingJoinAudience;
 }
 
 export interface GroupUpdateInput {
@@ -753,6 +759,7 @@ export interface GroupUpdateInput {
   defaultCapacity?: number;
   defaultTags?: string[];
   defaultConfirmationLeadTimeDays: number;
+  defaultJoinAudience: TrainingJoinAudience;
 }
 
 export interface GroupMemberInput {
@@ -835,6 +842,7 @@ export interface TrainingEventManagementUpdateInput {
   scheduleDays?: TrainingEventScheduleDay[];
   transferTargetEventId?: string | null;
   enrollmentPhotoRequirement?: EnrollmentPhotoRequirement;
+  joinAudienceSetting?: TrainingJoinAudienceSetting;
   publicationDecision?: "accepted" | "rejected";
   publicationReviewMessage?: string;
 }

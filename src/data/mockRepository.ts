@@ -1561,6 +1561,7 @@ export async function createGroup(input: GroupInput, actor: AppUser) {
       defaultCapacity: input.defaultCapacity,
       defaultTags: input.defaultTags ?? [],
       defaultConfirmationLeadTimeDays: input.defaultConfirmationLeadTimeDays,
+      defaultJoinAudience: input.defaultJoinAudience,
       createdAt: nowIso(),
     });
 
@@ -1593,6 +1594,7 @@ export async function updateGroup(input: GroupUpdateInput, actor: AppUser) {
     group.defaultCapacity = input.defaultCapacity;
     group.defaultTags = input.defaultTags ?? [];
     group.defaultConfirmationLeadTimeDays = input.defaultConfirmationLeadTimeDays;
+    group.defaultJoinAudience = input.defaultJoinAudience;
     group.updatedAt = nowIso();
   });
 }
@@ -2183,6 +2185,7 @@ export async function createOrganizerTrainingDraft(
       createdByRole: "organizer",
       publicationApprovalStatus: isCommunityBrandStatus(base.brandStatus) ? "pending" : undefined,
       enrollmentPhotoRequirement: "optional",
+      joinAudienceSetting: "default",
     });
   });
 }
@@ -2222,6 +2225,7 @@ export async function updateOrganizerTrainingDraft(
       eligibleGroupPriorities: cloneValue(input.eligibleGroupPriorities ?? event.eligibleGroupPriorities ?? []),
       confirmationLeadTimeDays:
         input.confirmationLeadTimeDays ?? event.confirmationLeadTimeDays ?? group.defaultConfirmationLeadTimeDays,
+      joinAudienceSetting: event.joinAudienceSetting ?? "default",
     });
   });
 }
@@ -2384,6 +2388,7 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
           : "pending"
         : undefined,
       enrollmentPhotoRequirement: "optional",
+      joinAudienceSetting: input.joinAudienceSetting ?? "default",
     });
   });
 }
@@ -2965,6 +2970,9 @@ export async function updateTrainingEventManagement(
       }
       if (input.enrollmentPhotoRequirement !== undefined) {
         event.enrollmentPhotoRequirement = input.enrollmentPhotoRequirement;
+      }
+      if (input.joinAudienceSetting !== undefined) {
+        event.joinAudienceSetting = input.joinAudienceSetting;
       }
     }
 

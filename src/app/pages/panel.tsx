@@ -12,6 +12,7 @@ import {
 import {
   Bell,
   CalendarDays,
+  ChevronDown,
   Check,
   ImagePlus,
   Phone,
@@ -49,6 +50,12 @@ import {
 } from "@/app/components/panel";
 import { AvatarMedia } from "@/app/components/avatar-media";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/app/components/ui/collapsible";
+import { cn } from "@/app/components/ui/utils";
+import {
   NOTIFICATION_TEMPLATE_PLACEHOLDERS,
   normalizeNotificationSettings,
   resolveAttendanceConfirmationStatusLabel,
@@ -68,6 +75,7 @@ import {
   getHighestRole,
   getParticipantEnrollmentStatusLabel,
   getRoleLabel,
+  getTrainingJoinAudienceLabel,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventStatusLabel,
@@ -82,11 +90,14 @@ import {
   resolveEnrollmentIntent,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
+  resolveTrainingJoinAudienceForEvent,
   resolveTrainerCollaborationStatus,
   resolveTrainingEventWorkflowStatus,
   resolveTrainingEventStatus,
+  groupParticipantRecordsByPriority,
   sortEventsByDate,
   sortEventsByFillRate,
+  sortParticipantRecordsByPriorityAndName,
   sortTrainerProfiles,
 } from "@/domain/utils";
 import type {
@@ -105,6 +116,7 @@ import type {
   TrainerProfile,
   TrainerFreeDaySliceBucket,
   TrainingEventImage,
+  TrainingJoinAudienceSetting,
   TrainerCalendarFeedProvider,
   TrainingEvent,
   TrainingEventScheduleDay,
@@ -356,6 +368,7 @@ type GroupFormState = {
   defaultCapacity: string;
   defaultTagsText: string;
   defaultConfirmationLeadTimeDays: string;
+  defaultJoinAudience: "existing-practitioners" | "new-people";
 };
 
 type GroupMemberFormState = {
@@ -365,6 +378,16 @@ type GroupMemberFormState = {
   notes: string;
   referralSource: string;
   priority: GroupMemberPriority;
+};
+
+type GroupMemberDraftState = {
+  priority: GroupMemberPriority;
+  notes: string;
+};
+
+type GroupMemberSaveState = {
+  status: "idle" | "saving" | "saved" | "error";
+  message?: string;
 };
 
 type TrainingEventFormState = {
@@ -386,6 +409,7 @@ type TrainingEventFormState = {
   capacity: string;
   minimumParticipants: string;
   confirmationLeadTimeDays: string;
+  joinAudience: "existing-practitioners" | "new-people";
   isPublished: boolean;
 };
 
@@ -399,6 +423,7 @@ type EventManagementSettingsDraft = {
   eventImages: TrainingEventImage[];
   useEventImageAsCover: boolean;
   enrollmentPhotoRequirement: "default" | "required" | "optional";
+  joinAudience: "existing-practitioners" | "new-people";
   tags: string;
   firstDayDate: string;
   scheduleDays: ScheduleDayDraft[];
@@ -430,6 +455,7 @@ function createEmptyGroupFormState(trainerId = ""): GroupFormState {
     defaultCapacity: "20",
     defaultTagsText: "",
     defaultConfirmationLeadTimeDays: "7",
+    defaultJoinAudience: "new-people",
   };
 }
 
@@ -453,6 +479,7 @@ function createEmptyTrainingEventFormState(): TrainingEventFormState {
     capacity: "20",
     minimumParticipants: "10",
     confirmationLeadTimeDays: "5",
+    joinAudience: "new-people",
     isPublished: true,
   };
 }
@@ -467,7 +494,19 @@ function createGroupFormStateFromGroup(group: Group): GroupFormState {
     defaultCapacity: String(group.defaultCapacity ?? 20),
     defaultTagsText: (group.defaultTags ?? []).join(", "),
     defaultConfirmationLeadTimeDays: String(group.defaultConfirmationLeadTimeDays ?? 7),
+    defaultJoinAudience: group.defaultJoinAudience ?? "new-people",
   };
+}
+
+function getPersistedJoinAudienceSetting(
+  joinAudience: "existing-practitioners" | "new-people",
+  group?: Pick<Group, "defaultJoinAudience"> | null,
+): TrainingJoinAudienceSetting {
+  if (group && joinAudience === group.defaultJoinAudience) {
+    return "default";
+  }
+
+  return joinAudience;
 }
 
 function createEmptyGroupMemberFormState(): GroupMemberFormState {
@@ -480,6 +519,30 @@ function createEmptyGroupMemberFormState(): GroupMemberFormState {
     priority: "rezerwowi",
   };
 }
+
+function createGroupMemberDraftState(member: GroupMember): GroupMemberDraftState {
+  return {
+    priority: member.priority,
+    notes: member.notes ?? "",
+  };
+}
+
+function normalizeGroupMemberNotes(value?: string) {
+  return value?.trim() ?? "";
+}
+
+function hasGroupMemberDraftChanges(member: GroupMember, draft?: GroupMemberDraftState) {
+  if (!draft) {
+    return false;
+  }
+
+  return (
+    draft.priority !== member.priority ||
+    normalizeGroupMemberNotes(draft.notes) !== normalizeGroupMemberNotes(member.notes)
+  );
+}
+
+const GROUP_MEMBER_SAVE_FEEDBACK_MS = 1800;
 
 function normalizeParticipantPhoneLookupKey(value: string) {
   const trimmed = value.trim();
@@ -548,12 +611,6 @@ function sortGroupsByStatusAndName(groups: Group[]) {
     return left.name.localeCompare(right.name, "pl");
   });
 }
-
-const GROUP_PRIORITY_ORDER: Record<GroupMemberPriority, number> = {
-  stali: 0,
-  regularni: 1,
-  rezerwowi: 2,
-};
 
 function getParticipantConfirmationLabel(profile?: ParticipantProfile | null) {
   if (!profile) {
@@ -4659,12 +4716,18 @@ export function GroupsPage() {
   const [memberForm, setMemberForm] = useState<GroupMemberFormState>(
     createEmptyGroupMemberFormState(),
   );
-  const [memberDrafts, setMemberDrafts] = useState<
-    Record<string, { priority: GroupMemberPriority; notes: string }>
-  >({});
+  const [memberDrafts, setMemberDrafts] = useState<Record<string, GroupMemberDraftState>>({});
+  const [memberSaveStates, setMemberSaveStates] = useState<Record<string, GroupMemberSaveState>>(
+    {},
+  );
+  const [expandedMemberIds, setExpandedMemberIds] = useState<string[]>([]);
   const [savingGroup, setSavingGroup] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
   const [groupScope, setGroupScope] = useState<"all" | "mine">("mine");
+  const memberDraftsRef = useRef(memberDrafts);
+  const memberSaveTimeoutsRef = useRef<Record<string, number>>({});
+  const savingMemberIdsRef = useRef<Record<string, boolean>>({});
+  const queuedMemberSaveIdsRef = useRef<Record<string, boolean>>({});
 
   if (!currentUser) {
     return null;
@@ -4777,17 +4840,29 @@ export function GroupsPage() {
     return (store.groupMembers ?? [])
       .filter(
         (member) => member.groupId === selectedGroup.id && member.membershipStatus === "active",
-      )
-      .sort((left, right) => {
-        const leftRank = GROUP_PRIORITY_ORDER[left.priority];
-        const rightRank = GROUP_PRIORITY_ORDER[right.priority];
-        if (leftRank !== rightRank) {
-          return leftRank - rightRank;
-        }
-
-        return left.participantDisplayName.localeCompare(right.participantDisplayName, "pl");
-      });
+      );
   }, [selectedGroup, store.groupMembers]);
+  const selectedGroupMembersById = useMemo(
+    () => new Map(selectedGroupMembers.map((member) => [member.id, member])),
+    [selectedGroupMembers],
+  );
+  const selectedGroupMemberSections = useMemo(() => {
+    let rowIndex = 0;
+    const effectiveMembers = selectedGroupMembers.map((member) => ({
+      id: member.id,
+      member,
+      priority: memberDrafts[member.id]?.priority ?? member.priority,
+      participantDisplayName: member.participantDisplayName,
+    }));
+
+    return groupParticipantRecordsByPriority(effectiveMembers).map((section) => ({
+      priority: section.priority,
+      members: section.records.map((record) => ({
+        member: record.member,
+        rowIndex: rowIndex++,
+      })),
+    }));
+  }, [memberDrafts, selectedGroupMembers]);
   const selectedGroupEvents = useMemo(() => {
     if (!selectedGroup) {
       return [];
@@ -4972,6 +5047,58 @@ export function GroupsPage() {
     }));
   }, [availableTrainers, canCreateGroups, editingGroupId, groupForm.trainerId]);
 
+  useEffect(() => {
+    memberDraftsRef.current = memberDrafts;
+  }, [memberDrafts]);
+
+  useEffect(() => {
+    const selectedMemberIds = new Set(selectedGroupMembers.map((member) => member.id));
+
+    setMemberDrafts((previous) => {
+      let changed = false;
+      const next: Record<string, GroupMemberDraftState> = {};
+
+      for (const [memberId, draft] of Object.entries(previous)) {
+        const member = selectedGroupMembersById.get(memberId);
+        if (member && hasGroupMemberDraftChanges(member, draft)) {
+          next[memberId] = draft;
+        } else {
+          changed = true;
+        }
+      }
+
+      return changed ? next : previous;
+    });
+
+    setMemberSaveStates((previous) => {
+      let changed = false;
+      const next: Record<string, GroupMemberSaveState> = {};
+
+      for (const [memberId, state] of Object.entries(previous)) {
+        if (selectedMemberIds.has(memberId) && state.status !== "idle") {
+          next[memberId] = state;
+        } else {
+          changed = true;
+        }
+      }
+
+      return changed ? next : previous;
+    });
+
+    setExpandedMemberIds((previous) => {
+      const next = previous.filter((memberId) => selectedMemberIds.has(memberId));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [selectedGroupMembers, selectedGroupMembersById]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(memberSaveTimeoutsRef.current).forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+    };
+  }, []);
+
   function resetGroupForm() {
     setEditingGroupId(null);
     setGroupForm(createEmptyGroupFormState(availableTrainers[0]?.id ?? ""));
@@ -4983,6 +5110,165 @@ export function GroupsPage() {
     isGroupDetailView &&
     Boolean(selectedGroup) &&
     editingGroupId === selectedGroup.id;
+
+  function updateMemberSaveState(memberId: string, nextState: GroupMemberSaveState) {
+    setMemberSaveStates((previous) => {
+      const current = previous[memberId];
+      if (current?.status === nextState.status && current?.message === nextState.message) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        [memberId]: nextState,
+      };
+    });
+  }
+
+  function clearMemberSaveFeedbackTimer(memberId: string) {
+    const timeoutId = memberSaveTimeoutsRef.current[memberId];
+    if (!timeoutId) {
+      return;
+    }
+
+    window.clearTimeout(timeoutId);
+    delete memberSaveTimeoutsRef.current[memberId];
+  }
+
+  function queueSavedMemberFeedbackReset(memberId: string) {
+    clearMemberSaveFeedbackTimer(memberId);
+    memberSaveTimeoutsRef.current[memberId] = window.setTimeout(() => {
+      setMemberSaveStates((previous) => {
+        if (previous[memberId]?.status !== "saved") {
+          return previous;
+        }
+
+        const next = { ...previous };
+        delete next[memberId];
+        return next;
+      });
+      delete memberSaveTimeoutsRef.current[memberId];
+    }, GROUP_MEMBER_SAVE_FEEDBACK_MS);
+  }
+
+  function setMemberDraft(member: GroupMember, patch: Partial<GroupMemberDraftState>) {
+    const nextDraft = {
+      ...(memberDraftsRef.current[member.id] ?? createGroupMemberDraftState(member)),
+      ...patch,
+    };
+
+    setMemberDrafts((previous) => ({
+      ...previous,
+      [member.id]: nextDraft,
+    }));
+    updateMemberSaveState(member.id, { status: "idle" });
+
+    return nextDraft;
+  }
+
+  async function persistGroupMemberChanges(memberId: string, explicitDraft?: GroupMemberDraftState) {
+    const member = selectedGroupMembersById.get(memberId);
+    if (!member) {
+      return;
+    }
+
+    const draft = explicitDraft ?? memberDraftsRef.current[memberId] ?? createGroupMemberDraftState(member);
+    if (!hasGroupMemberDraftChanges(member, draft)) {
+      setMemberDrafts((previous) => {
+        if (!(memberId in previous)) {
+          return previous;
+        }
+
+        const next = { ...previous };
+        delete next[memberId];
+        return next;
+      });
+      clearMemberSaveFeedbackTimer(memberId);
+      setMemberSaveStates((previous) => {
+        if (!(memberId in previous)) {
+          return previous;
+        }
+
+        const next = { ...previous };
+        delete next[memberId];
+        return next;
+      });
+      return;
+    }
+
+    if (savingMemberIdsRef.current[memberId]) {
+      queuedMemberSaveIdsRef.current[memberId] = true;
+      return;
+    }
+
+    savingMemberIdsRef.current[memberId] = true;
+    queuedMemberSaveIdsRef.current[memberId] = false;
+    clearMemberSaveFeedbackTimer(memberId);
+    updateMemberSaveState(memberId, { status: "saving" });
+
+    try {
+      await updateGroupMember({
+        memberId,
+        priority: draft.priority,
+        notes: draft.notes,
+      });
+
+      updateMemberSaveState(memberId, { status: "saved" });
+      queueSavedMemberFeedbackReset(memberId);
+    } catch (error) {
+      updateMemberSaveState(memberId, {
+        status: "error",
+        message: error instanceof Error ? error.message : "Nie udało się zapisać zmian.",
+      });
+      toast.error(error instanceof Error ? error.message : "Nie udało się zapisać zmian.");
+    } finally {
+      savingMemberIdsRef.current[memberId] = false;
+
+      if (queuedMemberSaveIdsRef.current[memberId]) {
+        queuedMemberSaveIdsRef.current[memberId] = false;
+        window.setTimeout(() => {
+          void persistGroupMemberChanges(memberId);
+        }, 0);
+      }
+    }
+  }
+
+  function toggleExpandedMember(memberId: string, open: boolean) {
+    setExpandedMemberIds((previous) => {
+      if (open) {
+        return previous.includes(memberId) ? previous : [...previous, memberId];
+      }
+
+      return previous.filter((id) => id !== memberId);
+    });
+  }
+
+  function getMemberSaveStateLabel(memberId: string) {
+    const state = memberSaveStates[memberId];
+    switch (state?.status) {
+      case "saving":
+        return "Zapisywanie...";
+      case "saved":
+        return "Zapisano";
+      case "error":
+        return state.message ?? "Błąd zapisu";
+      default:
+        return null;
+    }
+  }
+
+  function getMemberSaveStateTone(memberId: string) {
+    switch (memberSaveStates[memberId]?.status) {
+      case "saving":
+        return "text-brand-muted";
+      case "saved":
+        return "text-emerald-700";
+      case "error":
+        return "text-red-700";
+      default:
+        return "text-brand-muted";
+    }
+  }
 
   async function handleSaveGroup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -5007,6 +5293,7 @@ export function GroupsPage() {
           Number(groupForm.defaultConfirmationLeadTimeDays) >= 0
             ? Number(groupForm.defaultConfirmationLeadTimeDays)
             : 7,
+        defaultJoinAudience: groupForm.defaultJoinAudience,
       };
 
       if (editingGroupId) {
@@ -5126,21 +5413,6 @@ export function GroupsPage() {
       toast.error(error instanceof Error ? error.message : "Nie udało się dodać członka.");
     } finally {
       setSavingMember(false);
-    }
-  }
-
-  async function handleSaveMember(member: GroupMember) {
-    const draft = memberDrafts[member.id];
-
-    try {
-      await updateGroupMember({
-        memberId: member.id,
-        priority: draft?.priority ?? member.priority,
-        notes: draft?.notes ?? member.notes ?? "",
-      });
-      toast.success("Zapisano zmiany członka grupy.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udało się zapisać zmian.");
     }
   }
 
@@ -5312,6 +5584,22 @@ export function GroupsPage() {
                 }
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
               />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+              <select
+                value={groupForm.defaultJoinAudience}
+                onChange={(event) =>
+                  setGroupForm((previous) => ({
+                    ...previous,
+                    defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
+                  }))
+                }
+                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+              >
+                <option value="existing-practitioners">Tylko Ćwiczący</option>
+                <option value="new-people">Nowe osoby</option>
+              </select>
             </label>
             <label className="grid gap-2 lg:col-span-2">
               <span className="text-sm font-semibold text-brand-navy">Tagi domyślne</span>
@@ -5526,6 +5814,22 @@ export function GroupsPage() {
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                   />
                 </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+                  <select
+                    value={groupForm.defaultJoinAudience}
+                    onChange={(event) =>
+                      setGroupForm((previous) => ({
+                        ...previous,
+                        defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                  >
+                    <option value="existing-practitioners">Tylko Ćwiczący</option>
+                    <option value="new-people">Nowe osoby</option>
+                  </select>
+                </label>
                 <label className="grid gap-2 lg:col-span-2">
                   <span className="text-sm font-semibold text-brand-navy">Tagi domyślne</span>
                   <input
@@ -5602,6 +5906,10 @@ export function GroupsPage() {
                 <div>
                   <p className="font-semibold text-brand-navy">SMS potwierdzenia udziału</p>
                   <p>{selectedGroup.defaultConfirmationLeadTimeDays} dni przed wydarzeniem</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-brand-navy">Mogą dołączyć</p>
+                  <p>{getTrainingJoinAudienceLabel(selectedGroup.defaultJoinAudience)}</p>
                 </div>
               </div>
               {selectedGroup.notes ? (
@@ -5832,108 +6140,184 @@ export function GroupsPage() {
                   ) : null}
                 </form>
               ) : null}
-              <div className="mt-6 space-y-3">
+              <div className="-mx-6 mt-4 space-y-5 sm:mx-0 sm:mt-6 sm:space-y-6">
                 {selectedGroupMembers.length === 0 ? (
-                  <EmptyPanelState
-                    title="Brak członków"
-                    description={
-                      isParticipantGroupViewer
-                        ? "Ta grupa nie ma jeszcze żadnych aktywnych członków."
-                        : "Dodaj pierwsze osoby do grupy, aby planować szkolenia i budować roster wydarzeń."
-                    }
-                  />
+                  <div className="px-6 sm:px-0">
+                    <EmptyPanelState
+                      title="Brak członków"
+                      description={
+                        isParticipantGroupViewer
+                          ? "Ta grupa nie ma jeszcze żadnych aktywnych członków."
+                          : "Dodaj pierwsze osoby do grupy, aby planować szkolenia i budować roster wydarzeń."
+                      }
+                    />
+                  </div>
                 ) : (
-                  selectedGroupMembers.map((member) => {
-                    const draft = memberDrafts[member.id];
-                    const participantProfile =
-                      participantProfilesById.get(member.participantProfileId) ?? null;
+                  selectedGroupMemberSections.map((section) => (
+                    <section key={section.priority} className="space-y-1.5 sm:space-y-3">
+                      <div className="flex items-center gap-2 px-6 sm:px-1">
+                        <span className="rounded-full bg-brand-navy/8 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:px-3 sm:py-1 sm:text-[11px] sm:tracking-[0.2em]">
+                          {getGroupPriorityLabel(section.priority)}
+                        </span>
+                        <div className="h-px flex-1 bg-brand-line/80" />
+                        <span className="text-[11px] text-brand-muted sm:text-xs">
+                          {section.members.length}
+                        </span>
+                      </div>
 
-                    return (
-                      <article
-                        key={member.id}
-                        className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div className="space-y-2">
-                            <p className="text-lg font-semibold text-brand-navy">
-                              {member.participantDisplayName}
-                            </p>
-                            {isParticipantGroupViewer ? (
-                              <p className="text-sm text-brand-muted">
-                                {member.participantProfileId === currentUser.participantProfileId
-                                  ? "To Twoje miejsce w tej grupie."
-                                  : "Członek grupy."}
-                              </p>
-                            ) : (
-                              <>
-                                <div className="flex flex-wrap items-center gap-2 text-sm text-brand-muted">
-                                  <Phone size={14} />
-                                  <span>{member.participantPhone}</span>
-                                </div>
-                                <p className="text-xs uppercase tracking-[0.2em] text-brand-sky-deep">
-                                  {getGroupPriorityLabel(draft?.priority ?? member.priority)} ·{" "}
-                                  {getParticipantConfirmationLabel(participantProfile)}
-                                </p>
-                              </>
-                            )}
-                          </div>
-                          {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
-                            <div className="grid min-w-0 gap-3 sm:min-w-[250px]">
-                              <select
-                                value={draft?.priority ?? member.priority}
-                                onChange={(event) =>
-                                  setMemberDrafts((previous) => ({
-                                    ...previous,
-                                    [member.id]: {
-                                      priority: event.target.value as GroupMemberPriority,
-                                      notes: previous[member.id]?.notes ?? member.notes ?? "",
-                                    },
-                                  }))
-                                }
-                                className="min-w-0 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy outline-none"
+                      <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
+                        {section.members.map(({ member, rowIndex }) => {
+                          const draft =
+                            memberDrafts[member.id] ?? createGroupMemberDraftState(member);
+                          const participantProfile =
+                            participantProfilesById.get(member.participantProfileId) ?? null;
+                          const isExpanded = expandedMemberIds.includes(member.id);
+                          const saveState = memberSaveStates[member.id];
+                          const saveStateLabel = getMemberSaveStateLabel(member.id);
+
+                          return (
+                            <Collapsible
+                              key={member.id}
+                              open={isExpanded}
+                              onOpenChange={(open) => toggleExpandedMember(member.id, open)}
+                            >
+                              <article
+                                className={cn(
+                                  "border-b border-brand-line/70 px-6 py-2.5 last:border-b-0",
+                                  rowIndex % 2 === 0 ? "bg-white" : "bg-brand-shell/35",
+                                  "sm:rounded-3xl sm:border sm:bg-brand-shell/60 sm:p-4",
+                                )}
                               >
-                                <option value="stali">Stali</option>
-                                <option value="regularni">Regularni</option>
-                                <option value="rezerwowi">Rezerwowi</option>
-                              </select>
-                              <input
-                                value={draft?.notes ?? member.notes ?? ""}
-                                onChange={(event) =>
-                                  setMemberDrafts((previous) => ({
-                                    ...previous,
-                                    [member.id]: {
-                                      priority: previous[member.id]?.priority ?? member.priority,
-                                      notes: event.target.value,
-                                    },
-                                  }))
-                                }
-                                placeholder="Notatki o uczestniku"
-                                className="min-w-0 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy outline-none"
-                              />
-                              <div className="flex flex-wrap gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSaveMember(member)}
-                                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-2 text-sm font-semibold text-white"
-                                >
-                                  <Check size={14} />
-                                  Zapisz
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleRemoveMember(member.id)}
-                                  className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700"
-                                >
-                                  <Trash2 size={14} />
-                                  Usuń
-                                </button>
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      </article>
-                    );
-                  })
+                                <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
+                                      {member.participantDisplayName}
+                                    </p>
+                                  </div>
+
+                                  {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                    <select
+                                      value={draft.priority}
+                                      onChange={(event) => {
+                                        const nextDraft = setMemberDraft(member, {
+                                          priority: event.target.value as GroupMemberPriority,
+                                        });
+                                        void persistGroupMemberChanges(member.id, nextDraft);
+                                      }}
+                                      className="h-9 w-[108px] shrink-0 appearance-none rounded-xl border border-brand-line bg-white px-3 text-xs font-semibold text-brand-navy outline-none sm:h-12 sm:w-[180px] sm:rounded-2xl sm:px-4 sm:text-sm"
+                                    >
+                                      <option value="stali">Stali</option>
+                                      <option value="regularni">Regularni</option>
+                                      <option value="rezerwowi">Rezerwowi</option>
+                                    </select>
+                                  ) : null}
+
+                                  {saveStateLabel ? (
+                                    <span
+                                      title={saveStateLabel}
+                                      aria-label={saveStateLabel}
+                                      className={cn(
+                                        "inline-flex size-6 shrink-0 items-center justify-center sm:size-8",
+                                        getMemberSaveStateTone(member.id),
+                                      )}
+                                    >
+                                      {saveState?.status === "saving" ? (
+                                        <RefreshCcw size={12} className="animate-spin sm:size-[14px]" />
+                                      ) : saveState?.status === "saved" ? (
+                                        <Check size={12} className="sm:size-[14px]" />
+                                      ) : saveState?.status === "error" ? (
+                                        <X size={12} className="sm:size-[14px]" />
+                                      ) : null}
+                                    </span>
+                                  ) : null}
+
+                                  <CollapsibleTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
+                                      aria-label={
+                                        isExpanded
+                                          ? `Ukryj szczegóły ${member.participantDisplayName}`
+                                          : `Pokaż szczegóły ${member.participantDisplayName}`
+                                      }
+                                    >
+                                      <ChevronDown
+                                        size={16}
+                                        className={cn(
+                                          "transition-transform duration-200",
+                                          isExpanded ? "rotate-180" : "",
+                                          "sm:size-[18px]",
+                                        )}
+                                      />
+                                    </button>
+                                  </CollapsibleTrigger>
+                                </div>
+
+                                <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
+                                  {isParticipantGroupViewer ? (
+                                    <p className="text-xs text-brand-muted sm:text-sm">
+                                      {member.participantProfileId === currentUser.participantProfileId
+                                        ? "To Twoje miejsce w tej grupie."
+                                        : "Członek grupy."}
+                                    </p>
+                                  ) : (
+                                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
+                                      <div className="space-y-3 sm:space-y-4">
+                                        <div className="flex flex-wrap items-center gap-2 text-xs text-brand-muted sm:gap-3 sm:text-sm">
+                                          <span className="inline-flex items-center gap-1.5 sm:gap-2">
+                                            <Phone size={12} className="sm:size-[14px]" />
+                                            {member.participantPhone}
+                                          </span>
+                                          <span className="rounded-full border border-brand-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-brand-navy sm:px-3 sm:py-1 sm:text-xs sm:tracking-[0.18em]">
+                                            {getParticipantConfirmationLabel(participantProfile)}
+                                          </span>
+                                        </div>
+
+                                        {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                          <label className="grid gap-2">
+                                            <span className="text-xs font-semibold text-brand-navy sm:text-sm">
+                                              Notatka o uczestniku
+                                            </span>
+                                            <textarea
+                                              rows={3}
+                                              value={draft.notes}
+                                              onChange={(event) => {
+                                                setMemberDraft(member, {
+                                                  notes: event.target.value,
+                                                });
+                                              }}
+                                              onBlur={() => {
+                                                void persistGroupMemberChanges(member.id);
+                                              }}
+                                              placeholder="Notatki o uczestniku"
+                                              className="min-h-20 rounded-xl border border-brand-line bg-white px-3 py-2.5 text-sm text-brand-navy outline-none sm:min-h-24 sm:rounded-2xl sm:px-4 sm:py-3"
+                                            />
+                                          </label>
+                                        ) : null}
+                                      </div>
+
+                                      {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                        <div className="flex items-start justify-start lg:justify-end">
+                                          <button
+                                            type="button"
+                                            onClick={() => void handleRemoveMember(member.id)}
+                                            className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700"
+                                          >
+                                            <Trash2 size={14} />
+                                            Usuń
+                                          </button>
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  )}
+                                </CollapsibleContent>
+                              </article>
+                            </Collapsible>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ))
                 )}
               </div>
             </article>
@@ -7062,6 +7446,7 @@ export function EventsPage() {
         typeof nextGroup?.defaultConfirmationLeadTimeDays === "number"
           ? String(nextGroup.defaultConfirmationLeadTimeDays)
           : previous.confirmationLeadTimeDays,
+      joinAudience: nextGroup?.defaultJoinAudience ?? previous.joinAudience,
       tags:
         nextGroup?.defaultTags && nextGroup.defaultTags.length > 0
           ? nextGroup.defaultTags.join(", ")
@@ -7327,6 +7712,13 @@ export function EventsPage() {
                   confirmationLeadTimeDays: Number(trainerEventForm.confirmationLeadTimeDays),
                   isPublished: isCommunitySection ? false : trainerEventForm.isPublished,
                   brandStatus: isCommunitySection ? "supported" : undefined,
+                  joinAudienceSetting:
+                    isCommunitySection
+                      ? undefined
+                      : getPersistedJoinAudienceSetting(
+                          trainerEventForm.joinAudience,
+                          selectedOfficialGroup,
+                        ),
                   eventTypeSystem:
                     !isCommunitySection && selectedOfficialGroup
                       ? selectedOfficialGroup.defaultEventType
@@ -7465,6 +7857,9 @@ export function EventsPage() {
                       </p>
                       <p className="mt-1 text-sm text-brand-muted">
                         Trener: {selectedOfficialGroupTrainerName}
+                      </p>
+                      <p className="mt-1 text-sm text-brand-muted">
+                        Mogą dołączyć: {getTrainingJoinAudienceLabel(selectedOfficialGroup.defaultJoinAudience)}
                       </p>
                     </div>
                     <p className="text-sm text-brand-muted">
@@ -7919,13 +8314,35 @@ export function EventsPage() {
                   }
                   className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
-                <span className="text-sm text-brand-muted">
+              </label>
+
+              {!isCommunitySection ? (
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+                  <select
+                    value={trainerEventForm.joinAudience}
+                    onChange={(event) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        joinAudience: event.target.value as TrainingEventFormState["joinAudience"],
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  >
+                    <option value="existing-practitioners">Tylko Ćwiczący</option>
+                    <option value="new-people">Nowe osoby</option>
+                  </select>
+                </label>
+              ) : null}
+
+              {!isCommunitySection ? (
+                <div className="text-sm text-brand-muted xl:col-span-2">
                   Ile dni przed wydarzeniem wysłać SMS z prośbą o potwierdzenie udziału.
-                  {!isCommunitySection && selectedOfficialGroup
+                  {selectedOfficialGroup
                     ? " Domyślnie ta wartość startuje z ustawień grupy."
                     : ""}
-                </span>
-              </label>
+                </div>
+              ) : null}
 
               {isCommunitySection ? (
                 <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted xl:col-span-2">
@@ -8348,6 +8765,7 @@ export function EventManagementPage() {
     eventImages: [] as TrainingEventImage[],
     useEventImageAsCover: false,
     enrollmentPhotoRequirement: "default" as "default" | "required" | "optional",
+    joinAudience: "new-people",
     tags: "",
     firstDayDate: "",
     scheduleDays: resizeScheduleDayDrafts(2, []),
@@ -8356,6 +8774,9 @@ export function EventManagementPage() {
   const eventGroup = event?.groupId
     ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
     : null;
+  const resolvedEventJoinAudience = event
+    ? resolveTrainingJoinAudienceForEvent(event, eventGroup)
+    : "new-people";
   const sectionEyebrow = location.pathname.startsWith("/panel/wydarzenia-spolecznosci")
     ? "Społeczność"
     : "Szkolenia";
@@ -8384,6 +8805,7 @@ export function EventManagementPage() {
       eventImages: sourceEvent.eventImages ?? [],
       useEventImageAsCover: sourceEvent.useEventImageAsCover === true,
       enrollmentPhotoRequirement: sourceEvent.enrollmentPhotoRequirement ?? "default",
+      joinAudience: resolveTrainingJoinAudienceForEvent(sourceEvent, eventGroup),
       tags: (sourceEvent.tags ?? []).join(", "),
       ...getScheduleDraftsFromEvent(sourceEvent),
     };
@@ -8472,20 +8894,13 @@ export function EventManagementPage() {
 
     return !item.eventParticipantId;
   });
-  const groupEventParticipants = (store.eventParticipants ?? [])
-    .filter((item) => item.eventId === event.id)
-    .sort((left, right) => {
-      const leftRank = GROUP_PRIORITY_ORDER[left.priority];
-      const rightRank = GROUP_PRIORITY_ORDER[right.priority];
-      if (leftRank !== rightRank) {
-        return leftRank - rightRank;
-      }
-
-      return left.participantDisplayName.localeCompare(right.participantDisplayName, "pl");
-    });
+  const groupEventParticipants = sortParticipantRecordsByPriorityAndName(
+    (store.eventParticipants ?? []).filter((item) => item.eventId === event.id),
+  );
   const assignableGroupMembers =
     event.groupId && (isEventOrganizerOwner || currentUser.role === "admin")
-      ? (store.groupMembers ?? [])
+      ? sortParticipantRecordsByPriorityAndName(
+          (store.groupMembers ?? [])
           .filter(
             (member) =>
               member.groupId === event.groupId &&
@@ -8493,16 +8908,8 @@ export function EventManagementPage() {
               !groupEventParticipants.some(
                 (participant) => participant.participantProfileId === member.participantProfileId,
               ),
-          )
-          .sort((left, right) => {
-            const leftRank = GROUP_PRIORITY_ORDER[left.priority];
-            const rightRank = GROUP_PRIORITY_ORDER[right.priority];
-            if (leftRank !== rightRank) {
-              return leftRank - rightRank;
-            }
-
-            return left.participantDisplayName.localeCompare(right.participantDisplayName, "pl");
-          })
+          ),
+        )
       : [];
   const manageableEvents = sortEventsByDate(
     store.trainingEvents.filter((item) => {
@@ -8616,6 +9023,9 @@ export function EventManagementPage() {
                       ),
                       undefined,
                       settingsDraft.enrollmentPhotoRequirement,
+                      isCommunityEvent
+                        ? undefined
+                        : getPersistedJoinAudienceSetting(settingsDraft.joinAudience, eventGroup),
                       status,
                     );
                     toast.success(
@@ -8816,6 +9226,7 @@ export function EventManagementPage() {
                           ),
                           undefined,
                           settingsDraft.enrollmentPhotoRequirement,
+                          undefined,
                         );
                         toast.success("Zapisano ustawienia wydarzenia.");
                         setIsSettingsDirty(false);
@@ -9076,6 +9487,9 @@ export function EventManagementPage() {
             <span>{scheduleRangeLabel}</span>
             <span>Maks. miejsc: {event.capacity}</span>
             <span>Minimalny prog: {resolveMinimumParticipants(event)}</span>
+            {!isCommunityEvent ? (
+              <span>Mogą dołączyć: {getTrainingJoinAudienceLabel(resolvedEventJoinAudience)}</span>
+            ) : null}
             <span>
               SMS: {event.confirmationLeadTimeDays ?? eventGroup?.defaultConfirmationLeadTimeDays ?? 0} dni
               przed wydarzeniem
@@ -9161,6 +9575,9 @@ export function EventManagementPage() {
                   ),
                   undefined,
                   settingsDraft.enrollmentPhotoRequirement,
+                  isCommunityEvent
+                    ? undefined
+                    : getPersistedJoinAudienceSetting(settingsDraft.joinAudience, eventGroup),
                   status,
                 );
                 toast.success(
@@ -9434,6 +9851,30 @@ export function EventManagementPage() {
             </select>
           </label>
 
+          {!isCommunityEvent ? (
+            <label className="mt-4 grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+              <select
+                value={settingsDraft.joinAudience}
+                onChange={(changeEvent) =>
+                  updateSettingsDraft((previous) => ({
+                    ...previous,
+                    joinAudience: changeEvent.target.value as EventManagementSettingsDraft["joinAudience"],
+                  }))
+                }
+                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+              >
+                <option value="existing-practitioners">Tylko Ćwiczący</option>
+                <option value="new-people">Nowe osoby</option>
+              </select>
+              <span className="text-xs text-brand-muted">
+                {eventGroup
+                  ? `Grupa bazowa ma teraz ustawione ${getTrainingJoinAudienceLabel(eventGroup.defaultJoinAudience)}.`
+                  : `Aktualnie to szkolenie pokazuje ${getTrainingJoinAudienceLabel(resolvedEventJoinAudience)}.`}
+              </span>
+            </label>
+          ) : null}
+
           <div className="mt-4 grid gap-4 xl:grid-cols-4">
             {settingsDraft.scheduleDays.map((day, index) => {
               const draftScheduleDays = buildScheduleDaysFromDrafts(
@@ -9548,10 +9989,13 @@ export function EventManagementPage() {
 	                    isCommunityEvent ? settingsDraft.useEventImageAsCover : undefined,
 	                    buildScheduleDaysFromDrafts(
 	                      settingsDraft.firstDayDate,
-                      settingsDraft.scheduleDays,
-                    ),
-                    undefined,
-                    settingsDraft.enrollmentPhotoRequirement,
+	                      settingsDraft.scheduleDays,
+	                    ),
+	                    undefined,
+	                    settingsDraft.enrollmentPhotoRequirement,
+	                    isCommunityEvent
+	                      ? undefined
+	                      : getPersistedJoinAudienceSetting(settingsDraft.joinAudience, eventGroup),
                   );
                   toast.success("Zapisano ustawienia szkolenia.");
                   setIsSettingsDirty(false);
@@ -10978,9 +11422,9 @@ export function ProfileSettingsPage() {
                     displayName: event.target.value,
                   }))
                 }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+              </label>
 
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">Imię kontaktowe</span>

@@ -257,6 +257,7 @@ interface AppStateContextValue {
     scheduleDays?: TrainingEventScheduleDay[],
     transferTargetEventId?: string,
     enrollmentPhotoRequirement?: "default" | "required" | "optional",
+    joinAudienceSetting?: "default" | "existing-practitioners" | "new-people",
     publicationDecision?: "accepted" | "rejected",
     publicationReviewMessage?: string,
   ) => Promise<void>;
@@ -967,6 +968,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
         scheduleDays,
         transferTargetEventId,
         enrollmentPhotoRequirement,
+        joinAudienceSetting,
         publicationDecision,
         publicationReviewMessage,
       ) {
@@ -992,6 +994,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
               scheduleDays,
               transferTargetEventId,
               enrollmentPhotoRequirement,
+              joinAudienceSetting,
               publicationDecision,
               publicationReviewMessage,
             },

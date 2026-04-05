@@ -73,7 +73,7 @@ export function buildAuthenticatedNavigationSections(
           label: "Wydarzenia społeczności",
           icon: CalendarDays,
         },
-        { to: "/panel/zgloszenia", label: "Zgłoszenia", icon: Bell },
+        { to: "/panel/zgloszenia", label: "Chcą wziąć udział", icon: Bell },
         { to: "/panel/ustawienia", label: "Ustawienia", icon: ShieldCheck },
       ],
     },

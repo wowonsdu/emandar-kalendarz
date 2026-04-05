@@ -68,7 +68,6 @@ import {
   canManageTrainingEvent,
   canModerateTrainingEvent,
   canUseOrganizerFunctions,
-  getEnrollmentIntentLabel,
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
@@ -1931,15 +1930,6 @@ function parseGroupMemberPriorityPromptValue(value: string | null) {
   return null;
 }
 
-type EnrollmentIntentFilter = EnrollmentIntent;
-
-function matchesEnrollmentIntentFilter(
-  request: Pick<EnrollmentRequest, "intent">,
-  filter: EnrollmentIntentFilter,
-) {
-  return resolveEnrollmentIntent(request.intent) === filter;
-}
-
 function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
   const participatingRequests = requests.filter((request) =>
     resolveEnrollmentIntent(request.intent) === "participating",
@@ -1952,46 +1942,6 @@ function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
       requests: participatingRequests,
     },
   ].filter((section) => section.requests.length > 0);
-}
-
-function getEnrollmentIntentBadgeClass() {
-  return "rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white";
-}
-
-function EnrollmentIntentFilterSwitch({
-  requests,
-  value,
-  onChange,
-}: {
-  requests: EnrollmentRequest[];
-  value: EnrollmentIntentFilter;
-  onChange: (nextValue: EnrollmentIntentFilter) => void;
-}) {
-  const options: Array<{ value: EnrollmentIntentFilter; label: string }> = [
-    {
-      value: "participating",
-      label: `Chcą wziąć udział (${requests.length})`,
-    },
-  ];
-
-  return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          onClick={() => onChange(option.value)}
-          className={
-            value === option.value
-              ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-2 text-sm font-semibold text-white"
-              : "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy"
-          }
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 function isCommunityTrainerProfile(status: EmandarBrandStatus | undefined) {
@@ -4135,7 +4085,6 @@ export function RequestsPage() {
     decideTrainerAccountApproval,
     store,
   } = useAppState();
-  const [intentFilter, setIntentFilter] = useState<EnrollmentIntentFilter>("participating");
 
   if (!currentUser) {
     return null;
@@ -4167,10 +4116,7 @@ export function RequestsPage() {
   const requests = store.enrollmentRequests.filter((request) => {
     return manageableEventIds.has(request.eventId) && isOperationalEnrollmentRequest(request, store);
   });
-  const filteredRequests = requests.filter((request) =>
-    matchesEnrollmentIntentFilter(request, intentFilter),
-  );
-  const requestSections = splitEnrollmentRequestsByIntent(filteredRequests);
+  const requestSections = splitEnrollmentRequestsByIntent(requests);
 
   return (
     <PanelSection
@@ -4179,23 +4125,10 @@ export function RequestsPage() {
       showLeadText={false}
     >
       <div className="space-y-4">
-        {requests.length > 0 && (
-          <EnrollmentIntentFilterSwitch
-            requests={requests}
-            value={intentFilter}
-            onChange={setIntentFilter}
-          />
-        )}
         {requests.length === 0 && (
           <EmptyPanelState
             title="Brak zgłoszeń"
             description="Nowe zgłoszenia do Twoich wydarzeń pojawią się tutaj."
-          />
-        )}
-        {requests.length > 0 && requestSections.length === 0 && (
-          <EmptyPanelState
-            title="Brak zgłoszeń w tym widoku"
-            description="Zmień filtr, żeby zobaczyć pozostałe osoby."
           />
         )}
         {requestSections.map((section) => (
@@ -4235,9 +4168,6 @@ export function RequestsPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <span className={getEnrollmentIntentBadgeClass()}>
-                    {getEnrollmentIntentLabel(request.intent)}
-                  </span>
                   <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
                     {request.finalStatus}
                   </span>
@@ -8854,7 +8784,6 @@ export function EventManagementPage() {
   const [communityDetailTab, setCommunityDetailTab] = useState<
     "requests" | "participants" | "edit"
   >("requests");
-  const [requestIntentFilter, setRequestIntentFilter] = useState<EnrollmentIntentFilter>("participating");
   const [publishingEvent, setPublishingEvent] = useState(false);
   const [settingsDraft, setSettingsDraft] = useState<EventManagementSettingsDraft>({
     status: "active" as TrainingEventStatus,
@@ -9061,12 +8990,7 @@ export function EventManagementPage() {
   const communityParticipantRequests = requests.filter(
     (item) => item.finalStatus === "accepted" || item.finalStatus === "partial",
   );
-  const filteredRequests = requests.filter((request) =>
-    matchesEnrollmentIntentFilter(request, requestIntentFilter),
-  );
-  const filteredRequestSections = splitEnrollmentRequestsByIntent(
-    filteredRequests,
-  );
+  const requestSections = splitEnrollmentRequestsByIntent(requests);
 
   function toggleExpandedRosterParticipant(participantId: string, open: boolean) {
     setExpandedRosterParticipantIds((previous) =>
@@ -9572,25 +9496,13 @@ export function EventManagementPage() {
               title="Chcą wziąć udział"
               description="Tutaj widzisz wszystkie osoby, które chcą wziąć udział, a licznik na zakładce pokazuje te, które nie zostały jeszcze przeprocesowane."
             />
-            {requests.length > 0 ? (
-              <EnrollmentIntentFilterSwitch
-                requests={requests}
-                value={requestIntentFilter}
-                onChange={setRequestIntentFilter}
-              />
-            ) : null}
             {requests.length === 0 ? (
               <EmptyPanelState
                 title="Brak zgłoszeń"
                 description="Gdy pojawią się nowe prośby o dołączenie, zobaczysz je tutaj."
               />
-            ) : filteredRequestSections.length === 0 ? (
-              <EmptyPanelState
-                title="Brak zgłoszeń w tym widoku"
-                description="Zmień filtr, żeby zobaczyć pozostałe osoby."
-              />
             ) : (
-              filteredRequestSections.map((section) => (
+              requestSections.map((section) => (
                 <div key={section.key} className="space-y-4">
                   <SectionBlockHeading
                     title={section.title}
@@ -9616,9 +9528,6 @@ export function EventManagementPage() {
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <span className={getEnrollmentIntentBadgeClass()}>
-                            {getEnrollmentIntentLabel(request.intent)}
-                          </span>
                           <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
                             {request.finalStatus}
                           </span>
@@ -10633,28 +10542,16 @@ export function EventManagementPage() {
               title="Chcą wziąć udział"
               description="Domyślny roster jest prowadzony wyżej. Tutaj zostają tylko nowe osoby z formularza, które możesz przejrzeć, zaakceptować albo przenieść."
             />
-            {requests.length > 0 ? (
-              <EnrollmentIntentFilterSwitch
-                requests={requests}
-                value={requestIntentFilter}
-                onChange={setRequestIntentFilter}
-              />
-            ) : null}
 
             {requests.length === 0 ? (
               <EmptyPanelState
                 title="Brak nowych zgłoszeń"
                 description="Zaakceptowane osoby zostały już przeniesione na roster wydarzenia. Tutaj pojawią się tylko nowe zgłoszenia z formularza."
               />
-            ) : filteredRequests.length === 0 ? (
-              <EmptyPanelState
-                title="Brak zgłoszeń w tym widoku"
-                description="Zmień filtr, żeby zobaczyć pozostałe osoby."
-              />
             ) : (
               <div className="-mx-6 mt-4 sm:mx-0 sm:mt-6">
                 <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
-                  {filteredRequests.map((request, rowIndex) => {
+                  {requests.map((request, rowIndex) => {
                     const transferTargetEventId = transferSelections[request.id] ?? "";
                     const isExpanded = expandedRequestIds.includes(request.id);
 
@@ -10677,10 +10574,6 @@ export function EventManagementPage() {
                                 {request.imieNazwisko}
                               </p>
                             </div>
-
-                            <span className={getEnrollmentIntentBadgeClass()}>
-                              {getEnrollmentIntentLabel(request.intent)}
-                            </span>
 
                             {updatingRequestId === request.id ? (
                               <span
@@ -10825,27 +10718,14 @@ export function EventManagementPage() {
               title="Uczestnicy i osoby, które chcą wziąć udział"
               description="Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy."
             />
-            {requests.length > 0 && (
-              <EnrollmentIntentFilterSwitch
-                requests={requests}
-                value={requestIntentFilter}
-                onChange={setRequestIntentFilter}
-              />
-            )}
             {requests.length === 0 && (
               <EmptyPanelState
                 title="Brak osob na liscie"
                 description="Gdy pojawia sie nowe prosby o dolaczenie, zobaczysz je tutaj."
               />
             )}
-            {requests.length > 0 && filteredRequestSections.length === 0 && (
-              <EmptyPanelState
-                title="Brak zgłoszeń w tym widoku"
-                description="Zmień filtr, żeby zobaczyć pozostałe osoby."
-              />
-            )}
 
-            {filteredRequestSections.map((section) => (
+            {requestSections.map((section) => (
               <div key={section.key} className="space-y-4">
                 <SectionBlockHeading
                   title={section.title}
@@ -10874,9 +10754,6 @@ export function EventManagementPage() {
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <span className={getEnrollmentIntentBadgeClass()}>
-                            {getEnrollmentIntentLabel(request.intent)}
-                          </span>
                           <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
                             {request.finalStatus}
                           </span>

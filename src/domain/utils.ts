@@ -144,17 +144,15 @@ export function getParticipantEnrollmentStatusLabel(
 }
 
 export function resolveEnrollmentIntent(
-  value: EnrollmentIntent | null | undefined,
+  _value: EnrollmentIntent | null | undefined,
 ): EnrollmentIntent {
-  return value === "participating" ? "participating" : "contact";
+  return "participating";
 }
 
 export function getEnrollmentIntentLabel(
-  value: EnrollmentIntent | null | undefined,
+  _value: EnrollmentIntent | null | undefined,
 ) {
-  return resolveEnrollmentIntent(value) === "participating"
-    ? "Biorą udział"
-    : "Proszą o kontakt";
+  return "Chcę wziąć udział";
 }
 
 export function canOrganizerAccessTrainer(

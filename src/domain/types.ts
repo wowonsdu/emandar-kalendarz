@@ -9,7 +9,7 @@ export type EnrollmentFinalStatus =
   | "accepted"
   | "rejected"
   | "partial";
-export type EnrollmentIntent = "contact" | "participating";
+export type EnrollmentIntent = "participating";
 export type ParticipantEnrollmentStatus = "active" | "cancelled";
 export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
 export type AccountRequestStatus = "pending" | "approved" | "rejected";
@@ -770,6 +770,7 @@ export interface GroupMemberInput {
   notes?: string;
   referralSource?: string;
   priority: GroupMemberPriority;
+  syncFutureEvents?: boolean;
 }
 
 export interface GroupMemberUpdateInput {

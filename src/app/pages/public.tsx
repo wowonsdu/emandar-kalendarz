@@ -545,6 +545,7 @@ function EventCard({
   }
 
   const trainer = store.trainers.find((item) => item.id === event.trainerId);
+  const organizer = store.organizers.find((item) => item.id === event.organizerId);
   const eventGroup = event.groupId
     ? store.groups.find((item) => item.id === event.groupId) ?? null
     : null;
@@ -706,7 +707,7 @@ function EventCard({
             <p className="mt-4 text-sm text-brand-muted">
               Organizator:{" "}
               <span className="font-semibold text-brand-navy">
-                {getPublicOrganizerName(event, undefined, trainer?.displayName)}
+                {getPublicOrganizerName(event, organizer?.displayName, trainer?.displayName)}
               </span>
             </p>
           )}
@@ -723,7 +724,7 @@ function EventCard({
               to={`/kalendarz/${event.id}`}
               className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
             >
-              Poproś o kontakt
+              Chcę wziąć udział
               <ArrowRight size={16} />
             </Link>
           </div>
@@ -810,7 +811,7 @@ function EventCard({
                 to={`/kalendarz/${event.id}`}
                 className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
               >
-                Poproś o kontakt
+                Chcę wziąć udział
                 <ArrowRight size={16} />
               </Link>
             </div>
@@ -887,7 +888,7 @@ function EventCard({
                 <div>
                   Organizator:{" "}
                   <span className="font-semibold text-brand-navy">
-                    {getPublicOrganizerName(event, undefined, trainer?.displayName)}
+                    {getPublicOrganizerName(event, organizer?.displayName, trainer?.displayName)}
                   </span>
                 </div>
               </div>
@@ -1033,7 +1034,7 @@ export function CommunityEventsPage() {
     <EventFeedSection
       eyebrow="Wydarzenia społeczności"
       title="Wydarzenia społeczności"
-      description="Przeglądaj otwarte wydarzenia społeczności i poproś o kontakt z osobą prowadzącą."
+      description="Przeglądaj otwarte wydarzenia społeczności i zgłaszaj chęć udziału u osoby prowadzącej."
       emptyTitle="Brak wydarzeń społeczności"
       emptyDescription="Po opublikowaniu nowych wydarzeń pojawią się właśnie tutaj."
       events={events}
@@ -1067,7 +1068,7 @@ export function EventDetailsPage() {
   const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
   const [isScheduleExpanded, setIsScheduleExpanded] = useState(false);
   const [form, setForm] = useState({
-    intent: "contact" as EnrollmentIntent,
+    intent: "participating" as EnrollmentIntent,
     imieNazwisko: "",
     telefon: currentUser?.phone ?? getCurrentSessionPhone(),
     polecenieOdKogo: "",
@@ -1223,11 +1224,7 @@ export function EventDetailsPage() {
         photoFile: submissionPhotoFile,
       });
       if (isLoggedInEnrollmentFlow) {
-        toast.success(
-          form.intent === "participating"
-            ? "Zgłoszenie udziału zostało zapisane."
-            : "Prośba o kontakt została zapisana.",
-        );
+        toast.success("Zgłoszenie udziału zostało zapisane.");
       } else {
         toast.success(
           hasEnrollmentPhoto
@@ -1240,7 +1237,7 @@ export function EventDetailsPage() {
       setSmsDialogStage("success");
       setIsSmsDialogOpen(true);
       setForm({
-        intent: "contact",
+        intent: "participating",
         imieNazwisko: "",
         telefon: currentUser?.phone ?? getCurrentSessionPhone(),
         polecenieOdKogo: "",
@@ -1556,36 +1553,13 @@ export function EventDetailsPage() {
 
           <div className="mt-6 grid gap-4 sm:mt-7">
             {isLoggedInEnrollmentFlow ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {([
-                  { value: "contact" as const, message: "Proszę o kontakt" },
-                  { value: "participating" as const, message: "Biorę udział" },
-                ]).map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() =>
-                      setForm((current) => ({
-                        ...current,
-                        intent: option.value,
-                      }))
-                    }
-                    className={
-                      form.intent === option.value
-                        ? "rounded-3xl border border-brand-navy bg-white px-5 py-5 text-left text-brand-navy shadow-soft"
-                        : "rounded-3xl border border-brand-line bg-white px-5 py-5 text-left text-brand-muted"
-                    }
-                  >
-                    <p className="text-sm font-semibold uppercase tracking-[0.2em]">
-                      {option.message}
-                    </p>
-                    <p className="mt-2 text-sm">
-                      {option.value === "contact"
-                        ? "Organizator skontaktuje się z Tobą, żeby odpowiedzieć na Twoje pytania."
-                        : "Organizator skontaktuje się z Tobą, żeby potwierdzić Twój udział w wydarzeniu."}
-                    </p>
-                  </button>
-                ))}
+              <div className="rounded-3xl border border-brand-navy bg-white px-5 py-5 text-left text-brand-navy shadow-soft">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em]">
+                  Chcę wziąć udział
+                </p>
+                <p className="mt-2 text-sm">
+                  Organizator skontaktuje się z Tobą, żeby potwierdzić Twój udział w wydarzeniu.
+                </p>
               </div>
             ) : (
               <>
@@ -1688,11 +1662,7 @@ export function EventDetailsPage() {
             >
               {loading
                 ? "Wysyłanie..."
-                : isLoggedInEnrollmentFlow
-                  ? form.intent === "participating"
-                    ? "Wyślij zgłoszenie udziału"
-                    : "Wyślij prośbę o kontakt"
-                  : "Poproś o kontakt"}
+                : "Chcę wziąć udział"}
               <ArrowRight size={16} />
             </button>
           </div>
@@ -2720,7 +2690,7 @@ function SmsRegisterScreen() {
         </p>
         {enrollmentSource && (
           <p className="mt-3 max-w-3xl rounded-3xl border border-brand-line bg-brand-shell px-4 py-3 text-sm text-brand-muted">
-            Jeśli wcześniej wysłałeś lub wysłałaś prośbę o kontakt do szkolenia na ten sam numer,
+            Jeśli wcześniej wysłałeś lub wysłałaś zgłoszenie udziału do szkolenia na ten sam numer,
             po założeniu konta zgłoszenie pojawi się automatycznie w Twoich szkoleniach.
           </p>
         )}

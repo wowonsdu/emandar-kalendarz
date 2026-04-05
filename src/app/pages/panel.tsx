@@ -6132,7 +6132,7 @@ export function GroupsPage() {
                                         });
                                         void persistGroupMemberChanges(member.id, nextDraft);
                                       }}
-                                      className="h-12 w-[132px] shrink-0 rounded-[1.6rem] border border-brand-line bg-white px-4 text-sm font-semibold text-brand-navy outline-none sm:w-[180px]"
+                                      className="h-12 w-[132px] shrink-0 appearance-none rounded-2xl border border-brand-line bg-white px-4 text-sm font-semibold text-brand-navy outline-none sm:w-[180px]"
                                     >
                                       <option value="stali">Stali</option>
                                       <option value="regularni">Regularni</option>

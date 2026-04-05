@@ -1289,6 +1289,9 @@ function syncEventParticipantFromEnrollment(
 
   const eventParticipantId = buildEventParticipantId(event.id, request.participantProfileId);
   const existingIndex = store.eventParticipants.findIndex((item) => item.id === eventParticipantId);
+  const existingParticipant = existingIndex >= 0 ? store.eventParticipants[existingIndex] : null;
+  const resolvedStatus =
+    existingParticipant?.status === "confirmed" ? existingParticipant.status : status;
   const payload: EventParticipant = {
     id: eventParticipantId,
     eventId: event.id,
@@ -1304,10 +1307,11 @@ function syncEventParticipantFromEnrollment(
     participantPhone: participantProfile.phone,
     participantUserId: participantProfile.linkedUserId ?? null,
     priority: "regularni",
-    status,
+    status: resolvedStatus,
     source: "public-form",
     invitedAt: nowIso(),
-    confirmedAt: status === "confirmed" ? nowIso() : undefined,
+    confirmedAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.confirmedAt ?? nowIso() : undefined,
     updatedAt: nowIso(),
   };
 
@@ -1318,6 +1322,80 @@ function syncEventParticipantFromEnrollment(
     };
   } else {
     store.eventParticipants.unshift(payload);
+  }
+
+  request.eventParticipantId = eventParticipantId;
+}
+
+function resolveEnrollmentDecisionState(
+  decision: DecisionStatus,
+  requiresOrganizerApproval: boolean,
+) {
+  if (decision === "accepted") {
+    return {
+      trainerDecision: "accepted" as const,
+      organizerDecision: "accepted" as const,
+    };
+  }
+
+  if (decision === "rejected") {
+    return {
+      trainerDecision: "rejected" as const,
+      organizerDecision: requiresOrganizerApproval ? ("rejected" as const) : ("accepted" as const),
+    };
+  }
+
+  return {
+    trainerDecision: "pending" as const,
+    organizerDecision: requiresOrganizerApproval ? ("pending" as const) : ("accepted" as const),
+  };
+}
+
+function transferEnrollmentRequestToEvent(
+  store: DemoStore,
+  request: EnrollmentRequest,
+  targetEvent: TrainingEvent,
+  decision: DecisionStatus,
+) {
+  const trainer = findTrainer(store, targetEvent.trainerId);
+  const organizer = findOrganizer(store, targetEvent.organizerId);
+  const requiresOrganizerApproval =
+    !isCommunityBrandStatus(targetEvent.brandStatus) && Boolean(targetEvent.organizerId);
+  const decisionState = resolveEnrollmentDecisionState(decision, requiresOrganizerApproval);
+  const transferredRequest: EnrollmentRequest = {
+    ...cloneValue(request),
+    id: createId("enrollment"),
+    eventId: targetEvent.id,
+    trainerId: targetEvent.trainerId ?? null,
+    organizerId: targetEvent.organizerId ?? null,
+    trainerUserId: trainer?.userId ?? null,
+    organizerUserId: organizer?.userId ?? null,
+    eventParticipantId: null,
+    createdAt: nowIso(),
+    participantStatus: "active",
+    participantManagedAt: undefined,
+    participantActionSource: "staff",
+    attendanceConfirmationStatus: undefined,
+    attendanceConfirmationRequestedAt: undefined,
+    attendanceConfirmationRespondedAt: undefined,
+    trainerDecision: decisionState.trainerDecision,
+    organizerDecision: decisionState.organizerDecision,
+    finalStatus: deriveEnrollmentFinalStatus(
+      decisionState.trainerDecision,
+      decisionState.organizerDecision,
+      requiresOrganizerApproval,
+    ),
+    requiresOrganizerApproval,
+  };
+
+  store.enrollmentRequests.unshift(transferredRequest);
+
+  if (transferredRequest.finalStatus === "accepted") {
+    syncEventParticipantFromEnrollment(
+      store,
+      transferredRequest,
+      targetEvent.groupId ? "invited" : "confirmed",
+    );
   }
 }
 
@@ -1353,6 +1431,29 @@ export async function manageEnrollmentRequest(
       throw new Error("Nie możesz zarządzać tym zgłoszeniem.");
     }
 
+    if (input.transferTargetEventId) {
+      const targetEvent = store.trainingEvents.find(
+        (item) => item.id === input.transferTargetEventId,
+      );
+      if (!targetEvent) {
+        throw new Error("Nie znaleziono docelowego wydarzenia.");
+      }
+
+      if (targetEvent.id === event.id) {
+        throw new Error("Wybierz inny termin docelowy.");
+      }
+
+      if (!canManageTrainingEvent(targetEvent, currentUser)) {
+        throw new Error("Nie możesz zarządzać docelowym wydarzeniem.");
+      }
+
+      request.participantStatus = "cancelled";
+      request.participantManagedAt = nowIso();
+      request.participantActionSource = "staff";
+      transferEnrollmentRequestToEvent(store, request, targetEvent, input.decision);
+      return;
+    }
+
     const isSelfManagedEvent =
       request.requiresOrganizerApproval === false || isCommunityBrandStatus(event.brandStatus);
 
@@ -1386,11 +1487,13 @@ export async function manageEnrollmentRequest(
     );
 
     if (request.finalStatus === "accepted") {
-      syncEventParticipantFromEnrollment(store, request, "confirmed");
+      syncEventParticipantFromEnrollment(store, request, event.groupId ? "invited" : "confirmed");
     }
 
     if (request.finalStatus === "rejected") {
       request.participantStatus = "cancelled";
+    } else {
+      request.participantStatus = "active";
     }
   });
 }
@@ -1844,11 +1947,10 @@ export async function addEventParticipant(input: EventParticipantInput, actor: A
       participantPhone: profile.phone,
       participantUserId: profile.linkedUserId ?? null,
       priority: "regularni",
-      status: input.overCapacity ? "invited" : "confirmed",
+      status: "invited",
       source: "organizer",
       overCapacity: input.overCapacity === true,
       invitedAt: nowIso(),
-      confirmedAt: input.overCapacity ? undefined : nowIso(),
     });
 
     return {

@@ -545,6 +545,7 @@ function EventCard({
   }
 
   const trainer = store.trainers.find((item) => item.id === event.trainerId);
+  const organizer = store.organizers.find((item) => item.id === event.organizerId);
   const eventGroup = event.groupId
     ? store.groups.find((item) => item.id === event.groupId) ?? null
     : null;
@@ -706,7 +707,7 @@ function EventCard({
             <p className="mt-4 text-sm text-brand-muted">
               Organizator:{" "}
               <span className="font-semibold text-brand-navy">
-                {getPublicOrganizerName(event, undefined, trainer?.displayName)}
+                {getPublicOrganizerName(event, organizer?.displayName, trainer?.displayName)}
               </span>
             </p>
           )}
@@ -887,7 +888,7 @@ function EventCard({
                 <div>
                   Organizator:{" "}
                   <span className="font-semibold text-brand-navy">
-                    {getPublicOrganizerName(event, undefined, trainer?.displayName)}
+                    {getPublicOrganizerName(event, organizer?.displayName, trainer?.displayName)}
                   </span>
                 </div>
               </div>

@@ -4827,6 +4827,7 @@ export function GroupsPage() {
     [selectedGroupMembers],
   );
   const selectedGroupMemberSections = useMemo(() => {
+    let rowIndex = 0;
     const effectiveMembers = selectedGroupMembers.map((member) => ({
       id: member.id,
       member,
@@ -4836,7 +4837,10 @@ export function GroupsPage() {
 
     return groupParticipantRecordsByPriority(effectiveMembers).map((section) => ({
       priority: section.priority,
-      members: section.records.map((record) => record.member),
+      members: section.records.map((record) => ({
+        member: record.member,
+        rowIndex: rowIndex++,
+      })),
     }));
   }, [memberDrafts, selectedGroupMembers]);
   const selectedGroupEvents = useMemo(() => {
@@ -6079,30 +6083,35 @@ export function GroupsPage() {
                   ) : null}
                 </form>
               ) : null}
-              <div className="mt-6 space-y-6">
+              <div className="-mx-6 mt-4 space-y-5 sm:mx-0 sm:mt-6 sm:space-y-6">
                 {selectedGroupMembers.length === 0 ? (
-                  <EmptyPanelState
-                    title="Brak członków"
-                    description={
-                      isParticipantGroupViewer
-                        ? "Ta grupa nie ma jeszcze żadnych aktywnych członków."
-                        : "Dodaj pierwsze osoby do grupy, aby planować szkolenia i budować roster wydarzeń."
-                    }
-                  />
+                  <div className="px-6 sm:px-0">
+                    <EmptyPanelState
+                      title="Brak członków"
+                      description={
+                        isParticipantGroupViewer
+                          ? "Ta grupa nie ma jeszcze żadnych aktywnych członków."
+                          : "Dodaj pierwsze osoby do grupy, aby planować szkolenia i budować roster wydarzeń."
+                      }
+                    />
+                  </div>
                 ) : (
                   selectedGroupMemberSections.map((section) => (
-                    <section key={section.priority} className="space-y-3">
-                      <div className="flex items-center gap-3 px-1">
-                        <span className="rounded-full bg-brand-navy/8 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.2em] text-brand-navy">
+                    <section key={section.priority} className="space-y-1.5 sm:space-y-3">
+                      <div className="flex items-center gap-2 px-6 sm:px-1">
+                        <span className="rounded-full bg-brand-navy/8 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:px-3 sm:py-1 sm:text-[11px] sm:tracking-[0.2em]">
                           {getGroupPriorityLabel(section.priority)}
                         </span>
-                        <div className="h-px flex-1 bg-brand-line" />
-                        <span className="text-xs text-brand-muted">{section.members.length}</span>
+                        <div className="h-px flex-1 bg-brand-line/80" />
+                        <span className="text-[11px] text-brand-muted sm:text-xs">
+                          {section.members.length}
+                        </span>
                       </div>
 
-                      <div className="space-y-3">
-                        {section.members.map((member) => {
-                          const draft = memberDrafts[member.id] ?? createGroupMemberDraftState(member);
+                      <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
+                        {section.members.map(({ member, rowIndex }) => {
+                          const draft =
+                            memberDrafts[member.id] ?? createGroupMemberDraftState(member);
                           const participantProfile =
                             participantProfilesById.get(member.participantProfileId) ?? null;
                           const isExpanded = expandedMemberIds.includes(member.id);
@@ -6115,10 +6124,16 @@ export function GroupsPage() {
                               open={isExpanded}
                               onOpenChange={(open) => toggleExpandedMember(member.id, open)}
                             >
-                              <article className="rounded-3xl border border-brand-line bg-brand-shell/60 p-3 sm:p-4">
-                                <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+                              <article
+                                className={cn(
+                                  "border-b border-brand-line/70 px-6 py-2.5 last:border-b-0",
+                                  rowIndex % 2 === 0 ? "bg-white" : "bg-brand-shell/35",
+                                  "sm:rounded-3xl sm:border sm:bg-brand-shell/60 sm:p-4",
+                                )}
+                              >
+                                <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
                                   <div className="min-w-0 flex-1">
-                                    <p className="truncate text-lg font-semibold text-brand-navy">
+                                    <p className="truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
                                       {member.participantDisplayName}
                                     </p>
                                   </div>
@@ -6132,7 +6147,7 @@ export function GroupsPage() {
                                         });
                                         void persistGroupMemberChanges(member.id, nextDraft);
                                       }}
-                                      className="h-12 w-[132px] shrink-0 appearance-none rounded-2xl border border-brand-line bg-white px-4 text-sm font-semibold text-brand-navy outline-none sm:w-[180px]"
+                                      className="h-9 w-[108px] shrink-0 appearance-none rounded-xl border border-brand-line bg-white px-3 text-xs font-semibold text-brand-navy outline-none sm:h-12 sm:w-[180px] sm:rounded-2xl sm:px-4 sm:text-sm"
                                     >
                                       <option value="stali">Stali</option>
                                       <option value="regularni">Regularni</option>
@@ -6145,16 +6160,16 @@ export function GroupsPage() {
                                       title={saveStateLabel}
                                       aria-label={saveStateLabel}
                                       className={cn(
-                                        "inline-flex size-8 shrink-0 items-center justify-center",
+                                        "inline-flex size-6 shrink-0 items-center justify-center sm:size-8",
                                         getMemberSaveStateTone(member.id),
                                       )}
                                     >
                                       {saveState?.status === "saving" ? (
-                                        <RefreshCcw size={14} className="animate-spin" />
+                                        <RefreshCcw size={12} className="animate-spin sm:size-[14px]" />
                                       ) : saveState?.status === "saved" ? (
-                                        <Check size={14} />
+                                        <Check size={12} className="sm:size-[14px]" />
                                       ) : saveState?.status === "error" ? (
-                                        <X size={14} />
+                                        <X size={12} className="sm:size-[14px]" />
                                       ) : null}
                                     </span>
                                   ) : null}
@@ -6162,7 +6177,7 @@ export function GroupsPage() {
                                   <CollapsibleTrigger asChild>
                                     <button
                                       type="button"
-                                      className="inline-flex size-12 shrink-0 items-center justify-center rounded-full border border-brand-line bg-white text-brand-navy shadow-soft"
+                                      className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
                                       aria-label={
                                         isExpanded
                                           ? `Ukryj szczegóły ${member.participantDisplayName}`
@@ -6170,39 +6185,40 @@ export function GroupsPage() {
                                       }
                                     >
                                       <ChevronDown
-                                        size={18}
+                                        size={16}
                                         className={cn(
                                           "transition-transform duration-200",
                                           isExpanded ? "rotate-180" : "",
+                                          "sm:size-[18px]",
                                         )}
                                       />
                                     </button>
                                   </CollapsibleTrigger>
                                 </div>
 
-                                <CollapsibleContent className="mt-4 border-t border-brand-line/70 pt-4">
+                                <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
                                   {isParticipantGroupViewer ? (
-                                    <p className="text-sm text-brand-muted">
+                                    <p className="text-xs text-brand-muted sm:text-sm">
                                       {member.participantProfileId === currentUser.participantProfileId
                                         ? "To Twoje miejsce w tej grupie."
                                         : "Członek grupy."}
                                     </p>
                                   ) : (
-                                    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-                                      <div className="space-y-4">
-                                        <div className="flex flex-wrap items-center gap-3 text-sm text-brand-muted">
-                                          <span className="inline-flex items-center gap-2">
-                                            <Phone size={14} />
+                                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] sm:gap-4">
+                                      <div className="space-y-3 sm:space-y-4">
+                                        <div className="flex flex-wrap items-center gap-2 text-xs text-brand-muted sm:gap-3 sm:text-sm">
+                                          <span className="inline-flex items-center gap-1.5 sm:gap-2">
+                                            <Phone size={12} className="sm:size-[14px]" />
                                             {member.participantPhone}
                                           </span>
-                                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                                          <span className="rounded-full border border-brand-line px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-brand-navy sm:px-3 sm:py-1 sm:text-xs sm:tracking-[0.18em]">
                                             {getParticipantConfirmationLabel(participantProfile)}
                                           </span>
                                         </div>
 
                                         {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
                                           <label className="grid gap-2">
-                                            <span className="text-sm font-semibold text-brand-navy">
+                                            <span className="text-xs font-semibold text-brand-navy sm:text-sm">
                                               Notatka o uczestniku
                                             </span>
                                             <textarea
@@ -6217,7 +6233,7 @@ export function GroupsPage() {
                                                 void persistGroupMemberChanges(member.id);
                                               }}
                                               placeholder="Notatki o uczestniku"
-                                              className="min-h-24 rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy outline-none"
+                                              className="min-h-20 rounded-xl border border-brand-line bg-white px-3 py-2.5 text-sm text-brand-navy outline-none sm:min-h-24 sm:rounded-2xl sm:px-4 sm:py-3"
                                             />
                                           </label>
                                         ) : null}

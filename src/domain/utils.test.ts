@@ -19,6 +19,7 @@ import {
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventWorkflowStatusLabel,
+  groupParticipantRecordsByPriority,
   isPhotoModeEnabled,
   isPhotoModeRequired,
   isParticipantEnrollmentActive,
@@ -34,6 +35,7 @@ import {
   resolveOrganizerCollaborationStatus,
   resolveParticipantEnrollmentStatus,
   resolveTrainingEventWorkflowStatus,
+  sortParticipantRecordsByPriorityAndName,
   sortEventsByFillRate,
   sortEventsByDate,
 } from "./utils";
@@ -107,6 +109,37 @@ describe("enrollment intent", () => {
   it("keeps participating intent explicit", () => {
     expect(resolveEnrollmentIntent("participating")).toBe("participating");
     expect(getEnrollmentIntentLabel("participating")).toBe("Biorą udział");
+  });
+});
+
+describe("participant priority helpers", () => {
+  const records = [
+    { id: "rezerwowi-z", priority: "rezerwowi" as const, participantDisplayName: "Zenon" },
+    { id: "regularni-a", priority: "regularni" as const, participantDisplayName: "Adam" },
+    { id: "stali-b", priority: "stali" as const, participantDisplayName: "Beata" },
+    { id: "stali-a", priority: "stali" as const, participantDisplayName: "Adam" },
+  ];
+
+  it("sorts records by section priority and participant name", () => {
+    expect(sortParticipantRecordsByPriorityAndName(records).map((record) => record.id)).toEqual([
+      "stali-a",
+      "stali-b",
+      "regularni-a",
+      "rezerwowi-z",
+    ]);
+  });
+
+  it("groups records into non-empty priority sections in the expected order", () => {
+    expect(
+      groupParticipantRecordsByPriority(records).map((section) => ({
+        priority: section.priority,
+        ids: section.records.map((record) => record.id),
+      })),
+    ).toEqual([
+      { priority: "stali", ids: ["stali-a", "stali-b"] },
+      { priority: "regularni", ids: ["regularni-a"] },
+      { priority: "rezerwowi", ids: ["rezerwowi-z"] },
+    ]);
   });
 });
 

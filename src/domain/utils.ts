@@ -7,6 +7,7 @@ import type {
   EnrollmentIntent,
   ExternalBusyInterval,
   EventCollaborationStatus,
+  GroupMemberPriority,
   EnrollmentFinalStatus,
   EnrollmentRequest,
   OrganizerProfile,
@@ -23,6 +24,57 @@ import type {
   TrainingEvent,
   TrainerProfile,
 } from "./types";
+
+type PrioritizedParticipantRecord = {
+  priority: GroupMemberPriority;
+  participantDisplayName: string;
+};
+
+export const GROUP_MEMBER_PRIORITY_ORDER: Record<GroupMemberPriority, number> = {
+  stali: 0,
+  regularni: 1,
+  rezerwowi: 2,
+};
+
+const GROUP_MEMBER_PRIORITY_SECTIONS = [
+  "stali",
+  "regularni",
+  "rezerwowi",
+] as const satisfies GroupMemberPriority[];
+
+export function sortParticipantRecordsByPriorityAndName<T extends PrioritizedParticipantRecord>(
+  records: T[],
+) {
+  return [...records].sort((left, right) => {
+    const leftRank = GROUP_MEMBER_PRIORITY_ORDER[left.priority];
+    const rightRank = GROUP_MEMBER_PRIORITY_ORDER[right.priority];
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+
+    return left.participantDisplayName.localeCompare(right.participantDisplayName, "pl");
+  });
+}
+
+export function groupParticipantRecordsByPriority<T extends PrioritizedParticipantRecord>(
+  records: T[],
+) {
+  const sortedRecords = sortParticipantRecordsByPriorityAndName(records);
+
+  return GROUP_MEMBER_PRIORITY_SECTIONS.flatMap((priority) => {
+    const sectionRecords = sortedRecords.filter((record) => record.priority === priority);
+    if (sectionRecords.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        priority,
+        records: sectionRecords,
+      },
+    ];
+  });
+}
 
 export function deriveEnrollmentFinalStatus(
   trainerDecision: DecisionStatus,

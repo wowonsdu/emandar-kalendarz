@@ -592,3 +592,273 @@ describe("submitEnrollment", () => {
     expect(request?.finalStatus).toBe("pending");
   });
 });
+
+describe("manageEnrollmentRequest", () => {
+  it("links accepted grouped enrollments to an invited event participant", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor();
+    const store = createStore(
+      {
+        id: "event-group",
+        title: "Szkolenie EnergyTeam",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+      },
+      actor,
+    );
+    store.groups = [
+      {
+        id: "group-1",
+        name: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        status: "active",
+        defaultEventType: "training",
+        defaultConfirmationLeadTimeDays: 7,
+        defaultJoinAudience: "new-people",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.organizers = [
+      {
+        id: "organizer-1",
+        userId: "user-organizer-1",
+        displayName: "Anita",
+        description: "Opis",
+        isVisible: true,
+      },
+    ];
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: "user-trainer-1",
+        slug: "jacek",
+        displayName: "Jacek",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Łódź"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+      },
+    ];
+    store.participantProfiles = [
+      {
+        id: "participant-1",
+        linkedUserId: null,
+        displayName: "Anna Nowak",
+        firstName: "Anna",
+        lastName: "Nowak",
+        phone: "+48 605 100 304",
+        phoneLookupKey: "48605100304",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-1",
+        eventId: "event-group",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-1",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        intent: "participating",
+        imieNazwisko: "Anna Nowak",
+        telefon: "+48 605 100 304",
+        polecenieOdKogo: "",
+        wiadomosc: "Chcę dołączyć",
+        photoStatus: "pending",
+        trainerDecision: "pending",
+        organizerDecision: "pending",
+        finalStatus: "pending",
+        participantStatus: "active",
+        createdAt: "2026-04-02T12:00:00.000Z",
+        requiresOrganizerApproval: true,
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-1",
+          decision: "accepted",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.enrollmentRequests[0]).toMatchObject({
+      id: "enrollment-1",
+      finalStatus: "accepted",
+      eventParticipantId: "event-group__participant-1",
+      participantStatus: "active",
+    });
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      id: "event-group__participant-1",
+      eventId: "event-group",
+      participantProfileId: "participant-1",
+      status: "invited",
+      source: "public-form",
+    });
+  });
+
+  it("creates a transferred request on the target event and syncs it into the new roster", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor();
+    const store = createStore(
+      {
+        id: "event-group-a",
+        title: "Szkolenie A",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+      },
+      actor,
+    );
+    store.trainingEvents.push(
+      createEvent({
+        id: "event-group-b",
+        title: "Szkolenie B",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+      }),
+    );
+    store.groups = [
+      {
+        id: "group-1",
+        name: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        status: "active",
+        defaultEventType: "training",
+        defaultConfirmationLeadTimeDays: 7,
+        defaultJoinAudience: "new-people",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.organizers = [
+      {
+        id: "organizer-1",
+        userId: "user-organizer-1",
+        displayName: "Anita",
+        description: "Opis",
+        isVisible: true,
+      },
+    ];
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: "user-trainer-1",
+        slug: "jacek",
+        displayName: "Jacek",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Łódź"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+      },
+    ];
+    store.participantProfiles = [
+      {
+        id: "participant-2",
+        linkedUserId: null,
+        displayName: "Grzegorz Emanowicz",
+        firstName: "Grzegorz",
+        lastName: "Emanowicz",
+        phone: "+48 605 100 301",
+        phoneLookupKey: "48605100301",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-transfer",
+        eventId: "event-group-a",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-2",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        intent: "participating",
+        imieNazwisko: "Grzegorz Emanowicz",
+        telefon: "+48 605 100 301",
+        polecenieOdKogo: "",
+        wiadomosc: "Pasuje mi inny termin",
+        photoStatus: "pending",
+        trainerDecision: "pending",
+        organizerDecision: "pending",
+        finalStatus: "pending",
+        participantStatus: "active",
+        createdAt: "2026-04-02T12:00:00.000Z",
+        requiresOrganizerApproval: true,
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-transfer",
+          decision: "accepted",
+          transferTargetEventId: "event-group-b",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    const transferredRequest = updatedStore.enrollmentRequests.find(
+      (item) => item.id !== "enrollment-transfer",
+    );
+
+    expect(updatedStore.enrollmentRequests.find((item) => item.id === "enrollment-transfer"))
+      .toMatchObject({
+        participantStatus: "cancelled",
+        participantActionSource: "staff",
+      });
+    expect(transferredRequest).toMatchObject({
+      eventId: "event-group-b",
+      finalStatus: "accepted",
+      participantStatus: "active",
+      eventParticipantId: "event-group-b__participant-2",
+    });
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      id: "event-group-b__participant-2",
+      eventId: "event-group-b",
+      participantProfileId: "participant-2",
+      status: "invited",
+    });
+  });
+});

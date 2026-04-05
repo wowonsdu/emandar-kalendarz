@@ -14,6 +14,7 @@ import type {
   ParticipantEnrollmentStatus,
   PhotoMode,
   SharedAvailabilityWindow,
+  TrainingJoinAudience,
   TrainerFreeDaySlice,
   TrainerFreeDaySliceBucket,
   TrainerSharedSlot,
@@ -699,6 +700,36 @@ export function resolveEnrollmentPhotoModeForEvent(
   }
 
   return resolvePhotoMode(appSettings.enrollmentPhotoMode, "optional");
+}
+
+export function resolveTrainingJoinAudience(
+  value: unknown,
+  fallback: TrainingJoinAudience = "new-people",
+): TrainingJoinAudience {
+  return value === "existing-practitioners" || value === "new-people"
+    ? value
+    : fallback;
+}
+
+export function resolveTrainingJoinAudienceForEvent(
+  event: Pick<TrainingEvent, "joinAudienceSetting">,
+  group?: { defaultJoinAudience?: TrainingJoinAudience | null } | null,
+) {
+  if (event.joinAudienceSetting === "existing-practitioners") {
+    return "existing-practitioners";
+  }
+
+  if (event.joinAudienceSetting === "new-people") {
+    return "new-people";
+  }
+
+  return resolveTrainingJoinAudience(group?.defaultJoinAudience, "new-people");
+}
+
+export function getTrainingJoinAudienceLabel(value: TrainingJoinAudience | null | undefined) {
+  return resolveTrainingJoinAudience(value) === "existing-practitioners"
+    ? "Tylko Ćwiczący"
+    : "Nowe osoby";
 }
 
 export function hasRole(

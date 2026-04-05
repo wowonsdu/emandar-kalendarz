@@ -457,18 +457,14 @@ export function CommunityEventCard({
                     onClick={() => setLightboxIndex(communityCoverImageIndex)}
                     aria-label="Otwórz galerię wydarzenia"
                     className="group h-full w-full cursor-zoom-in text-left"
-                  >
-                    <img
-                      src={leadAvatarUrl}
-                      alt={leadName}
-                      className="h-full w-full object-cover object-top transition duration-300 group-hover:scale-[1.02]"
-                    />
-                    <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
-                    <span className="pointer-events-none absolute right-4 top-4 inline-flex items-center gap-2 rounded-full bg-white/92 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy shadow-soft">
-                      <Images size={14} />
-                      Otwórz galerię
-                    </span>
-                  </button>
+                    >
+                      <img
+                        src={leadAvatarUrl}
+                        alt={leadName}
+                        className="h-full w-full object-cover object-top transition duration-300 group-hover:scale-[1.02]"
+                      />
+                      <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
+                    </button>
                 ) : (
                   <img
                     src={leadAvatarUrl}
@@ -543,21 +539,7 @@ export function CommunityEventCard({
             )}
 
             {eventImages.length > 0 && (
-              <div className="mt-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
-                    Galeria wydarzenia
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setLightboxIndex(0)}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft"
-                  >
-                    <Images size={16} />
-                    Zobacz {eventImages.length} zdjęć
-                  </button>
-                </div>
-                <div className="mt-3 flex gap-4 overflow-x-auto pb-1 pr-2">
+              <div className="mt-5 flex gap-4 overflow-x-auto pb-1 pr-2">
                   {eventImages.map((image, index) => (
                     <CommunityEventGalleryThumbnail
                       key={image.id}
@@ -566,7 +548,6 @@ export function CommunityEventCard({
                       onClick={() => setLightboxIndex(index)}
                     />
                   ))}
-                </div>
               </div>
             )}
           </div>

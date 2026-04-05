@@ -29,11 +29,14 @@ import {
   isTrainingEventArchived,
   isTrainingEventCollaborationAccepted,
   isTrainingEventPubliclyVisible,
+  getTrainingJoinAudienceLabel,
   resolveEnrollmentPhotoModeForEvent,
   resolveEnrollmentIntent,
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveParticipantEnrollmentStatus,
+  resolveTrainingJoinAudience,
+  resolveTrainingJoinAudienceForEvent,
   resolveTrainingEventWorkflowStatus,
   sortParticipantRecordsByPriorityAndName,
   sortEventsByFillRate,
@@ -193,6 +196,64 @@ describe("photo mode resolution", () => {
     expect(isPhotoModeRequired("optional")).toBe(false);
     expect(isPhotoModeEnabled("disabled")).toBe(false);
     expect(isPhotoModeEnabled("optional")).toBe(true);
+  });
+});
+
+describe("training join audience resolution", () => {
+  it("normalizes unsupported values to new-people by default", () => {
+    expect(resolveTrainingJoinAudience("existing-practitioners")).toBe("existing-practitioners");
+    expect(resolveTrainingJoinAudience("bogus")).toBe("new-people");
+  });
+
+  it("uses event override before group default", () => {
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: "existing-practitioners",
+        },
+        {
+          defaultJoinAudience: "new-people",
+        },
+      ),
+    ).toBe("existing-practitioners");
+
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: "new-people",
+        },
+        {
+          defaultJoinAudience: "existing-practitioners",
+        },
+      ),
+    ).toBe("new-people");
+  });
+
+  it("falls back to the group default and then to new people for legacy records", () => {
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: "default",
+        },
+        {
+          defaultJoinAudience: "existing-practitioners",
+        },
+      ),
+    ).toBe("existing-practitioners");
+
+    expect(
+      resolveTrainingJoinAudienceForEvent(
+        {
+          joinAudienceSetting: undefined,
+        },
+        null,
+      ),
+    ).toBe("new-people");
+  });
+
+  it("exposes polish labels for badges and form copy", () => {
+    expect(getTrainingJoinAudienceLabel("existing-practitioners")).toBe("Tylko Ćwiczący");
+    expect(getTrainingJoinAudienceLabel("new-people")).toBe("Nowe osoby");
   });
 });
 

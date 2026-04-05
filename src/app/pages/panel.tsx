@@ -75,6 +75,7 @@ import {
   getHighestRole,
   getParticipantEnrollmentStatusLabel,
   getRoleLabel,
+  getTrainingJoinAudienceLabel,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventStatusLabel,
@@ -89,6 +90,7 @@ import {
   resolveEnrollmentIntent,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
+  resolveTrainingJoinAudienceForEvent,
   resolveTrainerCollaborationStatus,
   resolveTrainingEventWorkflowStatus,
   resolveTrainingEventStatus,
@@ -114,6 +116,7 @@ import type {
   TrainerProfile,
   TrainerFreeDaySliceBucket,
   TrainingEventImage,
+  TrainingJoinAudienceSetting,
   TrainerCalendarFeedProvider,
   TrainingEvent,
   TrainingEventScheduleDay,
@@ -365,6 +368,7 @@ type GroupFormState = {
   defaultCapacity: string;
   defaultTagsText: string;
   defaultConfirmationLeadTimeDays: string;
+  defaultJoinAudience: "existing-practitioners" | "new-people";
 };
 
 type GroupMemberFormState = {
@@ -405,6 +409,7 @@ type TrainingEventFormState = {
   capacity: string;
   minimumParticipants: string;
   confirmationLeadTimeDays: string;
+  joinAudience: "existing-practitioners" | "new-people";
   isPublished: boolean;
 };
 
@@ -418,6 +423,7 @@ type EventManagementSettingsDraft = {
   eventImages: TrainingEventImage[];
   useEventImageAsCover: boolean;
   enrollmentPhotoRequirement: "default" | "required" | "optional";
+  joinAudience: "existing-practitioners" | "new-people";
   tags: string;
   firstDayDate: string;
   scheduleDays: ScheduleDayDraft[];
@@ -449,6 +455,7 @@ function createEmptyGroupFormState(trainerId = ""): GroupFormState {
     defaultCapacity: "20",
     defaultTagsText: "",
     defaultConfirmationLeadTimeDays: "7",
+    defaultJoinAudience: "new-people",
   };
 }
 
@@ -472,6 +479,7 @@ function createEmptyTrainingEventFormState(): TrainingEventFormState {
     capacity: "20",
     minimumParticipants: "10",
     confirmationLeadTimeDays: "5",
+    joinAudience: "new-people",
     isPublished: true,
   };
 }
@@ -486,7 +494,19 @@ function createGroupFormStateFromGroup(group: Group): GroupFormState {
     defaultCapacity: String(group.defaultCapacity ?? 20),
     defaultTagsText: (group.defaultTags ?? []).join(", "),
     defaultConfirmationLeadTimeDays: String(group.defaultConfirmationLeadTimeDays ?? 7),
+    defaultJoinAudience: group.defaultJoinAudience ?? "new-people",
   };
+}
+
+function getPersistedJoinAudienceSetting(
+  joinAudience: "existing-practitioners" | "new-people",
+  group?: Pick<Group, "defaultJoinAudience"> | null,
+): TrainingJoinAudienceSetting {
+  if (group && joinAudience === group.defaultJoinAudience) {
+    return "default";
+  }
+
+  return joinAudience;
 }
 
 function createEmptyGroupMemberFormState(): GroupMemberFormState {
@@ -5273,6 +5293,7 @@ export function GroupsPage() {
           Number(groupForm.defaultConfirmationLeadTimeDays) >= 0
             ? Number(groupForm.defaultConfirmationLeadTimeDays)
             : 7,
+        defaultJoinAudience: groupForm.defaultJoinAudience,
       };
 
       if (editingGroupId) {
@@ -5564,6 +5585,22 @@ export function GroupsPage() {
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
               />
             </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+              <select
+                value={groupForm.defaultJoinAudience}
+                onChange={(event) =>
+                  setGroupForm((previous) => ({
+                    ...previous,
+                    defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
+                  }))
+                }
+                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+              >
+                <option value="existing-practitioners">Tylko Ćwiczący</option>
+                <option value="new-people">Nowe osoby</option>
+              </select>
+            </label>
             <label className="grid gap-2 lg:col-span-2">
               <span className="text-sm font-semibold text-brand-navy">Tagi domyślne</span>
               <input
@@ -5777,6 +5814,22 @@ export function GroupsPage() {
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                   />
                 </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+                  <select
+                    value={groupForm.defaultJoinAudience}
+                    onChange={(event) =>
+                      setGroupForm((previous) => ({
+                        ...previous,
+                        defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                  >
+                    <option value="existing-practitioners">Tylko Ćwiczący</option>
+                    <option value="new-people">Nowe osoby</option>
+                  </select>
+                </label>
                 <label className="grid gap-2 lg:col-span-2">
                   <span className="text-sm font-semibold text-brand-navy">Tagi domyślne</span>
                   <input
@@ -5853,6 +5906,10 @@ export function GroupsPage() {
                 <div>
                   <p className="font-semibold text-brand-navy">SMS potwierdzenia udziału</p>
                   <p>{selectedGroup.defaultConfirmationLeadTimeDays} dni przed wydarzeniem</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-brand-navy">Mogą dołączyć</p>
+                  <p>{getTrainingJoinAudienceLabel(selectedGroup.defaultJoinAudience)}</p>
                 </div>
               </div>
               {selectedGroup.notes ? (
@@ -7389,6 +7446,7 @@ export function EventsPage() {
         typeof nextGroup?.defaultConfirmationLeadTimeDays === "number"
           ? String(nextGroup.defaultConfirmationLeadTimeDays)
           : previous.confirmationLeadTimeDays,
+      joinAudience: nextGroup?.defaultJoinAudience ?? previous.joinAudience,
       tags:
         nextGroup?.defaultTags && nextGroup.defaultTags.length > 0
           ? nextGroup.defaultTags.join(", ")
@@ -7654,6 +7712,13 @@ export function EventsPage() {
                   confirmationLeadTimeDays: Number(trainerEventForm.confirmationLeadTimeDays),
                   isPublished: isCommunitySection ? false : trainerEventForm.isPublished,
                   brandStatus: isCommunitySection ? "supported" : undefined,
+                  joinAudienceSetting:
+                    isCommunitySection
+                      ? undefined
+                      : getPersistedJoinAudienceSetting(
+                          trainerEventForm.joinAudience,
+                          selectedOfficialGroup,
+                        ),
                   eventTypeSystem:
                     !isCommunitySection && selectedOfficialGroup
                       ? selectedOfficialGroup.defaultEventType
@@ -7792,6 +7857,9 @@ export function EventsPage() {
                       </p>
                       <p className="mt-1 text-sm text-brand-muted">
                         Trener: {selectedOfficialGroupTrainerName}
+                      </p>
+                      <p className="mt-1 text-sm text-brand-muted">
+                        Mogą dołączyć: {getTrainingJoinAudienceLabel(selectedOfficialGroup.defaultJoinAudience)}
                       </p>
                     </div>
                     <p className="text-sm text-brand-muted">
@@ -8246,13 +8314,35 @@ export function EventsPage() {
                   }
                   className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
-                <span className="text-sm text-brand-muted">
+              </label>
+
+              {!isCommunitySection ? (
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+                  <select
+                    value={trainerEventForm.joinAudience}
+                    onChange={(event) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        joinAudience: event.target.value as TrainingEventFormState["joinAudience"],
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  >
+                    <option value="existing-practitioners">Tylko Ćwiczący</option>
+                    <option value="new-people">Nowe osoby</option>
+                  </select>
+                </label>
+              ) : null}
+
+              {!isCommunitySection ? (
+                <div className="text-sm text-brand-muted xl:col-span-2">
                   Ile dni przed wydarzeniem wysłać SMS z prośbą o potwierdzenie udziału.
-                  {!isCommunitySection && selectedOfficialGroup
+                  {selectedOfficialGroup
                     ? " Domyślnie ta wartość startuje z ustawień grupy."
                     : ""}
-                </span>
-              </label>
+                </div>
+              ) : null}
 
               {isCommunitySection ? (
                 <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted xl:col-span-2">
@@ -8675,6 +8765,7 @@ export function EventManagementPage() {
     eventImages: [] as TrainingEventImage[],
     useEventImageAsCover: false,
     enrollmentPhotoRequirement: "default" as "default" | "required" | "optional",
+    joinAudience: "new-people",
     tags: "",
     firstDayDate: "",
     scheduleDays: resizeScheduleDayDrafts(2, []),
@@ -8683,6 +8774,9 @@ export function EventManagementPage() {
   const eventGroup = event?.groupId
     ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
     : null;
+  const resolvedEventJoinAudience = event
+    ? resolveTrainingJoinAudienceForEvent(event, eventGroup)
+    : "new-people";
   const sectionEyebrow = location.pathname.startsWith("/panel/wydarzenia-spolecznosci")
     ? "Społeczność"
     : "Szkolenia";
@@ -8711,6 +8805,7 @@ export function EventManagementPage() {
       eventImages: sourceEvent.eventImages ?? [],
       useEventImageAsCover: sourceEvent.useEventImageAsCover === true,
       enrollmentPhotoRequirement: sourceEvent.enrollmentPhotoRequirement ?? "default",
+      joinAudience: resolveTrainingJoinAudienceForEvent(sourceEvent, eventGroup),
       tags: (sourceEvent.tags ?? []).join(", "),
       ...getScheduleDraftsFromEvent(sourceEvent),
     };
@@ -8928,6 +9023,9 @@ export function EventManagementPage() {
                       ),
                       undefined,
                       settingsDraft.enrollmentPhotoRequirement,
+                      isCommunityEvent
+                        ? undefined
+                        : getPersistedJoinAudienceSetting(settingsDraft.joinAudience, eventGroup),
                       status,
                     );
                     toast.success(
@@ -9128,6 +9226,7 @@ export function EventManagementPage() {
                           ),
                           undefined,
                           settingsDraft.enrollmentPhotoRequirement,
+                          undefined,
                         );
                         toast.success("Zapisano ustawienia wydarzenia.");
                         setIsSettingsDirty(false);
@@ -9388,6 +9487,9 @@ export function EventManagementPage() {
             <span>{scheduleRangeLabel}</span>
             <span>Maks. miejsc: {event.capacity}</span>
             <span>Minimalny prog: {resolveMinimumParticipants(event)}</span>
+            {!isCommunityEvent ? (
+              <span>Mogą dołączyć: {getTrainingJoinAudienceLabel(resolvedEventJoinAudience)}</span>
+            ) : null}
             <span>
               SMS: {event.confirmationLeadTimeDays ?? eventGroup?.defaultConfirmationLeadTimeDays ?? 0} dni
               przed wydarzeniem
@@ -9473,6 +9575,9 @@ export function EventManagementPage() {
                   ),
                   undefined,
                   settingsDraft.enrollmentPhotoRequirement,
+                  isCommunityEvent
+                    ? undefined
+                    : getPersistedJoinAudienceSetting(settingsDraft.joinAudience, eventGroup),
                   status,
                 );
                 toast.success(
@@ -9746,6 +9851,30 @@ export function EventManagementPage() {
             </select>
           </label>
 
+          {!isCommunityEvent ? (
+            <label className="mt-4 grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+              <select
+                value={settingsDraft.joinAudience}
+                onChange={(changeEvent) =>
+                  updateSettingsDraft((previous) => ({
+                    ...previous,
+                    joinAudience: changeEvent.target.value as EventManagementSettingsDraft["joinAudience"],
+                  }))
+                }
+                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+              >
+                <option value="existing-practitioners">Tylko Ćwiczący</option>
+                <option value="new-people">Nowe osoby</option>
+              </select>
+              <span className="text-xs text-brand-muted">
+                {eventGroup
+                  ? `Grupa bazowa ma teraz ustawione ${getTrainingJoinAudienceLabel(eventGroup.defaultJoinAudience)}.`
+                  : `Aktualnie to szkolenie pokazuje ${getTrainingJoinAudienceLabel(resolvedEventJoinAudience)}.`}
+              </span>
+            </label>
+          ) : null}
+
           <div className="mt-4 grid gap-4 xl:grid-cols-4">
             {settingsDraft.scheduleDays.map((day, index) => {
               const draftScheduleDays = buildScheduleDaysFromDrafts(
@@ -9860,10 +9989,13 @@ export function EventManagementPage() {
 	                    isCommunityEvent ? settingsDraft.useEventImageAsCover : undefined,
 	                    buildScheduleDaysFromDrafts(
 	                      settingsDraft.firstDayDate,
-                      settingsDraft.scheduleDays,
-                    ),
-                    undefined,
-                    settingsDraft.enrollmentPhotoRequirement,
+	                      settingsDraft.scheduleDays,
+	                    ),
+	                    undefined,
+	                    settingsDraft.enrollmentPhotoRequirement,
+	                    isCommunityEvent
+	                      ? undefined
+	                      : getPersistedJoinAudienceSetting(settingsDraft.joinAudience, eventGroup),
                   );
                   toast.success("Zapisano ustawienia szkolenia.");
                   setIsSettingsDirty(false);
@@ -11290,9 +11422,9 @@ export function ProfileSettingsPage() {
                     displayName: event.target.value,
                   }))
                 }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
+                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                />
+              </label>
 
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">Imię kontaktowe</span>

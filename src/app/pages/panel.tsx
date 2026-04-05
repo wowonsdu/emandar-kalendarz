@@ -6115,76 +6115,69 @@ export function GroupsPage() {
                               open={isExpanded}
                               onOpenChange={(open) => toggleExpandedMember(member.id, open)}
                             >
-                              <article className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-                                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                              <article className="rounded-3xl border border-brand-line bg-brand-shell/60 p-3 sm:p-4">
+                                <div className="flex min-w-0 items-center gap-2 sm:gap-3">
                                   <div className="min-w-0 flex-1">
-                                    <div className="flex flex-wrap items-center gap-3">
-                                      <p className="truncate text-lg font-semibold text-brand-navy">
-                                        {member.participantDisplayName}
-                                      </p>
-                                      <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
-                                        {getGroupPriorityLabel(draft.priority)}
-                                      </span>
-                                    </div>
+                                    <p className="truncate text-lg font-semibold text-brand-navy">
+                                      {member.participantDisplayName}
+                                    </p>
                                   </div>
 
-                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-                                    {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
-                                      <select
-                                        value={draft.priority}
-                                        onChange={(event) => {
-                                          const nextDraft = setMemberDraft(member, {
-                                            priority: event.target.value as GroupMemberPriority,
-                                          });
-                                          void persistGroupMemberChanges(member.id, nextDraft);
-                                        }}
-                                        className="min-w-0 rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none sm:min-w-[180px]"
-                                      >
-                                        <option value="stali">Stali</option>
-                                        <option value="regularni">Regularni</option>
-                                        <option value="rezerwowi">Rezerwowi</option>
-                                      </select>
-                                    ) : null}
+                                  {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                    <select
+                                      value={draft.priority}
+                                      onChange={(event) => {
+                                        const nextDraft = setMemberDraft(member, {
+                                          priority: event.target.value as GroupMemberPriority,
+                                        });
+                                        void persistGroupMemberChanges(member.id, nextDraft);
+                                      }}
+                                      className="h-12 w-[132px] shrink-0 rounded-[1.6rem] border border-brand-line bg-white px-4 text-sm font-semibold text-brand-navy outline-none sm:w-[180px]"
+                                    >
+                                      <option value="stali">Stali</option>
+                                      <option value="regularni">Regularni</option>
+                                      <option value="rezerwowi">Rezerwowi</option>
+                                    </select>
+                                  ) : null}
 
-                                    {saveStateLabel ? (
-                                      <span
+                                  {saveStateLabel ? (
+                                    <span
+                                      title={saveStateLabel}
+                                      aria-label={saveStateLabel}
+                                      className={cn(
+                                        "inline-flex size-8 shrink-0 items-center justify-center",
+                                        getMemberSaveStateTone(member.id),
+                                      )}
+                                    >
+                                      {saveState?.status === "saving" ? (
+                                        <RefreshCcw size={14} className="animate-spin" />
+                                      ) : saveState?.status === "saved" ? (
+                                        <Check size={14} />
+                                      ) : saveState?.status === "error" ? (
+                                        <X size={14} />
+                                      ) : null}
+                                    </span>
+                                  ) : null}
+
+                                  <CollapsibleTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className="inline-flex size-12 shrink-0 items-center justify-center rounded-full border border-brand-line bg-white text-brand-navy shadow-soft"
+                                      aria-label={
+                                        isExpanded
+                                          ? `Ukryj szczegóły ${member.participantDisplayName}`
+                                          : `Pokaż szczegóły ${member.participantDisplayName}`
+                                      }
+                                    >
+                                      <ChevronDown
+                                        size={18}
                                         className={cn(
-                                          "inline-flex items-center gap-2 text-xs font-semibold",
-                                          getMemberSaveStateTone(member.id),
+                                          "transition-transform duration-200",
+                                          isExpanded ? "rotate-180" : "",
                                         )}
-                                      >
-                                        {saveState?.status === "saving" ? (
-                                          <RefreshCcw size={14} className="animate-spin" />
-                                        ) : saveState?.status === "saved" ? (
-                                          <Check size={14} />
-                                        ) : saveState?.status === "error" ? (
-                                          <X size={14} />
-                                        ) : null}
-                                        {saveStateLabel}
-                                      </span>
-                                    ) : null}
-
-                                    <CollapsibleTrigger asChild>
-                                      <button
-                                        type="button"
-                                        className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft"
-                                        aria-label={
-                                          isExpanded
-                                            ? `Ukryj szczegóły ${member.participantDisplayName}`
-                                            : `Pokaż szczegóły ${member.participantDisplayName}`
-                                        }
-                                      >
-                                        Szczegóły
-                                        <ChevronDown
-                                          size={16}
-                                          className={cn(
-                                            "transition-transform duration-200",
-                                            isExpanded ? "rotate-180" : "",
-                                          )}
-                                        />
-                                      </button>
-                                    </CollapsibleTrigger>
-                                  </div>
+                                      />
+                                    </button>
+                                  </CollapsibleTrigger>
                                 </div>
 
                                 <CollapsibleContent className="mt-4 border-t border-brand-line/70 pt-4">

@@ -6087,6 +6087,113 @@ export function RelationsPage() {
   return <Navigate to="/panel/ustawienia" replace />;
 }
 
+function GroupListSlimRow({
+  activeMemberCount,
+  eventCount,
+  group,
+  isExpanded,
+  isOwnedGroup,
+  isParticipantGroupViewer,
+  onExpandedChange,
+  trainerName,
+}: {
+  activeMemberCount: number;
+  eventCount: number;
+  group: Group;
+  isExpanded: boolean;
+  isOwnedGroup: boolean;
+  isParticipantGroupViewer: boolean;
+  onExpandedChange: (open: boolean) => void;
+  trainerName: string;
+}) {
+  return (
+    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+      <article
+        className={cn(
+          "bg-white px-6 py-3",
+          "border-b border-brand-line/70 last:border-b-0",
+          "sm:rounded-3xl sm:border sm:bg-white sm:p-4 sm:shadow-soft",
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              {isOwnedGroup && !isParticipantGroupViewer ? (
+                <span className="rounded-full bg-brand-navy/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:text-xs sm:tracking-[0.2em]">
+                  Twoja grupa
+                </span>
+              ) : null}
+              <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.2em]">
+                {group.status === "active" ? "Aktywna" : "Archiwum"}
+              </span>
+              <span className="text-xs text-brand-muted">
+                {getGroupEventTypeLabel(group.defaultEventType)}
+              </span>
+            </div>
+            <p className="mt-2 truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
+              {group.name}
+            </p>
+          </div>
+
+          <div className="shrink-0 text-right text-[11px] text-brand-muted sm:min-w-[132px] sm:text-sm">
+            <p>{activeMemberCount} aktywnych osób</p>
+            <p className="mt-1">{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</p>
+          </div>
+
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
+              aria-label={
+                isExpanded ? `Ukryj szczegóły ${group.name}` : `Pokaż szczegóły ${group.name}`
+              }
+            >
+              <ChevronDown
+                size={16}
+                className={cn(
+                  "transition-transform duration-200",
+                  isExpanded ? "rotate-180" : "",
+                  "sm:size-[18px]",
+                )}
+              />
+            </button>
+          </CollapsibleTrigger>
+        </div>
+
+        <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
+                <span className="inline-flex items-center gap-2">
+                  <Users size={14} />
+                  {trainerName}
+                </span>
+                <span>{activeMemberCount} aktywnych osób</span>
+                <span>{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</span>
+              </div>
+
+              <p className="rounded-3xl bg-brand-shell p-4 text-sm text-brand-muted">
+                {isParticipantGroupViewer
+                  ? "Szybki podgląd grupy, w której uczestniczysz. Pełny skład i wydarzenia zobaczysz po otwarciu grupy."
+                  : "Szybki podgląd Twojej grupy organizatora. Otwórz grupę, żeby przejść do członków, wydarzeń i ustawień relacji."}
+              </p>
+            </div>
+
+            <div className="flex items-start justify-start lg:justify-end">
+              <Link
+                to={`/panel/grupy/${group.id}`}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+              >
+                Otwórz grupę
+              </Link>
+            </div>
+          </div>
+        </CollapsibleContent>
+      </article>
+    </Collapsible>
+  );
+}
+
 export function GroupsPage() {
   const {
     addGroupMember,
@@ -6112,6 +6219,7 @@ export function GroupsPage() {
   const [memberSaveStates, setMemberSaveStates] = useState<Record<string, GroupMemberSaveState>>(
     {},
   );
+  const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
   const [expandedMemberIds, setExpandedMemberIds] = useState<string[]>([]);
   const [savingGroup, setSavingGroup] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
@@ -6659,6 +6767,16 @@ export function GroupsPage() {
     }
   }
 
+  function toggleExpandedGroup(groupId: string, open: boolean) {
+    setExpandedGroupIds((previous) => {
+      if (open) {
+        return previous.includes(groupId) ? previous : [...previous, groupId];
+      }
+
+      return previous.filter((id) => id !== groupId);
+    });
+  }
+
   function getMemberSaveStateTone(memberId: string) {
     switch (memberSaveStates[memberId]?.status) {
       case "saving":
@@ -7076,49 +7194,23 @@ export function GroupsPage() {
               }
             />
           ) : (
-            <div className="space-y-3">
+            <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
               {visibleGroups.map((group) => {
                 const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-                const isSelected = selectedGroup?.id === group.id;
                 const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);
 
                 return (
-                  <Link
+                  <GroupListSlimRow
                     key={group.id}
-                    to={`/panel/grupy/${group.id}`}
-                    className={`block rounded-[1.75rem] border p-4 shadow-soft transition sm:rounded-[2rem] sm:p-5 ${
-                      isSelected
-                        ? "border-brand-navy bg-brand-navy/5"
-                        : "border-brand-line bg-white hover:bg-brand-shell/70"
-                    }`}
-                  >
-                    <div className="flex flex-col gap-3">
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {isOwnedGroup && !isParticipantGroupViewer ? (
-                            <span className="rounded-full bg-brand-navy/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:text-xs sm:tracking-[0.2em]">
-                              Twoja grupa
-                            </span>
-                          ) : null}
-                          <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.2em]">
-                            {group.status === "active" ? "Aktywna" : "Archiwum"}
-                          </span>
-                          <span className="text-xs text-brand-muted">
-                            {getGroupEventTypeLabel(group.defaultEventType)}
-                          </span>
-                        </div>
-                        <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-lg">
-                          {group.name}
-                        </p>
-                        <p className="text-sm text-brand-muted">{trainerName}</p>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3 text-sm text-brand-muted">
-                        <p>{activeMemberCounts[group.id] ?? 0} aktywnych osób</p>
-                        <p className="text-right">{groupEventCounts[group.id] ?? 0} wydarzeń</p>
-                      </div>
-                      <p className="text-sm font-semibold text-brand-navy">Otwórz grupę</p>
-                    </div>
-                  </Link>
+                    activeMemberCount={activeMemberCounts[group.id] ?? 0}
+                    eventCount={groupEventCounts[group.id] ?? 0}
+                    group={group}
+                    isExpanded={expandedGroupIds.includes(group.id)}
+                    isOwnedGroup={isOwnedGroup}
+                    isParticipantGroupViewer={isParticipantGroupViewer}
+                    onExpandedChange={(open) => toggleExpandedGroup(group.id, open)}
+                    trainerName={trainerName}
+                  />
                 );
               })}
             </div>

@@ -6094,6 +6094,7 @@ function GroupListSlimRow({
   isExpanded,
   isOwnedGroup,
   isParticipantGroupViewer,
+  nearestEventLabel,
   onExpandedChange,
   trainerName,
 }: {
@@ -6103,6 +6104,7 @@ function GroupListSlimRow({
   isExpanded: boolean;
   isOwnedGroup: boolean;
   isParticipantGroupViewer: boolean;
+  nearestEventLabel: string | null;
   onExpandedChange: (open: boolean) => void;
   trainerName: string;
 }) {
@@ -6162,13 +6164,22 @@ function GroupListSlimRow({
 
         <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
-              <span className="inline-flex items-center gap-2">
-                <Users size={14} />
-                {trainerName}
-              </span>
-              <span>{activeMemberCount} aktywnych osób</span>
-              <span>{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</span>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
+                <span className="inline-flex items-center gap-2">
+                  <Users size={14} />
+                  {trainerName}
+                </span>
+                <span>{activeMemberCount} aktywnych osób</span>
+                <span>{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</span>
+              </div>
+
+              <p className="text-sm text-brand-muted">
+                Najbliższe szkolenie:{" "}
+                <span className="font-semibold text-brand-navy">
+                  {nearestEventLabel ?? "Brak nadchodzącego szkolenia"}
+                </span>
+              </p>
             </div>
 
             <div className="flex items-start justify-start lg:justify-end">
@@ -6288,6 +6299,29 @@ export function GroupsPage() {
         accumulator[event.groupId] = (accumulator[event.groupId] ?? 0) + 1;
         return accumulator;
       }, {}),
+    [store.trainingEvents],
+  );
+  const nearestGroupEventLabels = useMemo(
+    () => {
+      const nextLabels: Record<string, string> = {};
+
+      for (const event of sortEventsByDate(
+        (store.trainingEvents ?? []).filter(
+          (item) =>
+            Boolean(item.groupId) &&
+            !isTrainingEventArchived(item) &&
+            new Date(item.startsAt).getTime() > Date.now(),
+        ),
+      )) {
+        if (!event.groupId || nextLabels[event.groupId]) {
+          continue;
+        }
+
+        nextLabels[event.groupId] = getPanelScheduleRangeLabel(event);
+      }
+
+      return nextLabels;
+    },
     [store.trainingEvents],
   );
   const ownedGroups = useMemo(
@@ -7200,6 +7234,7 @@ export function GroupsPage() {
                     isExpanded={expandedGroupIds.includes(group.id)}
                     isOwnedGroup={isOwnedGroup}
                     isParticipantGroupViewer={isParticipantGroupViewer}
+                    nearestEventLabel={nearestGroupEventLabels[group.id] ?? null}
                     onExpandedChange={(open) => toggleExpandedGroup(group.id, open)}
                     trainerName={trainerName}
                   />

@@ -3849,17 +3849,6 @@ function getDashboardPerspectiveTitle(perspective: DashboardPerspective) {
   }
 }
 
-function getDashboardPerspectiveDescription(perspective: DashboardPerspective) {
-  switch (perspective) {
-    case "trainer":
-      return "Najważniejsze dane o Twoich szkoleniach, obłożeniu i relacjach w perspektywie prowadzącego.";
-    case "organizer":
-      return "Najważniejsze dane o terminach, zgłoszeniach i współpracy w perspektywie organizatora.";
-    default:
-      return "Twoje zapisy, dwa najbliższe szkolenia i terminy, które nadal wymagają potwierdzenia udziału.";
-  }
-}
-
 function formatDaysUntilLabel(daysUntil: number) {
   if (daysUntil <= 0) {
     return "Dzisiaj";
@@ -3883,9 +3872,6 @@ function DashboardPerspectiveSwitch({
 }) {
   return (
     <div className="w-full max-w-[40rem]">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-brand-sky-deep">
-        Perspektywa dashboardu
-      </p>
       <div
         className="grid gap-1 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft"
         style={{ gridTemplateColumns: `repeat(${perspectives.length}, minmax(0, 1fr))` }}
@@ -4482,10 +4468,7 @@ function OperationalDashboardPerspectiveView({
   return (
     <div className="space-y-6">
       <div>
-        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-          {isTrainerPerspective ? "Perspektywa trenera" : "Perspektywa organizatora"}
-        </p>
-        <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+        <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">
           {isTrainerPerspective
             ? "Szkolenia, obłożenie i współpraca"
             : "Terminy, zgłoszenia i stan organizacji"}
@@ -4501,10 +4484,7 @@ function OperationalDashboardPerspectiveView({
 
       <section className="space-y-4">
         <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-            Oblozenie na najblizsze miesiace
-          </p>
-          <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
+          <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
             Nadchodzace szkolenia i ile osob jeszcze brakuje
           </p>
         </div>
@@ -4928,7 +4908,11 @@ function RoleAwareDashboardView({
     <PanelSection
       eyebrow={getRoleLabel(currentUser.role)}
       title={getDashboardPerspectiveTitle(activePerspective)}
-      description={getDashboardPerspectiveDescription(activePerspective)}
+      description={
+        activePerspective === "participant"
+          ? "Twoje zapisy, dwa najbliższe szkolenia i terminy, które nadal wymagają potwierdzenia udziału."
+          : undefined
+      }
       showLeadText
     >
       {perspectives.length > 1 ? (

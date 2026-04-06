@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  ArrowLeft,
   Bell,
   LayoutDashboard,
   LogOut,
@@ -16,7 +15,15 @@ import {
   Navigate,
   Outlet,
   useLocation,
+  useNavigate,
 } from "react-router";
+import {
+  HeaderBackButton,
+  PanelHeaderTitle,
+  PublicDesktopActions,
+  getHeaderBackConfig,
+  resolveHeaderBackTarget,
+} from "./header-back";
 import { useAppState } from "./providers/AppProviders";
 import type { AppNavigationSection } from "./navigation";
 import {
@@ -75,14 +82,7 @@ function BrandMark({ inverted = false }: { inverted?: boolean }) {
   );
 }
 
-function getPublicHeaderBackPath(state: unknown) {
-  if (!state || typeof state !== "object") {
-    return null;
-  }
-
-  const candidate = (state as { publicBackPath?: unknown }).publicBackPath;
-  return typeof candidate === "string" && candidate.trim() ? candidate : null;
-}
+const publicRootPaths = new Set(publicNavItems.map((item) => item.to));
 
 export function PublicLayout() {
   const {
@@ -94,15 +94,38 @@ export function PublicLayout() {
     store,
   } = useAppState();
   const location = useLocation();
+  const navigate = useNavigate();
   const userHomePath = hasAuthenticatedSession
     ? getPanelHomePath(currentUser?.role ?? "participant")
     : "/login";
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const publicHeaderBackPath = getPublicHeaderBackPath(location.state);
   const authenticatedSections = currentUser
     ? buildAuthenticatedNavigationSections(currentUser, store)
     : [];
   const publicSections = buildPublicNavigationSections();
+  const publicBackConfig = getHeaderBackConfig({
+    kind: "public",
+    pathname: location.pathname,
+    search: location.search,
+    state: location.state,
+    rootPaths: publicRootPaths,
+  });
+
+  function handlePublicBack() {
+    const target = resolveHeaderBackTarget(
+      publicBackConfig,
+      typeof window === "undefined" ? null : window.history.state,
+    );
+
+    if (target.kind === "history") {
+      void navigate(-1);
+      return;
+    }
+
+    if (target.kind === "path") {
+      void navigate(target.path, { replace: true });
+    }
+  }
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -160,7 +183,10 @@ export function PublicLayout() {
             ))}
           </nav>
 
-          <div className="ml-auto hidden items-center gap-3 md:flex">
+          <PublicDesktopActions
+            showBackButton={publicBackConfig.showBackButton}
+            onBackClick={handlePublicBack}
+          >
             {hasAuthenticatedSession ? (
               <Link
                 to={userHomePath}
@@ -188,17 +214,11 @@ export function PublicLayout() {
                 </Link>
               </>
             )}
-          </div>
+          </PublicDesktopActions>
 
           <div className="ml-auto flex items-center gap-2 md:hidden">
-            {publicHeaderBackPath ? (
-              <Link
-                to={publicHeaderBackPath}
-                className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft"
-                aria-label="Wróć"
-              >
-                <ArrowLeft size={20} />
-              </Link>
+            {publicBackConfig.showBackButton ? (
+              <HeaderBackButton onClick={handlePublicBack} />
             ) : null}
             <button
               type="button"
@@ -314,46 +334,6 @@ export function PublicLayout() {
       </footer>
     </div>
   );
-}
-
-function getPanelBackPath(pathname: string, search: string) {
-  const searchParams = new URLSearchParams(search);
-  const mode = searchParams.get("mode");
-
-  if (pathname === "/panel/grupy" && mode === "create") {
-    return "/panel/grupy";
-  }
-
-  if (pathname.startsWith("/panel/grupy/")) {
-    if (mode === "edit") {
-      return pathname;
-    }
-    return "/panel/grupy";
-  }
-
-  if (pathname === "/panel/szkolenia/utworz" || pathname.startsWith("/panel/szkolenia/")) {
-    return "/panel/szkolenia";
-  }
-
-  if (pathname === "/panel/moderacja-wydarzen-spolecznosci") {
-    return null;
-  }
-
-  if (
-    pathname === "/panel/wydarzenia-spolecznosci/utworz" ||
-    pathname.startsWith("/panel/wydarzenia-spolecznosci/")
-  ) {
-    if (searchParams.get("view") === "moderation") {
-      return "/panel/moderacja-wydarzen-spolecznosci";
-    }
-    return "/panel/wydarzenia-spolecznosci";
-  }
-
-  if (pathname === "/panel/terminy" && (searchParams.get("groupId") || searchParams.get("slotId"))) {
-    return "/panel/terminy";
-  }
-
-  return null;
 }
 
 function NavigationSectionList({
@@ -485,11 +465,19 @@ export function RequireAuth() {
 export function PanelLayout() {
   const { currentUser, notificationsCount, signOut, store } = useAppState();
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser?.id);
   const sections = buildAuthenticatedNavigationSections(currentUser, store);
+  const panelRootPaths = new Set(sections.flatMap((section) => section.items.map((item) => item.to)));
   const currentUserEmailOrPhone = currentUser?.email || currentUser?.phone || "Konto SMS";
-  const panelBackPath = getPanelBackPath(location.pathname, location.search);
+  const panelBackConfig = getHeaderBackConfig({
+    kind: "panel",
+    pathname: location.pathname,
+    search: location.search,
+    state: location.state,
+    rootPaths: panelRootPaths,
+  });
   const hasOrganizerScope = canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
   const organizerCanCreateOfficialTraining =
     hasOrganizerScope &&
@@ -524,6 +512,22 @@ export function PanelLayout() {
               ariaLabel: "Utwórz wydarzenie",
             }
           : null;
+
+  function handlePanelBack() {
+    const target = resolveHeaderBackTarget(
+      panelBackConfig,
+      typeof window === "undefined" ? null : window.history.state,
+    );
+
+    if (target.kind === "history") {
+      void navigate(-1);
+      return;
+    }
+
+    if (target.kind === "path") {
+      void navigate(target.path, { replace: true });
+    }
+  }
 
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -570,22 +574,16 @@ export function PanelLayout() {
         <div className="min-w-0">
           <header className="sticky top-0 z-30 border-b border-brand-line/80 bg-white/90 backdrop-blur-xl">
             <div className="flex items-center justify-between gap-3 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 xl:px-10">
-              <div className="min-w-0">
-                <div>
-                  <h1 className="text-lg font-semibold leading-tight text-brand-navy break-words sm:text-2xl">
-                    Panel zarzadzania
-                  </h1>
-                </div>
-              </div>
+              <PanelHeaderTitle
+                title="Panel zarzadzania"
+                showBackButton={panelBackConfig.showBackButton}
+                onBackClick={handlePanelBack}
+              />
               <div className="flex shrink-0 items-center gap-2">
-                {panelBackPath ? (
-                  <Link
-                    to={panelBackPath}
-                    className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft xl:hidden"
-                    aria-label="Wróć"
-                  >
-                    <ArrowLeft size={20} />
-                  </Link>
+                {panelBackConfig.showBackButton ? (
+                  <div className="xl:hidden">
+                    <HeaderBackButton onClick={handlePanelBack} />
+                  </div>
                 ) : null}
                 {headerCreateShortcut ? (
                   <Link

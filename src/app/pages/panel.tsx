@@ -4467,14 +4467,6 @@ function OperationalDashboardPerspectiveView({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">
-          {isTrainerPerspective
-            ? "Szkolenia, obłożenie i współpraca"
-            : "Terminy, zgłoszenia i stan organizacji"}
-        </h3>
-      </div>
-
       <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
         <StatCard label="Chcą wziąć udział" value={relevantOperationalRequests.length} icon={Bell} />

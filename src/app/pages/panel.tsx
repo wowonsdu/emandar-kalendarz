@@ -36,6 +36,16 @@ import {
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { useAppState } from "../providers/AppProviders";
+import {
+  type DashboardPerspective,
+  getDashboardPerspectives,
+  getParticipantDashboardModel,
+  getParticipantEnrollmentRecords,
+  getParticipantGroupEventRecords,
+  isSyncedGroupEnrollmentRecord,
+  type ParticipantEnrollmentRecord,
+  type ParticipantGroupEventRecord,
+} from "@/app/dashboard";
 import { CommunityEventCard } from "@/app/components/community-event-card";
 import {
   OrganizerCalendarFeedsPanel,
@@ -80,7 +90,6 @@ import {
   getTrainingEventStatusLabel,
   hasModeratorAccess,
   hasInheritedRole,
-  isParticipantEnrollmentActive,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
@@ -100,8 +109,10 @@ import {
   sortTrainerProfiles,
 } from "@/domain/utils";
 import type {
+  AppUser,
   AvatarCropSettings,
   DecisionStatus,
+  DemoStore,
   EmandarBrandStatus,
   EnrollmentFinalStatus,
   EnrollmentIntent,
@@ -1099,29 +1110,6 @@ function getDashboardEventLabel(
   return `${title} • ${formatDate(bounds.startsAt)}`;
 }
 
-type ParticipantEnrollmentRecord = {
-  request: EnrollmentRequest;
-  event: TrainingEvent;
-  trainer?: TrainerProfile;
-  organizer?: OrganizerProfile | null;
-  isArchived: boolean;
-};
-
-type ParticipantGroupEventRecord = {
-  eventParticipant: ReturnType<typeof useAppState>["store"]["eventParticipants"] extends Array<infer T>
-    ? T
-    : never;
-  event: TrainingEvent;
-  trainer?: TrainerProfile;
-  organizer?: OrganizerProfile | null;
-  group?: Group | null;
-  isArchived: boolean;
-};
-
-function isSyncedGroupEnrollmentRecord(record: ParticipantEnrollmentRecord) {
-  return Boolean(record.event.groupId && record.request.eventParticipantId);
-}
-
 function isOperationalEnrollmentRequest(
   request: EnrollmentRequest,
   store: ReturnType<typeof useAppState>["store"],
@@ -1141,84 +1129,6 @@ function isEventFinished(event: TrainingEvent) {
 
 function isCommunityModerationPending(event: TrainingEvent) {
   return event.publicationApprovalStatus === "pending";
-}
-
-function isParticipantEnrollmentArchived(
-  request: EnrollmentRequest,
-  event: TrainingEvent,
-) {
-  return !isParticipantEnrollmentActive(request) || isTrainingEventArchived(event) || isEventFinished(event);
-}
-
-function getParticipantEnrollmentRecords(
-  currentUserId: string,
-  store: ReturnType<typeof useAppState>["store"],
-): ParticipantEnrollmentRecord[] {
-  return [...store.enrollmentRequests]
-    .filter((request) => request.submitterUid === currentUserId)
-    .map((request) => {
-      const event = store.trainingEvents.find((item) => item.id === request.eventId);
-      if (!event) {
-        return null;
-      }
-
-      return {
-        request,
-        event,
-        trainer: store.trainers.find((item) => item.id === event.trainerId),
-        organizer: event.organizerId
-          ? store.organizers.find((item) => item.id === event.organizerId) ?? null
-          : null,
-        isArchived: isParticipantEnrollmentArchived(request, event),
-      };
-    })
-    .filter((item): item is ParticipantEnrollmentRecord => Boolean(item))
-    .sort(
-      (left, right) =>
-        new Date(left.event.startsAt).getTime() - new Date(right.event.startsAt).getTime(),
-    );
-}
-
-function isParticipantGroupEventArchived(
-  eventParticipant: ParticipantGroupEventRecord["eventParticipant"],
-  event: TrainingEvent,
-) {
-  return (
-    eventParticipant.status === "declined" ||
-    eventParticipant.status === "removed" ||
-    isTrainingEventArchived(event) ||
-    isEventFinished(event)
-  );
-}
-
-function getParticipantGroupEventRecords(
-  participantProfileId: string,
-  store: ReturnType<typeof useAppState>["store"],
-): ParticipantGroupEventRecord[] {
-  return [...(store.eventParticipants ?? [])]
-    .filter((eventParticipant) => eventParticipant.participantProfileId === participantProfileId)
-    .map((eventParticipant) => {
-      const event = store.trainingEvents.find((item) => item.id === eventParticipant.eventId);
-      if (!event) {
-        return null;
-      }
-
-      return {
-        eventParticipant,
-        event,
-        trainer: store.trainers.find((item) => item.id === event.trainerId),
-        organizer: event.organizerId
-          ? store.organizers.find((item) => item.id === event.organizerId) ?? null
-          : null,
-        group: event.groupId ? store.groups?.find((item) => item.id === event.groupId) ?? null : null,
-        isArchived: isParticipantGroupEventArchived(eventParticipant, event),
-      };
-    })
-    .filter((item): item is ParticipantGroupEventRecord => Boolean(item))
-    .sort(
-      (left, right) =>
-        new Date(left.event.startsAt).getTime() - new Date(right.event.startsAt).getTime(),
-    );
 }
 
 function getParticipantTransferOptions(
@@ -1930,18 +1840,54 @@ function parseGroupMemberPriorityPromptValue(value: string | null) {
   return null;
 }
 
+type EnrollmentRequestArchiveSectionKey = "active" | "confirmed";
+
+type EnrollmentRequestArchiveSection = {
+  key: EnrollmentRequestArchiveSectionKey;
+  title: string;
+  requests: EnrollmentRequest[];
+  defaultOpen: boolean;
+};
+
+const ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER: Record<EnrollmentFinalStatus, number> = {
+  pending: 0,
+  partial: 1,
+  rejected: 2,
+  accepted: 3,
+};
+
 function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
-  const participatingRequests = requests.filter((request) =>
-    resolveEnrollmentIntent(request.intent) === "participating",
-  );
+  const participatingRequests = [...requests]
+    .filter((request) => resolveEnrollmentIntent(request.intent) === "participating")
+    .sort((left, right) => {
+      const statusDelta =
+        ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER[left.finalStatus] -
+        ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER[right.finalStatus];
+
+      if (statusDelta !== 0) {
+        return statusDelta;
+      }
+
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    });
+
+  const activeRequests = participatingRequests.filter((request) => request.finalStatus !== "accepted");
+  const confirmedRequests = participatingRequests.filter((request) => request.finalStatus === "accepted");
 
   return [
     {
-      key: "participating",
-      title: "Chcą wziąć udział",
-      requests: participatingRequests,
+      key: "active",
+      title: "Zgłoszenia",
+      requests: activeRequests,
+      defaultOpen: true,
     },
-  ].filter((section) => section.requests.length > 0);
+    {
+      key: "confirmed",
+      title: "Potwierdzone",
+      requests: confirmedRequests,
+      defaultOpen: false,
+    },
+  ].filter((section): section is EnrollmentRequestArchiveSection => section.requests.length > 0);
 }
 
 function isCommunityTrainerProfile(status: EmandarBrandStatus | undefined) {
@@ -2176,6 +2122,48 @@ function SectionBlockHeading({
       ) : null}
       {description ? <p className="mt-2 text-sm text-brand-muted">{description}</p> : null}
     </div>
+  );
+}
+
+function EnrollmentRequestArchiveSectionBlock({
+  title,
+  count,
+  open,
+  onOpenChange,
+  children,
+}: {
+  title: string;
+  count: number;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <div className="flex items-center gap-2 px-1">
+        <span className="rounded-full bg-brand-navy/8 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:px-3 sm:py-1 sm:text-[11px] sm:tracking-[0.2em]">
+          {title}
+        </span>
+        <div className="h-px flex-1 bg-brand-line/80" />
+        <span className="text-[11px] text-brand-muted sm:text-xs">{count}</span>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="inline-flex size-8 items-center justify-center rounded-full border border-brand-line bg-white text-brand-navy shadow-soft sm:size-9"
+            aria-label={open ? `Zwiń sekcję ${title}` : `Rozwiń sekcję ${title}`}
+          >
+            <ChevronDown
+              size={14}
+              className={cn("transition-transform duration-200", open ? "rotate-180" : "")}
+            />
+          </button>
+        </CollapsibleTrigger>
+      </div>
+
+      <CollapsibleContent className="pt-3 sm:pt-4">
+        <div className="space-y-4">{children}</div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -3132,7 +3120,1152 @@ function EnrollmentPhotoCard({ request }: { request: EnrollmentRequest }) {
   );
 }
 
+function getDashboardPerspectiveLabel(perspective: DashboardPerspective) {
+  switch (perspective) {
+    case "trainer":
+      return "Trener";
+    case "organizer":
+      return "Organizator";
+    default:
+      return "Uczestnik";
+  }
+}
+
+function getDashboardPerspectiveTitle(perspective: DashboardPerspective) {
+  switch (perspective) {
+    case "trainer":
+      return "Dashboard trenera";
+    case "organizer":
+      return "Dashboard organizatora";
+    default:
+      return "Dashboard uczestnika";
+  }
+}
+
+function getDashboardPerspectiveDescription(perspective: DashboardPerspective) {
+  switch (perspective) {
+    case "trainer":
+      return "Najważniejsze dane o Twoich szkoleniach, obłożeniu i relacjach w perspektywie prowadzącego.";
+    case "organizer":
+      return "Najważniejsze dane o terminach, zgłoszeniach i współpracy w perspektywie organizatora.";
+    default:
+      return "Twoje zapisy, dwa najbliższe szkolenia i terminy, które nadal wymagają potwierdzenia udziału.";
+  }
+}
+
+function formatDaysUntilLabel(daysUntil: number) {
+  if (daysUntil <= 0) {
+    return "Dzisiaj";
+  }
+
+  if (daysUntil === 1) {
+    return "Za 1 dzień";
+  }
+
+  return `Za ${daysUntil} dni`;
+}
+
+function DashboardPerspectiveSwitch({
+  perspectives,
+  activePerspective,
+  onChange,
+}: {
+  perspectives: DashboardPerspective[];
+  activePerspective: DashboardPerspective;
+  onChange: (perspective: DashboardPerspective) => void;
+}) {
+  return (
+    <div className="w-full max-w-[40rem]">
+      <p className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-brand-sky-deep">
+        Perspektywa dashboardu
+      </p>
+      <div
+        className="grid gap-1 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft"
+        style={{ gridTemplateColumns: `repeat(${perspectives.length}, minmax(0, 1fr))` }}
+      >
+        {perspectives.map((perspective) => (
+          <button
+            key={perspective}
+            type="button"
+            onClick={() => onChange(perspective)}
+            className={`min-w-0 rounded-[1.35rem] px-3 py-2.5 text-center text-sm font-semibold transition ${
+              activePerspective === perspective
+                ? "bg-brand-navy text-white"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+          >
+            {getDashboardPerspectiveLabel(perspective)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ParticipantDashboardPerspectiveView({
+  currentUser,
+  store,
+  confirmEnrollmentAttendance,
+}: {
+  currentUser: AppUser;
+  store: DemoStore;
+  confirmEnrollmentAttendance: (token: string, decision: "confirm" | "decline") => Promise<void>;
+}) {
+  const participantDashboard = useMemo(
+    () =>
+      getParticipantDashboardModel({
+        currentUserId: currentUser.id,
+        participantProfileId: currentUser.participantProfileId,
+        store,
+      }),
+    [currentUser.id, currentUser.participantProfileId, store],
+  );
+  const ownAccountApprovals = store.trainerAccountApprovals.filter(
+    (approval) => approval.requesterUserId === currentUser.id,
+  );
+  const pendingElevatedRoles = (currentUser.pendingRoles ?? []).filter(
+    (role) => role === "trainer",
+  );
+  const shouldShowApprovalStatus =
+    pendingElevatedRoles.length > 0 ||
+    currentUser.accountApprovalStatus === "rejected" ||
+    ownAccountApprovals.length > 0;
+  const [showPendingConfirmations, setShowPendingConfirmations] = useState(false);
+  const [confirmingToken, setConfirmingToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (participantDashboard.pendingConfirmationItems.length === 0) {
+      setShowPendingConfirmations(false);
+    }
+  }, [participantDashboard.pendingConfirmationItems.length]);
+
+  return (
+    <div className="space-y-6">
+      {shouldShowApprovalStatus && (
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <SectionBlockHeading
+            title="Dodatkowe role"
+            description="Konto uczestnika działa od razu. Tutaj widać tylko status dodatkowych uprawnień, jeśli zostały zgłoszone."
+          />
+          <div className="mt-5 grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
+            <div className="rounded-3xl bg-brand-shell p-5">
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
+                Główny status
+              </p>
+              <p className="mt-3 text-2xl font-semibold text-brand-navy">
+                {currentUser.accountApprovalStatus === "rejected"
+                  ? "Wymaga nowej akceptacji"
+                  : pendingElevatedRoles.length > 0
+                    ? "Czeka na dodatkową akceptację"
+                    : "Konto uczestnika aktywne"}
+              </p>
+              <p className="mt-3 text-sm text-brand-muted">
+                Zakres do odblokowania:{" "}
+                {getAccountRequestRoleLabel({
+                  requestedRoles: ["participant", ...pendingElevatedRoles],
+                })}
+              </p>
+            </div>
+            <div className="space-y-3">
+              {ownAccountApprovals.length === 0 ? (
+                <p className="rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
+                  Brak przypisanych trenerów do akceptacji konta.
+                </p>
+              ) : (
+                ownAccountApprovals.map((approval) => {
+                  const trainer = store.trainers.find(
+                    (item) => item.id === approval.targetTrainerId,
+                  );
+
+                  return (
+                    <div
+                      key={approval.id}
+                      className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-brand-navy">
+                            {trainer?.displayName ?? "Trener"}
+                          </p>
+                          <p className="mt-1 text-sm text-brand-muted">
+                            {getAccountApprovalStatusLabel(approval.status)} • wysłano{" "}
+                            {formatDate(approval.createdAt)}
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+                          {getAccountApprovalStatusLabel(approval.status)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </article>
+      )}
+
+      <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+            Twoje szkolenia
+          </p>
+          <p className="mt-3 text-5xl font-semibold text-brand-navy">
+            {participantDashboard.activeEnrollmentCount}
+          </p>
+          <p className="mt-3 text-sm text-brand-muted">
+            Na tyle aktywnych szkoleń jesteś teraz zapisany.
+          </p>
+          <p className="mt-4 text-sm text-brand-muted">
+            Archiwum: {participantDashboard.archivedEnrollmentCount}
+          </p>
+        </article>
+
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                Wymagają potwierdzenia
+              </p>
+              <p className="mt-3 text-3xl font-semibold text-brand-navy">
+                {participantDashboard.pendingConfirmationItems.length}
+              </p>
+              <p className="mt-3 max-w-xl text-sm text-brand-muted">
+                Potwierdź udział, a status zmieni się na potwierdzony i nie dostaniesz już SMS-a
+                z prośbą o potwierdzenie obecności.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setShowPendingConfirmations((current) => !current)
+              }
+              className="inline-flex items-center rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy"
+            >
+              {showPendingConfirmations ? "Ukryj listę" : "Pokaż szkolenia"}
+            </button>
+          </div>
+        </article>
+      </div>
+
+      <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+        <SectionBlockHeading
+          title="Dwa najbliższe szkolenia"
+          description="Szybki skrót do najbliższych terminów. Klik z kafla przenosi do odpowiedniej listy szkoleń."
+        />
+        {participantDashboard.upcomingItems.length === 0 ? (
+          <div className="mt-5">
+            <EmptyPanelState
+              title="Brak nadchodzących szkoleń"
+              description="Kiedy dołączysz do kolejnego terminu, zobaczysz go tutaj."
+            />
+          </div>
+        ) : (
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            {participantDashboard.upcomingItems.map((item) => (
+              <Link
+                key={item.id}
+                to={getPanelEventListPath(item.event)}
+                className="rounded-[1.75rem] border border-brand-line bg-brand-shell p-5 transition hover:border-brand-sky-deep hover:bg-white"
+              >
+                <p className="text-sm font-semibold uppercase tracking-[0.22em] text-brand-sky-deep">
+                  {formatDaysUntilLabel(item.daysUntil)}
+                </p>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-muted">
+                      Data
+                    </p>
+                    <p className="mt-2 text-lg font-semibold text-brand-navy">
+                      {formatDate(item.event.startsAt)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-muted">
+                      Grupa
+                    </p>
+                    <p className="mt-2 text-lg font-semibold text-brand-navy">
+                      {item.groupName}
+                    </p>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </article>
+
+      {showPendingConfirmations && (
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <SectionBlockHeading
+            title="Szkolenia do potwierdzenia"
+            description="Potwierdzenie od razu zapisuje status jako potwierdzony."
+          />
+          <div className="mt-5 space-y-4">
+            {participantDashboard.pendingConfirmationItems.length === 0 ? (
+              <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                Nie masz teraz szkoleń oczekujących na potwierdzenie.
+              </p>
+            ) : (
+              participantDashboard.pendingConfirmationItems.map((item) => (
+                <article
+                  key={item.id}
+                  className="rounded-[1.75rem] border border-brand-line bg-brand-shell p-4"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <p className="text-lg font-semibold text-brand-navy">{item.event.title}</p>
+                      <p className="mt-2 text-sm text-brand-muted">
+                        {formatDate(item.event.startsAt)} • {item.groupName}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={confirmingToken === item.token}
+                      onClick={async () => {
+                        setConfirmingToken(item.token);
+
+                        try {
+                          await confirmEnrollmentAttendance(item.token, "confirm");
+                          toast.success("Udział został potwierdzony.");
+                        } catch (error) {
+                          toast.error(
+                            error instanceof Error
+                              ? error.message
+                              : "Nie udało się potwierdzić udziału.",
+                          );
+                        } finally {
+                          setConfirmingToken((current) =>
+                            current === item.token ? null : current,
+                          );
+                        }
+                      }}
+                      className="inline-flex items-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                    >
+                      {confirmingToken === item.token ? "Potwierdzanie..." : "Potwierdź udział"}
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </article>
+      )}
+    </div>
+  );
+}
+
+function getScopedManagedEventsForPerspective({
+  currentUser,
+  events,
+  perspective,
+  organizerProfile,
+  trainerProfile,
+}: {
+  currentUser: AppUser;
+  events: TrainingEvent[];
+  perspective: Exclude<DashboardPerspective, "participant">;
+  organizerProfile: OrganizerProfile | null;
+  trainerProfile: TrainerProfile | null;
+}) {
+  return events.filter((event) => {
+    if (isTrainingEventArchived(event) || !canManageTrainingEvent(event, currentUser)) {
+      return false;
+    }
+
+    if (perspective === "trainer") {
+      if (trainerProfile?.id && event.trainerId === trainerProfile.id) {
+        return true;
+      }
+
+      return isCommunityBrandStatus(event.brandStatus) && event.creatorUserId === currentUser.id;
+    }
+
+    if (organizerProfile?.id && event.organizerId === organizerProfile.id) {
+      return true;
+    }
+
+    return event.creatorUserId === currentUser.id && event.createdByRole === "organizer";
+  });
+}
+
+function OperationalDashboardPerspectiveView({
+  currentUser,
+  notificationsCount,
+  perspective,
+  store,
+}: {
+  currentUser: AppUser;
+  notificationsCount: number;
+  perspective: Exclude<DashboardPerspective, "participant">;
+  store: DemoStore;
+}) {
+  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id) ?? null;
+  const organizerProfile = store.organizers.find((item) => item.userId === currentUser.id) ?? null;
+  const isTrainerPerspective = perspective === "trainer";
+  const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
+  const relevantEvents = useMemo(
+    () =>
+      getScopedManagedEventsForPerspective({
+        currentUser,
+        events: store.trainingEvents,
+        perspective,
+        organizerProfile,
+        trainerProfile,
+      }),
+    [currentUser, organizerProfile, perspective, store.trainingEvents, trainerProfile],
+  );
+  const relevantEventIds = useMemo(
+    () => new Set(relevantEvents.map((event) => event.id)),
+    [relevantEvents],
+  );
+  const relevantRequests = useMemo(
+    () => store.enrollmentRequests.filter((item) => relevantEventIds.has(item.eventId)),
+    [relevantEventIds, store.enrollmentRequests],
+  );
+  const relevantOperationalRequests = useMemo(
+    () => relevantRequests.filter((request) => isOperationalEnrollmentRequest(request, store)),
+    [relevantRequests, store],
+  );
+  const communityEvents = useMemo(
+    () =>
+      isTrainerPerspective && trainerProfile
+        ? relevantEvents.filter(
+            (item) =>
+              item.trainerId === trainerProfile.id &&
+              isCommunityBrandStatus(item.brandStatus),
+          )
+        : [],
+    [isTrainerPerspective, relevantEvents, trainerProfile],
+  );
+  const activeCommunityEvents = useMemo(
+    () =>
+      communityEvents.filter(
+        (item) => resolveTrainingEventStatus(item.status) === "active",
+      ),
+    [communityEvents],
+  );
+  const confirmedCommunityEvents = useMemo(
+    () =>
+      communityEvents.filter(
+        (item) => resolveTrainingEventStatus(item.status) === "confirmed",
+      ),
+    [communityEvents],
+  );
+  const activeCommunityStats = useMemo(
+    () => aggregateEventCapacityStats(activeCommunityEvents),
+    [activeCommunityEvents],
+  );
+  const confirmedCommunityStats = useMemo(
+    () => aggregateEventCapacityStats(confirmedCommunityEvents),
+    [confirmedCommunityEvents],
+  );
+  const communityPerformanceData = useMemo(
+    () =>
+      sortEventsByFillRate([...activeCommunityEvents, ...confirmedCommunityEvents]).map(
+        (event) => ({
+          id: event.id,
+          label: event.location || event.title,
+          fillRate: getEventFillRate(event),
+          statusLabel: getTrainingEventStatusLabel(event.status),
+          status: resolveTrainingEventStatus(event.status),
+          occupiedPlaces: event.enrolledCount,
+          availablePlaces: getAvailablePlaces(event),
+          startsAt: event.startsAt,
+        }),
+      ),
+    [activeCommunityEvents, confirmedCommunityEvents],
+  );
+  const hasCommunityKpiData = communityPerformanceData.length > 0;
+  const dashboardMonthBuckets = useMemo(() => getDashboardMonthBuckets(new Date()), []);
+  const dashboardWindow = dashboardMonthBuckets.at(-1);
+  const analyticsEventsInRange = useMemo(() => {
+    if (!dashboardWindow) {
+      return [];
+    }
+
+    const windowStart = new Date();
+    return relevantEvents.filter((event) =>
+      isDateWithinRange(event.startsAt, windowStart, dashboardWindow.end),
+    );
+  }, [dashboardWindow, relevantEvents]);
+  const analyticsActiveEvents = useMemo(
+    () =>
+      analyticsEventsInRange.filter((event) => {
+        const status = resolveTrainingEventStatus(event.status);
+        return status === "active" || status === "confirmed";
+      }),
+    [analyticsEventsInRange],
+  );
+  const dashboardEventData = useMemo(
+    () =>
+      analyticsActiveEvents.map((event) => ({
+        id: event.id,
+        label: getDashboardEventLabel(event, currentUser, store),
+        startsAt: event.startsAt,
+        statusLabel: getTrainingEventStatusLabel(event.status),
+        status: resolveTrainingEventStatus(event.status),
+        fillRate: getEventFillRate(event),
+        missingPeople: getAvailablePlaces(event),
+        occupiedPlaces: event.enrolledCount,
+        capacity: event.capacity,
+        availablePlaces: getAvailablePlaces(event),
+      })),
+    [analyticsActiveEvents, currentUser, store],
+  );
+  const missingPeopleData = useMemo(
+    () =>
+      [...dashboardEventData].sort((left, right) => {
+        if (right.missingPeople !== left.missingPeople) {
+          return right.missingPeople - left.missingPeople;
+        }
+
+        return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+      }),
+    [dashboardEventData],
+  );
+  const fillRateData = useMemo(
+    () =>
+      sortEventsByFillRate(analyticsActiveEvents).map((event) => ({
+        id: event.id,
+        label: getDashboardEventLabel(event, currentUser, store),
+        startsAt: event.startsAt,
+        statusLabel: getTrainingEventStatusLabel(event.status),
+        status: resolveTrainingEventStatus(event.status),
+        fillRate: getEventFillRate(event),
+        missingPeople: getAvailablePlaces(event),
+        occupiedPlaces: event.enrolledCount,
+        capacity: event.capacity,
+        availablePlaces: getAvailablePlaces(event),
+      })),
+    [analyticsActiveEvents, currentUser, store],
+  );
+  const capacityByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => {
+        const monthEvents = analyticsActiveEvents.filter((event) =>
+          isDateWithinRange(event.startsAt, bucket.start, bucket.end),
+        );
+
+        return {
+          key: bucket.key,
+          label: bucket.label,
+          totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
+          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
+        };
+      }),
+    [analyticsActiveEvents, dashboardMonthBuckets],
+  );
+  const organizerGroupsData = useMemo(() => {
+    if (!isTrainerPerspective) {
+      return [];
+    }
+
+    const grouped = analyticsActiveEvents.reduce<Map<string, DashboardOrganizerGroupsDatum>>(
+      (summary, event) => {
+        if (!event.organizerId) {
+          return summary;
+        }
+
+        const organizer = store.organizers.find((item) => item.id === event.organizerId);
+        const existing = summary.get(event.organizerId);
+
+        if (existing) {
+          existing.plannedGroups += 1;
+          return summary;
+        }
+
+        summary.set(event.organizerId, {
+          organizerId: event.organizerId,
+          label: organizer?.displayName ?? "Nieznany organizator",
+          plannedGroups: 1,
+        });
+
+        return summary;
+      },
+      new Map(),
+    );
+
+    return [...grouped.values()].sort((left, right) => {
+      if (right.plannedGroups !== left.plannedGroups) {
+        return right.plannedGroups - left.plannedGroups;
+      }
+
+      return left.label.localeCompare(right.label, "pl");
+    });
+  }, [analyticsActiveEvents, isTrainerPerspective, store.organizers]);
+  const analyticsRequestsInRange = useMemo(() => {
+    if (!dashboardWindow) {
+      return [];
+    }
+
+    const rangeStart = dashboardMonthBuckets[0]?.start ?? new Date();
+    return relevantOperationalRequests.filter((request) =>
+      isDateWithinRange(request.createdAt, rangeStart, dashboardWindow.end),
+    );
+  }, [dashboardMonthBuckets, dashboardWindow, relevantOperationalRequests]);
+  const requestsByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => ({
+        key: bucket.key,
+        label: bucket.label,
+        total: analyticsRequestsInRange.filter((request) =>
+          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
+        ).length,
+      })),
+    [analyticsRequestsInRange, dashboardMonthBuckets],
+  );
+  const requestDecisionsByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => {
+        const monthRequests = analyticsRequestsInRange.filter((request) =>
+          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
+        );
+
+        return {
+          key: bucket.key,
+          label: bucket.label,
+          accepted: monthRequests.filter((request) => request.finalStatus === "accepted").length,
+          pending: monthRequests.filter((request) => request.finalStatus === "pending").length,
+          rejected: monthRequests.filter((request) => request.finalStatus === "rejected").length,
+          partial: monthRequests.filter((request) => request.finalStatus === "partial").length,
+        };
+      }),
+    [analyticsRequestsInRange, dashboardMonthBuckets],
+  );
+  const eventOutcomesByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => ({
+        key: bucket.key,
+        label: bucket.label,
+        confirmed: analyticsEventsInRange.filter(
+          (event) =>
+            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
+            resolveTrainingEventStatus(event.status) === "confirmed",
+        ).length,
+        cancelled: analyticsEventsInRange.filter(
+          (event) =>
+            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
+            resolveTrainingEventStatus(event.status) === "cancelled",
+        ).length,
+      })),
+    [analyticsEventsInRange, dashboardMonthBuckets],
+  );
+  const relationsCount = useMemo(() => {
+    if (isTrainerPerspective) {
+      return trainerProfile
+        ? store.relations.filter((item) => item.trainerId === trainerProfile.id).length
+        : 0;
+    }
+
+    return organizerProfile
+      ? store.relations.filter((item) => item.organizerId === organizerProfile.id).length
+      : 0;
+  }, [isTrainerPerspective, organizerProfile, store.relations, trainerProfile]);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+          {isTrainerPerspective ? "Perspektywa trenera" : "Perspektywa organizatora"}
+        </p>
+        <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+          {isTrainerPerspective
+            ? "Szkolenia, obłożenie i współpraca"
+            : "Terminy, zgłoszenia i stan organizacji"}
+        </h3>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
+        <StatCard label="Chcą wziąć udział" value={relevantOperationalRequests.length} icon={Bell} />
+        <StatCard label="Powiadomienia" value={notificationsCount} icon={ShieldCheck} />
+        <StatCard label="Relacje" value={relationsCount} icon={Users} />
+      </div>
+
+      <section className="space-y-4">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+            Oblozenie na najblizsze miesiace
+          </p>
+          <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
+            Nadchodzace szkolenia i ile osob jeszcze brakuje
+          </p>
+        </div>
+        <div
+          className={`grid gap-4 xl:grid-cols-2 ${
+            isTrainerPerspective ? "2xl:grid-cols-4" : "2xl:grid-cols-3"
+          }`}
+        >
+          <DashboardChartCard
+            title="Brakuje osob do domkniecia"
+            description="Szybki podglad, ile miejsc trzeba jeszcze dopelnic w najblizszych terminach."
+          >
+            {missingPeopleData.length === 0 ? (
+              <DashboardChartEmptyState message="Brak aktywnych albo potwierdzonych wydarzen w najblizszych 3 miesiacach." />
+            ) : (
+              <div style={{ height: `${getDashboardChartHeight(missingPeopleData.length)}px` }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={missingPeopleData}
+                    layout="vertical"
+                    margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                    <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
+                    <YAxis
+                      type="category"
+                      dataKey="label"
+                      width={190}
+                      tick={{ fill: "#123e78", fontSize: 12 }}
+                    />
+                    <Tooltip content={<MissingPeopleTooltip />} />
+                    <Bar dataKey="missingPeople" fill="#174f9a" radius={[0, 14, 14, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </DashboardChartCard>
+
+          <DashboardChartCard
+            title="Zapelnienie terminow"
+            description="Porownanie wydarzen wedlug procentu zajetych miejsc."
+          >
+            {fillRateData.length === 0 ? (
+              <DashboardChartEmptyState message="Brak wydarzen do porownania w tym oknie czasu." />
+            ) : (
+              <div style={{ height: `${getDashboardChartHeight(fillRateData.length)}px` }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={fillRateData}
+                    layout="vertical"
+                    margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                  >
+                    <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                    <XAxis
+                      type="number"
+                      domain={[0, 100]}
+                      tickFormatter={(value) => `${value}%`}
+                      stroke="#6982a0"
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="label"
+                      width={190}
+                      tick={{ fill: "#123e78", fontSize: 12 }}
+                    />
+                    <Tooltip content={<CancelledEventsTooltip />} />
+                    <Bar dataKey="fillRate" radius={[0, 14, 14, 0]}>
+                      {fillRateData.map((item) => (
+                        <Cell key={item.id} fill={getCommunityChartColor(item.status)} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </DashboardChartCard>
+
+          <DashboardChartCard
+            title="Oblozenie w miesiacach"
+            description="Laczna liczba zapisanych osob versus cala pula miejsc w nadchodzacych miesiacach."
+          >
+            <DashboardLegend
+              items={[
+                { label: "Zapisani", color: "#174f9a" },
+                { label: "Liczba miejsc", color: "#88aee0" },
+              ]}
+            />
+            <div className="h-[220px] sm:h-[280px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={capacityByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+                  <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                  <XAxis dataKey="label" stroke="#6982a0" />
+                  <YAxis allowDecimals={false} stroke="#6982a0" />
+                  <Tooltip content={<CapacityByMonthTooltip />} />
+                  <Bar dataKey="enrolledCount" fill="#174f9a" radius={[10, 10, 0, 0]} />
+                  <Bar dataKey="totalCapacity" fill="#88aee0" radius={[10, 10, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </DashboardChartCard>
+
+          {isTrainerPerspective && (
+            <DashboardChartCard
+              title="Grupy wedlug organizatorow"
+              description="Ile zaplanowanych grup masz w tym samym oknie czasu u kazdego organizatora."
+            >
+              {organizerGroupsData.length === 0 ? (
+                <DashboardChartEmptyState message="Brak zaplanowanych grup z przypisanym organizatorem w najblizszych 3 miesiacach." />
+              ) : (
+                <div style={{ height: `${getDashboardChartHeight(organizerGroupsData.length)}px` }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={organizerGroupsData}
+                      layout="vertical"
+                      margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                    >
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={190}
+                        tick={{ fill: "#123e78", fontSize: 12 }}
+                      />
+                      <Tooltip content={<OrganizerGroupsTooltip />} />
+                      <Bar dataKey="plannedGroups" fill="#0f766e" radius={[0, 14, 14, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </DashboardChartCard>
+          )}
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+            Operacyjnie
+          </p>
+          <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
+            Jak splywaja zgloszenia i czym koncza sie terminy
+          </p>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-3">
+          <DashboardChartCard
+            title="Zgłoszenia udziału w miesiącach"
+            description="Nowe prośby o dołączenie do wydarzeń policzone po miesiącu utworzenia."
+          >
+            {analyticsRequestsInRange.length === 0 ? (
+              <DashboardChartEmptyState message="Brak zgłoszeń udziału w bieżącym oknie 3 miesięcy." />
+            ) : (
+              <div className="h-[220px] sm:h-[280px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={requestsByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+                    <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                    <XAxis dataKey="label" stroke="#6982a0" />
+                    <YAxis allowDecimals={false} stroke="#6982a0" />
+                    <Tooltip content={<RequestsByMonthTooltip />} />
+                    <Bar dataKey="total" fill="#174f9a" radius={[10, 10, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </DashboardChartCard>
+
+          <DashboardChartCard
+            title="Statusy zgłoszeń udziału w miesiącach"
+            description="Widać, ile zgłoszeń nadal czeka, a ile jest już rozstrzygniętych."
+          >
+            {analyticsRequestsInRange.length === 0 ? (
+              <DashboardChartEmptyState message="Brak zgłoszeń udziału do pokazania w tym okresie." />
+            ) : (
+              <>
+                <DashboardLegend
+                  items={[
+                    { label: "Potwierdzono", color: "#0ea5a4" },
+                    { label: "Oczekujące", color: "#174f9a" },
+                    { label: "Odrzucono", color: "#c84b4b" },
+                  ]}
+                />
+                <div className="h-[220px] sm:h-[280px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={requestDecisionsByMonthData}
+                      margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+                    >
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis dataKey="label" stroke="#6982a0" />
+                      <YAxis allowDecimals={false} stroke="#6982a0" />
+                      <Tooltip content={<RequestDecisionsTooltip />} />
+                      <Bar dataKey="accepted" stackId="status" fill="#0ea5a4" />
+                      <Bar dataKey="pending" stackId="status" fill="#174f9a" />
+                      <Bar dataKey="rejected" stackId="status" fill="#c84b4b" radius={[10, 10, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </>
+            )}
+          </DashboardChartCard>
+
+          <DashboardChartCard
+            title="Potwierdzenia i anulacje"
+            description="Miesieczny wynik wydarzen, ktore doszly do skutku albo wypadly z kalendarza."
+          >
+            <DashboardLegend
+              items={[
+                { label: "Potwierdzone", color: "#0ea5a4" },
+                { label: "Anulowane", color: "#c84b4b" },
+              ]}
+            />
+            <div className="h-[220px] sm:h-[280px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={eventOutcomesByMonthData}
+                  margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+                >
+                  <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                  <XAxis dataKey="label" stroke="#6982a0" />
+                  <YAxis allowDecimals={false} stroke="#6982a0" />
+                  <Tooltip content={<EventOutcomesTooltip />} />
+                  <Bar dataKey="confirmed" fill="#0ea5a4" radius={[10, 10, 0, 0]} />
+                  <Bar dataKey="cancelled" fill="#c84b4b" radius={[10, 10, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </DashboardChartCard>
+        </div>
+      </section>
+
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+          <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">Najbliższe szkolenia</h3>
+          <div className="mt-5 space-y-4">
+            {sortEventsByDate(relevantEvents)
+              .slice(0, 4)
+              .map((event) => (
+                <div
+                  key={event.id}
+                  className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+                >
+                  <p className="font-semibold text-brand-navy">{event.title}</p>
+                  <p className="mt-1 text-sm text-brand-muted">
+                    {formatDate(event.startsAt)} • {event.location}
+                  </p>
+                </div>
+              ))}
+            {relevantEvents.length === 0 && (
+              <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                Brak wydarzeń dla tej perspektywy.
+              </p>
+            )}
+          </div>
+        </article>
+
+        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+          <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">Ostatnie powiadomienia</h3>
+          <div className="mt-5 space-y-4">
+            {store.notifications.slice(0, 4).map((notification) => (
+              <div
+                key={notification.id}
+                className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+              >
+                <p className="font-semibold text-brand-navy">{notification.title}</p>
+                <p className="mt-1 text-sm text-brand-muted">{notification.body}</p>
+              </div>
+            ))}
+            {store.notifications.length === 0 && (
+              <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                Brak nowych powiadomień.
+              </p>
+            )}
+          </div>
+        </article>
+      </div>
+
+      {isTrainerPerspective && isCommunityTrainer && (
+        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+          <div>
+            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+              KPI wydarzen spolecznosci
+            </p>
+            <h3 className="mt-3 text-2xl font-semibold text-brand-navy">
+              Jak wypelniaja sie Twoje otwarte i potwierdzone wydarzenia
+            </h3>
+            <p className="mt-2 text-brand-muted">
+              Sloty liczymy jako laczna liczbe miejsc we wszystkich aktywnych i potwierdzonych
+              wydarzeniach spolecznosci.
+            </p>
+          </div>
+
+          {!hasCommunityKpiData ? (
+            <div className="mt-6">
+              <EmptyPanelState
+                title="Brak danych do KPI"
+                description="Gdy dodasz aktywne lub potwierdzone wydarzenia spolecznosci, zobaczysz tu agregacje miejsc i ranking wypelnienia."
+              />
+            </div>
+          ) : (
+            <>
+              <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <StatCard
+                  label="Aktywne wydarzenia"
+                  value={activeCommunityStats.eventCount}
+                  icon={CalendarDays}
+                />
+                <StatCard
+                  label="Sloty aktywne"
+                  value={activeCommunityStats.totalCapacity}
+                  icon={Users}
+                />
+                <StatCard
+                  label="Wolne miejsca aktywne"
+                  value={activeCommunityStats.totalRemainingPlaces}
+                  icon={Bell}
+                />
+                <StatCard
+                  label="Potwierdzone wydarzenia"
+                  value={confirmedCommunityStats.eventCount}
+                  icon={ShieldCheck}
+                />
+                <StatCard
+                  label="Sloty potwierdzone"
+                  value={confirmedCommunityStats.totalCapacity}
+                  icon={Users}
+                />
+                <StatCard
+                  label="Wolne miejsca potwierdzone"
+                  value={confirmedCommunityStats.totalRemainingPlaces}
+                  icon={CalendarDays}
+                />
+              </div>
+
+              <div className="mt-6 rounded-[2rem] border border-brand-line bg-brand-shell p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-xl font-semibold text-brand-navy">
+                      Ranking wypelnienia miejsc
+                    </h4>
+                    <p className="mt-1 text-sm text-brand-muted">
+                      Najlepiej i najslabiej performujace wydarzenia wedlug procentu zapelnienia.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-[0.18em]">
+                    <span className="rounded-full bg-brand-navy px-3 py-1 text-white">
+                      Aktywne
+                    </span>
+                    <span className="rounded-full bg-[#0ea5a4] px-3 py-1 text-white">
+                      Potwierdzone
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-6 h-[360px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={communityPerformanceData}
+                      layout="vertical"
+                      margin={{ top: 8, right: 24, left: 8, bottom: 8 }}
+                    >
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis
+                        type="number"
+                        domain={[0, 100]}
+                        tickFormatter={(value) => `${value}%`}
+                        stroke="#6982a0"
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={180}
+                        tick={{ fill: "#123e78", fontSize: 12 }}
+                      />
+                      <Tooltip content={<CommunityPerformanceTooltip />} />
+                      <Bar dataKey="fillRate" radius={[0, 14, 14, 0]}>
+                        {communityPerformanceData.map((item) => (
+                          <Cell
+                            key={item.id}
+                            fill={getCommunityChartColor(item.status)}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </>
+          )}
+        </article>
+      )}
+    </div>
+  );
+}
+
+function RoleAwareDashboardView({
+  confirmEnrollmentAttendance,
+  currentUser,
+  notificationsCount,
+  store,
+}: {
+  confirmEnrollmentAttendance: (token: string, decision: "confirm" | "decline") => Promise<void>;
+  currentUser: AppUser;
+  notificationsCount: number;
+  store: DemoStore;
+}) {
+  const perspectives = useMemo(
+    () => getDashboardPerspectives(currentUser),
+    [currentUser],
+  );
+  const [activePerspective, setActivePerspective] = useState<DashboardPerspective>(
+    perspectives[0] ?? "participant",
+  );
+
+  useEffect(() => {
+    if (!perspectives.includes(activePerspective)) {
+      setActivePerspective(perspectives[0] ?? "participant");
+    }
+  }, [activePerspective, perspectives]);
+
+  return (
+    <PanelSection
+      eyebrow={getRoleLabel(currentUser.role)}
+      title={getDashboardPerspectiveTitle(activePerspective)}
+      description={getDashboardPerspectiveDescription(activePerspective)}
+      showLeadText
+    >
+      {perspectives.length > 1 ? (
+        <div className="flex justify-start">
+          <DashboardPerspectiveSwitch
+            perspectives={perspectives}
+            activePerspective={activePerspective}
+            onChange={setActivePerspective}
+          />
+        </div>
+      ) : null}
+
+      {activePerspective === "participant" ? (
+        <ParticipantDashboardPerspectiveView
+          currentUser={currentUser}
+          store={store}
+          confirmEnrollmentAttendance={confirmEnrollmentAttendance}
+        />
+      ) : (
+        <OperationalDashboardPerspectiveView
+          currentUser={currentUser}
+          notificationsCount={notificationsCount}
+          perspective={activePerspective}
+          store={store}
+        />
+      )}
+    </PanelSection>
+  );
+}
+
 export function DashboardPage() {
+  const { confirmEnrollmentAttendance, currentUser, notificationsCount, store } = useAppState();
+
+  if (!currentUser) {
+    return null;
+  }
+
+  if (currentUser.role === "admin") {
+    return <LegacyAdminDashboardView />;
+  }
+
+  return (
+    <RoleAwareDashboardView
+      confirmEnrollmentAttendance={confirmEnrollmentAttendance}
+      currentUser={currentUser}
+      notificationsCount={notificationsCount}
+      store={store}
+    />
+  );
+}
+
+function LegacyAdminDashboardView() {
   const { currentUser, notificationsCount, store } = useAppState();
 
   if (!currentUser) {
@@ -4090,6 +5223,13 @@ export function RequestsPage() {
     return null;
   }
 
+  const [expandedRequestSections, setExpandedRequestSections] = useState<
+    Record<EnrollmentRequestArchiveSectionKey, boolean>
+  >({
+    active: true,
+    confirmed: false,
+  });
+
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
   const manageableEventIds = new Set(
@@ -4132,11 +5272,18 @@ export function RequestsPage() {
           />
         )}
         {requestSections.map((section) => (
-          <div key={section.key} className="space-y-4">
-            <SectionBlockHeading
-              title={section.title}
-              description="Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
-            />
+          <EnrollmentRequestArchiveSectionBlock
+            key={section.key}
+            title={section.title}
+            count={section.requests.length}
+            open={expandedRequestSections[section.key] ?? section.defaultOpen}
+            onOpenChange={(open) =>
+              setExpandedRequestSections((previous) => ({
+                ...previous,
+                [section.key]: open,
+              }))
+            }
+          >
             {section.requests.map((request) => {
           const event = store.trainingEvents.find((item) => item.id === request.eventId);
           if (!event) {
@@ -4261,7 +5408,7 @@ export function RequestsPage() {
             </article>
           );
             })}
-          </div>
+          </EnrollmentRequestArchiveSectionBlock>
         ))}
       </div>
 
@@ -8771,6 +9918,12 @@ export function EventManagementPage() {
   const [uploadingSettingsImages, setUploadingSettingsImages] = useState(false);
   const [expandedRosterParticipantIds, setExpandedRosterParticipantIds] = useState<string[]>([]);
   const [expandedRequestIds, setExpandedRequestIds] = useState<string[]>([]);
+  const [expandedRequestSections, setExpandedRequestSections] = useState<
+    Record<EnrollmentRequestArchiveSectionKey, boolean>
+  >({
+    active: true,
+    confirmed: false,
+  });
   const [movingRequestId, setMovingRequestId] = useState<string | null>(null);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
   const [assigningParticipantId, setAssigningParticipantId] = useState("");
@@ -9494,7 +10647,7 @@ export function EventManagementPage() {
           <div className="space-y-4">
             <SectionBlockHeading
               title="Chcą wziąć udział"
-              description="Tutaj widzisz wszystkie osoby, które chcą wziąć udział, a licznik na zakładce pokazuje te, które nie zostały jeszcze przeprocesowane."
+              description="Bieżące zgłoszenia są na górze, a potwierdzone osoby spadają niżej do osobnej, domyślnie zwiniętej sekcji."
             />
             {requests.length === 0 ? (
               <EmptyPanelState
@@ -9503,11 +10656,18 @@ export function EventManagementPage() {
               />
             ) : (
               requestSections.map((section) => (
-                <div key={section.key} className="space-y-4">
-                  <SectionBlockHeading
-                    title={section.title}
-                    description="Osoby deklarujące gotowość udziału, ale nadal oczekujące na decyzję."
-                  />
+                <EnrollmentRequestArchiveSectionBlock
+                  key={section.key}
+                  title={section.title}
+                  count={section.requests.length}
+                  open={expandedRequestSections[section.key] ?? section.defaultOpen}
+                  onOpenChange={(open) =>
+                    setExpandedRequestSections((previous) => ({
+                      ...previous,
+                      [section.key]: open,
+                    }))
+                  }
+                >
                   {section.requests.map((request) => (
                     <article
                       key={request.id}
@@ -9605,7 +10765,7 @@ export function EventManagementPage() {
                       ) : null}
                     </article>
                   ))}
-                </div>
+                </EnrollmentRequestArchiveSectionBlock>
               ))
             )}
           </div>
@@ -10540,183 +11700,198 @@ export function EventManagementPage() {
           <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
               title="Chcą wziąć udział"
-              description="Domyślny roster jest prowadzony wyżej. Tutaj zostają tylko nowe osoby z formularza, które możesz przejrzeć, zaakceptować albo przenieść."
+              description="Domyślny roster jest prowadzony wyżej. Aktywne zgłoszenia są na górze, a potwierdzone osoby spadają niżej do osobnej zwiniętej sekcji."
             />
 
             {requests.length === 0 ? (
               <EmptyPanelState
-                title="Brak nowych zgłoszeń"
-                description="Zaakceptowane osoby zostały już przeniesione na roster wydarzenia. Tutaj pojawią się tylko nowe zgłoszenia z formularza."
+                title="Brak zgłoszeń"
+                description="Gdy pojawią się nowe zgłoszenia z formularza, zobaczysz je tutaj."
               />
             ) : (
-              <div className="-mx-6 mt-4 sm:mx-0 sm:mt-6">
-                <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
-                  {requests.map((request, rowIndex) => {
-                    const transferTargetEventId = transferSelections[request.id] ?? "";
-                    const isExpanded = expandedRequestIds.includes(request.id);
+              requestSections.map((section) => (
+                <EnrollmentRequestArchiveSectionBlock
+                  key={section.key}
+                  title={section.title}
+                  count={section.requests.length}
+                  open={expandedRequestSections[section.key] ?? section.defaultOpen}
+                  onOpenChange={(open) =>
+                    setExpandedRequestSections((previous) => ({
+                      ...previous,
+                      [section.key]: open,
+                    }))
+                  }
+                >
+                  <div className="-mx-6 mt-1 sm:mx-0 sm:mt-0">
+                    <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80 sm:space-y-3 sm:divide-y-0 sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:shadow-none">
+                      {section.requests.map((request, rowIndex) => {
+                        const transferTargetEventId = transferSelections[request.id] ?? "";
+                        const isExpanded = expandedRequestIds.includes(request.id);
 
-                    return (
-                      <Collapsible
-                        key={request.id}
-                        open={isExpanded}
-                        onOpenChange={(open) => toggleExpandedRequest(request.id, open)}
-                      >
-                        <article
-                          className={cn(
-                            "border-b border-brand-line/70 px-6 py-2.5 last:border-b-0",
-                            rowIndex % 2 === 0 ? "bg-white" : "bg-brand-shell/35",
-                            "sm:rounded-3xl sm:border sm:bg-brand-shell/60 sm:p-4",
-                          )}
-                        >
-                          <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
-                                {request.imieNazwisko}
-                              </p>
-                            </div>
+                        return (
+                          <Collapsible
+                            key={request.id}
+                            open={isExpanded}
+                            onOpenChange={(open) => toggleExpandedRequest(request.id, open)}
+                          >
+                            <article
+                              className={cn(
+                                "bg-white px-6 py-2.5",
+                                rowIndex % 2 === 0 ? "sm:bg-white" : "sm:bg-brand-shell/35",
+                                "sm:rounded-3xl sm:border sm:p-4",
+                              )}
+                            >
+                              <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
+                                    {request.imieNazwisko}
+                                  </p>
+                                </div>
 
-                            {updatingRequestId === request.id ? (
-                              <span
-                                title="Zapisywanie zgłoszenia"
-                                aria-label="Zapisywanie zgłoszenia"
-                                className="inline-flex size-6 shrink-0 items-center justify-center text-brand-navy sm:size-8"
-                              >
-                                <RefreshCcw size={12} className="animate-spin sm:size-[14px]" />
-                              </span>
-                            ) : null}
-
-                            <CollapsibleTrigger asChild>
-                              <button
-                                type="button"
-                                className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
-                                aria-label={
-                                  isExpanded
-                                    ? `Ukryj szczegóły ${request.imieNazwisko}`
-                                    : `Pokaż szczegóły ${request.imieNazwisko}`
-                                }
-                              >
-                                <ChevronDown
-                                  size={16}
-                                  className={cn(
-                                    "transition-transform duration-200",
-                                    isExpanded ? "rotate-180" : "",
-                                    "sm:size-[18px]",
-                                  )}
-                                />
-                              </button>
-                            </CollapsibleTrigger>
-                          </div>
-
-                          <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
-                            <div className="space-y-4">
-                              <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
-                                <span className="inline-flex items-center gap-1.5 sm:gap-2">
-                                  <Phone size={12} className="sm:size-[14px]" />
-                                  {request.telefon}
-                                </span>
-                                <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                                <span>{formatDate(request.createdAt)}</span>
-                              </div>
-
-                              <div className="flex flex-wrap gap-2">
-                                <span className="rounded-full bg-brand-navy px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white sm:text-xs">
-                                  {getEnrollmentFinalStatusLabel(request.finalStatus)}
-                                </span>
-                                <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                  SMS:{" "}
-                                  {resolveAttendanceConfirmationStatusLabel(
-                                    request.attendanceConfirmationStatus,
-                                  )}
-                                </span>
-                                <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                  trener: {request.trainerDecision}
-                                </span>
-                                {request.requiresOrganizerApproval !== false ? (
-                                  <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                    organizator: {request.organizerDecision}
+                                {updatingRequestId === request.id ? (
+                                  <span
+                                    title="Zapisywanie zgłoszenia"
+                                    aria-label="Zapisywanie zgłoszenia"
+                                    className="inline-flex size-6 shrink-0 items-center justify-center text-brand-navy sm:size-8"
+                                  >
+                                    <RefreshCcw size={12} className="animate-spin sm:size-[14px]" />
                                   </span>
                                 ) : null}
+
+                                <CollapsibleTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
+                                    aria-label={
+                                      isExpanded
+                                        ? `Ukryj szczegóły ${request.imieNazwisko}`
+                                        : `Pokaż szczegóły ${request.imieNazwisko}`
+                                    }
+                                  >
+                                    <ChevronDown
+                                      size={16}
+                                      className={cn(
+                                        "transition-transform duration-200",
+                                        isExpanded ? "rotate-180" : "",
+                                        "sm:size-[18px]",
+                                      )}
+                                    />
+                                  </button>
+                                </CollapsibleTrigger>
                               </div>
 
-                              <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                                {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                              </p>
+                              <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
+                                <div className="space-y-4">
+                                  <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
+                                    <span className="inline-flex items-center gap-1.5 sm:gap-2">
+                                      <Phone size={12} className="sm:size-[14px]" />
+                                      {request.telefon}
+                                    </span>
+                                    <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
+                                    <span>{formatDate(request.createdAt)}</span>
+                                  </div>
 
-                              <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                                <EnrollmentPhotoCard request={request} />
-                                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                                    Przenieś na inny termin
+                                  <div className="flex flex-wrap gap-2">
+                                    <span className="rounded-full bg-brand-navy px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white sm:text-xs">
+                                      {getEnrollmentFinalStatusLabel(request.finalStatus)}
+                                    </span>
+                                    <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
+                                      SMS:{" "}
+                                      {resolveAttendanceConfirmationStatusLabel(
+                                        request.attendanceConfirmationStatus,
+                                      )}
+                                    </span>
+                                    <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
+                                      trener: {request.trainerDecision}
+                                    </span>
+                                    {request.requiresOrganizerApproval !== false ? (
+                                      <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
+                                        organizator: {request.organizerDecision}
+                                      </span>
+                                    ) : null}
+                                  </div>
+
+                                  <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                                    {request.wiadomosc || "Brak dodatkowej wiadomości."}
                                   </p>
-                                  <select
-                                    value={transferTargetEventId}
-                                    onChange={(changeEvent) =>
-                                      setTransferSelections((previous) => ({
-                                        ...previous,
-                                        [request.id]: changeEvent.target.value,
-                                      }))
-                                    }
-                                    className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                                  >
-                                    <option value="">Wybierz termin</option>
-                                    {manageableEvents.map((item) => (
-                                      <option key={item.id} value={item.id}>
-                                        {item.location} | {formatDate(item.startsAt)}
-                                      </option>
+
+                                  <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+                                    <EnrollmentPhotoCard request={request} />
+                                    <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                                      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                        Przenieś na inny termin
+                                      </p>
+                                      <select
+                                        value={transferTargetEventId}
+                                        onChange={(changeEvent) =>
+                                          setTransferSelections((previous) => ({
+                                            ...previous,
+                                            [request.id]: changeEvent.target.value,
+                                          }))
+                                        }
+                                        className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+                                      >
+                                        <option value="">Wybierz termin</option>
+                                        {manageableEvents.map((item) => (
+                                          <option key={item.id} value={item.id}>
+                                            {item.location} | {formatDate(item.startsAt)}
+                                          </option>
+                                        ))}
+                                      </select>
+
+                                      <button
+                                        type="button"
+                                        disabled={!transferTargetEventId || movingRequestId === request.id}
+                                        onClick={() => void handleTransferEnrollmentRequest(request)}
+                                        className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                                      >
+                                        {movingRequestId === request.id
+                                          ? "Przenoszenie..."
+                                          : "Przenieś osobę"}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex flex-wrap gap-3">
+                                    {(["accepted", "pending", "rejected"] as const).map((decision) => (
+                                      <button
+                                        key={decision}
+                                        type="button"
+                                        disabled={updatingRequestId === request.id}
+                                        onClick={() => void handleEnrollmentDecision(request, decision)}
+                                        className={
+                                          decision === "accepted"
+                                            ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                                            : decision === "rejected"
+                                              ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                                              : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                                        }
+                                      >
+                                        {decision === "accepted"
+                                          ? "Zaakceptuj"
+                                          : decision === "rejected"
+                                            ? "Odrzuć"
+                                            : "Ustaw oczekuje"}
+                                      </button>
                                     ))}
-                                  </select>
-
-                                  <button
-                                    type="button"
-                                    disabled={!transferTargetEventId || movingRequestId === request.id}
-                                    onClick={() => void handleTransferEnrollmentRequest(request)}
-                                    className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                  >
-                                    {movingRequestId === request.id
-                                      ? "Przenoszenie..."
-                                      : "Przenieś osobę"}
-                                  </button>
+                                  </div>
                                 </div>
-                              </div>
-
-                              <div className="flex flex-wrap gap-3">
-                                {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                                  <button
-                                    key={decision}
-                                    type="button"
-                                    disabled={updatingRequestId === request.id}
-                                    onClick={() => void handleEnrollmentDecision(request, decision)}
-                                    className={
-                                      decision === "accepted"
-                                        ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                        : decision === "rejected"
-                                          ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                          : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                    }
-                                  >
-                                    {decision === "accepted"
-                                      ? "Zaakceptuj"
-                                      : decision === "rejected"
-                                        ? "Odrzuć"
-                                        : "Ustaw oczekuje"}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          </CollapsibleContent>
-                        </article>
-                      </Collapsible>
-                    );
-                  })}
-                </div>
-              </div>
+                              </CollapsibleContent>
+                            </article>
+                          </Collapsible>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </EnrollmentRequestArchiveSectionBlock>
+              ))
             )}
           </article>
         ) : (
           <div className="space-y-4">
             <SectionBlockHeading
               title="Uczestnicy i osoby, które chcą wziąć udział"
-              description="Tutaj widzisz pełną listę osób, zmieniasz ich status i przenosisz zgłoszenia na inne terminy."
+              description="Aktywne zgłoszenia są na górze, a potwierdzone osoby spadają niżej do osobnej, domyślnie zwiniętej sekcji."
             />
             {requests.length === 0 && (
               <EmptyPanelState
@@ -10726,11 +11901,18 @@ export function EventManagementPage() {
             )}
 
             {requestSections.map((section) => (
-              <div key={section.key} className="space-y-4">
-                <SectionBlockHeading
-                  title={section.title}
-                  description="Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
-                />
+              <EnrollmentRequestArchiveSectionBlock
+                key={section.key}
+                title={section.title}
+                count={section.requests.length}
+                open={expandedRequestSections[section.key] ?? section.defaultOpen}
+                onOpenChange={(open) =>
+                  setExpandedRequestSections((previous) => ({
+                    ...previous,
+                    [section.key]: open,
+                  }))
+                }
+              >
                 {section.requests.map((request) => {
                   const transferTargetEventId = transferSelections[request.id] ?? "";
 
@@ -10839,7 +12021,7 @@ export function EventManagementPage() {
                     </article>
                   );
                 })}
-              </div>
+              </EnrollmentRequestArchiveSectionBlock>
             ))}
           </div>
         )

@@ -2107,10 +2107,14 @@ function StatCard({
   label,
   value,
   icon: Icon,
+  detail,
+  valueClassName = "",
 }: {
   label: string;
   value: string | number;
   icon: typeof Bell;
+  detail?: string;
+  valueClassName?: string;
 }) {
   return (
     <article className="flex min-h-[96px] items-center gap-3 rounded-[1.5rem] border border-brand-line bg-white p-3.5 shadow-soft sm:min-h-[108px] sm:rounded-[2rem] sm:p-5">
@@ -2121,7 +2125,17 @@ function StatCard({
         <p className="break-words text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:mt-4 sm:text-sm sm:tracking-[0.2em]">
           {label}
         </p>
-        <p className="mt-1 text-3xl font-semibold leading-none text-brand-navy sm:mt-2 sm:text-4xl">{value}</p>
+        <p
+          className={cn(
+            "mt-1 text-3xl font-semibold leading-none text-brand-navy sm:mt-2 sm:text-4xl",
+            valueClassName,
+          )}
+        >
+          {value}
+        </p>
+        {detail ? (
+          <p className="mt-2 break-words text-sm leading-snug text-brand-muted">{detail}</p>
+        ) : null}
       </div>
     </article>
   );
@@ -4592,26 +4606,42 @@ function OperationalDashboardPerspectiveView({
   }, [isTrainerPerspective, organizerProfile, store.relations, trainerProfile]);
 
   if (!isTrainerPerspective) {
+    const nextPipelineEvent = organizerOfficialDashboard?.pipelineEvents[0] ?? null;
+    const nextPipelineEventDate = nextPipelineEvent ? formatDate(nextPipelineEvent.startsAt) : "Brak";
+    const nextPipelineEventGroup =
+      nextPipelineEvent?.groupName ??
+      (nextPipelineEvent?.groupId
+        ? store.groups.find((item) => item.id === nextPipelineEvent.groupId)?.name ?? null
+        : null) ??
+      "Brak najbliższego terminu";
+
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-5">
           <StatCard
             label="Grupy"
             value={organizerOfficialDashboard?.groups.length ?? 0}
             icon={Users}
           />
           <StatCard
-            label="Aktywni członkowie"
-            value={organizerOfficialDashboard?.activeMemberCount ?? 0}
-            icon={ShieldCheck}
-          />
-          <StatCard
-            label="Terminy w pipeline"
+            label="Szkolenia"
             value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
             icon={CalendarDays}
           />
           <StatCard
-            label="Czekają na decyzję"
+            label="Uczestnicy"
+            value={organizerOfficialDashboard?.activeMemberCount ?? 0}
+            icon={ShieldCheck}
+          />
+          <StatCard
+            label="Najbliższe"
+            value={nextPipelineEventDate}
+            detail={nextPipelineEventGroup}
+            valueClassName="text-lg leading-tight sm:text-2xl"
+            icon={CalendarDays}
+          />
+          <StatCard
+            label="Czeka na decyzję"
             value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
             icon={Bell}
           />

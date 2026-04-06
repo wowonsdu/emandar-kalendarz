@@ -2133,20 +2133,27 @@ function StatCard({
   icon: Icon,
   detail,
   valueClassName = "",
+  className = "",
 }: {
   label: string;
   value: string | number;
   icon: typeof Bell;
   detail?: string;
   valueClassName?: string;
+  className?: string;
 }) {
   return (
-    <article className="flex min-h-[96px] items-center gap-3 rounded-[1.5rem] border border-brand-line bg-white p-3.5 shadow-soft sm:min-h-[108px] sm:rounded-[2rem] sm:p-5">
+    <article
+      className={cn(
+        "flex min-h-[96px] items-center gap-3 rounded-[1.5rem] border border-brand-line bg-white p-3.5 shadow-soft sm:min-h-[108px] sm:rounded-[2rem] sm:p-5",
+        className,
+      )}
+    >
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
         <Icon size={18} />
       </div>
       <div className="min-w-0">
-        <p className="break-words text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:mt-4 sm:text-sm sm:tracking-[0.2em]">
+        <p className="break-words text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:text-sm sm:tracking-[0.2em]">
           {label}
         </p>
         <p
@@ -4643,21 +4650,24 @@ function OperationalDashboardPerspectiveView({
 
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-5">
+        <div className="flex flex-wrap gap-3 sm:gap-4">
           <StatCard
             label="Grupy"
             value={organizerOfficialDashboard?.groups.length ?? 0}
             icon={Users}
+            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
           />
           <StatCard
             label="Szkolenia"
             value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
             icon={CalendarDays}
+            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
           />
           <StatCard
             label="Uczestnicy"
             value={organizerOfficialDashboard?.activeMemberCount ?? 0}
             icon={ShieldCheck}
+            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
           />
           <StatCard
             label="Najbliższe"
@@ -4665,11 +4675,13 @@ function OperationalDashboardPerspectiveView({
             detail={nextPipelineEventGroup}
             valueClassName="text-lg leading-tight sm:text-2xl"
             icon={CalendarDays}
+            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
           />
           <StatCard
             label="Czeka na decyzję"
             value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
             icon={Bell}
+            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
           />
         </div>
 

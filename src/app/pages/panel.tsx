@@ -6162,21 +6162,13 @@ function GroupListSlimRow({
 
         <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
-                <span className="inline-flex items-center gap-2">
-                  <Users size={14} />
-                  {trainerName}
-                </span>
-                <span>{activeMemberCount} aktywnych osób</span>
-                <span>{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</span>
-              </div>
-
-              <p className="rounded-3xl bg-brand-shell p-4 text-sm text-brand-muted">
-                {isParticipantGroupViewer
-                  ? "Szybki podgląd grupy, w której uczestniczysz. Pełny skład i wydarzenia zobaczysz po otwarciu grupy."
-                  : "Szybki podgląd Twojej grupy organizatora. Otwórz grupę, żeby przejść do członków, wydarzeń i ustawień relacji."}
-              </p>
+            <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
+              <span className="inline-flex items-center gap-2">
+                <Users size={14} />
+                {trainerName}
+              </span>
+              <span>{activeMemberCount} aktywnych osób</span>
+              <span>{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</span>
             </div>
 
             <div className="flex items-start justify-start lg:justify-end">

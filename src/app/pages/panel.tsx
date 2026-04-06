@@ -40,10 +40,7 @@ import {
   type DashboardPerspective,
   getDashboardPerspectives,
   getParticipantDashboardModel,
-  getParticipantEnrollmentRecords,
   getParticipantGroupEventRecords,
-  isSyncedGroupEnrollmentRecord,
-  type ParticipantEnrollmentRecord,
   type ParticipantGroupEventRecord,
 } from "@/app/dashboard";
 import { CommunityEventCard } from "@/app/components/community-event-card";
@@ -82,7 +79,6 @@ import {
   getAvailablePlaces,
   getEventFillRate,
   getHighestRole,
-  getParticipantEnrollmentStatusLabel,
   getRoleLabel,
   getTrainingJoinAudienceLabel,
   getTrainingEventScheduleBounds,
@@ -1138,33 +1134,6 @@ function isCommunityModerationPending(event: TrainingEvent) {
   return event.publicationApprovalStatus === "pending";
 }
 
-function getParticipantTransferOptions(
-  request: EnrollmentRequest,
-  currentEvent: TrainingEvent,
-  events: TrainingEvent[],
-) {
-  return sortEventsByDate(
-    events.filter((event) => {
-      if (event.id === currentEvent.id) {
-        return false;
-      }
-
-      if (
-        isTrainingEventArchived(event) ||
-        isEventFinished(event) ||
-        !event.isPublished ||
-        !isTrainingEventCollaborationAccepted(event) ||
-        event.type !== currentEvent.type ||
-        event.capacity <= event.enrolledCount
-      ) {
-        return false;
-      }
-
-      return request.organizerId ? Boolean(event.organizerId) : true;
-    }),
-  );
-}
-
 function getParticipantGroupTransferOptions(
   record: ParticipantGroupEventRecord,
   store: ReturnType<typeof useAppState>["store"],
@@ -1260,149 +1229,6 @@ function ParticipantContactBlock({
         {contact || "Dane kontaktowe pojawią się po przypisaniu."}
       </p>
     </div>
-  );
-}
-
-function ParticipantEnrollmentCard({
-  record,
-}: {
-  record: ParticipantEnrollmentRecord;
-}) {
-  const { manageOwnEnrollment, store } = useAppState();
-  const [transferTargetEventId, setTransferTargetEventId] = useState("");
-  const [submittingAction, setSubmittingAction] = useState<null | "cancel" | "transfer">(null);
-  const transferOptions = useMemo(
-    () => getParticipantTransferOptions(record.request, record.event, store.trainingEvents),
-    [record.event, record.request, store.trainingEvents],
-  );
-  const canManage =
-    !record.isArchived &&
-    !isTrainingEventArchived(record.event) &&
-    new Date(record.event.startsAt).getTime() > Date.now();
-
-  useEffect(() => {
-    setTransferTargetEventId((current) => current || transferOptions[0]?.id || "");
-  }, [transferOptions]);
-
-  return (
-    <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="max-w-3xl">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-            {record.event.title}
-          </p>
-          <h3 className="mt-2 break-words text-2xl font-semibold text-brand-navy">
-            {getPanelScheduleRangeLabel(record.event)}
-          </h3>
-          <p className="mt-2 text-brand-muted">{record.event.summary}</p>
-        </div>
-        <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-          {getParticipantEnrollmentStatusLabel(record.request)}
-        </span>
-      </div>
-
-      <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        <div className="rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
-          <p className="font-semibold text-brand-navy">{record.event.location}</p>
-          <p className="mt-2">Start: {formatDateTime(record.event.startsAt)}</p>
-          <p>Koniec: {formatDateTime(record.event.endsAt)}</p>
-          <p className="mt-2">Status zapisu: {record.request.finalStatus}</p>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <ParticipantContactBlock
-            title={record.event.creatorUserId ? "Gospodarz wydarzenia" : "Przekazujący Wiedzę"}
-            name={record.request.trainerContactName || record.trainer?.displayName}
-            contact={
-              record.request.trainerContactPhone || record.request.trainerContactEmail
-            }
-            fallback="Dane osoby prowadzącej"
-          />
-          <ParticipantContactBlock
-            title="Organizator"
-            name={record.request.organizerContactName || record.organizer?.displayName}
-            contact={
-              record.request.organizerContactPhone || record.request.organizerContactEmail
-            }
-            fallback="Szkolenie prowadzone bez organizatora"
-          />
-        </div>
-      </div>
-
-      {canManage && (
-        <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4">
-          <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-start">
-            <button
-              type="button"
-              disabled={submittingAction !== null}
-              onClick={async () => {
-                if (!window.confirm("Na pewno chcesz zrezygnować z tego szkolenia?")) {
-                  return;
-                }
-
-                setSubmittingAction("cancel");
-                try {
-                  await manageOwnEnrollment(record.request.id, "cancel");
-                  toast.success("Zrezygnowano ze szkolenia.");
-                } catch (error) {
-                  toast.error(
-                    error instanceof Error ? error.message : "Nie udało się zrezygnować.",
-                  );
-                } finally {
-                  setSubmittingAction(null);
-                }
-              }}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:w-auto"
-            >
-              <Trash2 size={16} />
-              Zrezygnuj
-            </button>
-
-            {transferOptions.length > 0 && (
-              <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                <select
-                  value={transferTargetEventId}
-                  onChange={(event) => setTransferTargetEventId(event.target.value)}
-                  className="min-w-0 w-full max-w-full rounded-full border border-brand-line bg-white px-4 py-3 text-sm text-brand-navy outline-none"
-                >
-                  {transferOptions.map((event) => (
-                    <option key={event.id} value={event.id}>
-                      {event.title} • {getPanelScheduleRangeLabel(event)}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  disabled={submittingAction !== null || !transferTargetEventId}
-                  onClick={async () => {
-                    setSubmittingAction("transfer");
-                    try {
-                      await manageOwnEnrollment(
-                        record.request.id,
-                        "transfer",
-                        transferTargetEventId,
-                      );
-                      toast.success("Przeniesiono zapis na inne szkolenie.");
-                    } catch (error) {
-                      toast.error(
-                        error instanceof Error
-                          ? error.message
-                          : "Nie udało się przenieść zapisu.",
-                      );
-                    } finally {
-                      setSubmittingAction(null);
-                    }
-                  }}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:w-auto"
-                >
-                  <RefreshCcw size={16} />
-                  Przenieś na inne szkolenie
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </article>
   );
 }
 
@@ -3534,11 +3360,10 @@ function ParticipantDashboardPerspectiveView({
   const participantDashboard = useMemo(
     () =>
       getParticipantDashboardModel({
-        currentUserId: currentUser.id,
         participantProfileId: currentUser.participantProfileId,
         store,
       }),
-    [currentUser.id, currentUser.participantProfileId, store],
+    [currentUser.participantProfileId, store],
   );
   const ownAccountApprovals = store.trainerAccountApprovals.filter(
     (approval) => approval.requesterUserId === currentUser.id,
@@ -4572,7 +4397,19 @@ export function DashboardPage() {
   }
 
   if (currentUser.role === "admin") {
-    return <LegacyAdminDashboardView />;
+    return (
+      <PanelSection
+        eyebrow={getRoleLabel(currentUser.role)}
+        title="Dashboard"
+        description="Legacy dashboard został usunięty. Ten widok wróci w nowej wersji."
+        showLeadText
+      >
+        <EmptyPanelState
+          title="Dashboard admina jest w przebudowie"
+          description="Legacy tor raportowania został usunięty. Na ten moment użyj sekcji panelu po lewej stronie."
+        />
+      </PanelSection>
+    );
   }
 
   return (
@@ -4582,952 +4419,6 @@ export function DashboardPage() {
       notificationsCount={notificationsCount}
       store={store}
     />
-  );
-}
-
-function LegacyAdminDashboardView() {
-  const { currentUser, notificationsCount, store } = useAppState();
-
-  if (!currentUser) {
-    return null;
-  }
-
-  const participantRecords = getParticipantEnrollmentRecords(currentUser.id, store);
-  const participantGroupRecords = currentUser.participantProfileId
-    ? getParticipantGroupEventRecords(currentUser.participantProfileId, store)
-    : [];
-  const visibleLegacyRecords = participantRecords.filter(
-    (record) => !isSyncedGroupEnrollmentRecord(record),
-  );
-  const activeRecords = visibleLegacyRecords.filter((record) => !record.isArchived);
-  const archivedRecords = visibleLegacyRecords.filter((record) => record.isArchived);
-  const activeGroupRecords = participantGroupRecords.filter((record) => !record.isArchived);
-  const archivedGroupRecords = participantGroupRecords.filter((record) => record.isArchived);
-  const nextLegacyRecord = activeRecords[0];
-  const nextGroupRecord = activeGroupRecords[0];
-  const nextRecord =
-    !nextLegacyRecord
-      ? nextGroupRecord
-      : !nextGroupRecord
-        ? nextLegacyRecord
-        : new Date(nextGroupRecord.event.startsAt).getTime() <
-            new Date(nextLegacyRecord.event.startsAt).getTime()
-          ? nextGroupRecord
-          : nextLegacyRecord;
-  const needsAttentionCount =
-    activeRecords.filter(
-      (record) =>
-        record.request.finalStatus === "pending" || record.request.finalStatus === "partial",
-    ).length +
-    activeGroupRecords.filter((record) => record.eventParticipant.status === "invited").length;
-  const totalActiveCount = activeRecords.length + activeGroupRecords.length;
-  const totalArchivedCount = archivedRecords.length + archivedGroupRecords.length;
-  const upcomingGroupEvents = activeGroupRecords.slice(0, 5);
-  const upcomingLegacyEvents = activeRecords.slice(0, 5);
-  const nextRecordIsGroup =
-    Boolean(nextRecord) && "eventParticipant" in nextRecord;
-  const ownAccountApprovals = store.trainerAccountApprovals.filter(
-    (approval) => approval.requesterUserId === currentUser.id,
-  );
-  const pendingElevatedRoles = (currentUser.pendingRoles ?? []).filter(
-    (role) => role === "trainer",
-  );
-  const shouldShowApprovalStatus =
-    pendingElevatedRoles.length > 0 ||
-    currentUser.accountApprovalStatus === "rejected" ||
-    ownAccountApprovals.length > 0;
-  const participantDashboardContent = (
-      <div className="space-y-6">
-        {shouldShowApprovalStatus && (
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <SectionBlockHeading
-              title="Dodatkowe role"
-              description="Konto uczestnika działa od razu. Tutaj widać tylko status dodatkowych uprawnień, jeśli w ogóle zostały zgłoszone."
-            />
-            <div className="mt-5 grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
-              <div className="rounded-3xl bg-brand-shell p-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                  Główny status
-                </p>
-                <p className="mt-3 text-2xl font-semibold text-brand-navy">
-                  {currentUser.accountApprovalStatus === "rejected"
-                    ? "Wymaga nowej akceptacji"
-                    : pendingElevatedRoles.length > 0
-                      ? "Czeka na dodatkową akceptację"
-                      : "Konto uczestnika aktywne"}
-                </p>
-                <p className="mt-3 text-sm text-brand-muted">
-                  Zakres do odblokowania:{" "}
-                  {getAccountRequestRoleLabel({
-                    requestedRoles: [
-                      "participant",
-                      ...pendingElevatedRoles,
-                    ],
-                  })}
-                </p>
-              </div>
-              <div className="space-y-3">
-                {ownAccountApprovals.length === 0 ? (
-                  <p className="rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
-                    Brak przypisanych trenerów do akceptacji konta.
-                  </p>
-                ) : (
-                  ownAccountApprovals.map((approval) => {
-                    const trainer = store.trainers.find(
-                      (item) => item.id === approval.targetTrainerId,
-                    );
-
-                    return (
-                      <div
-                        key={approval.id}
-                        className="rounded-3xl border border-brand-line bg-brand-shell p-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-semibold text-brand-navy">
-                              {trainer?.displayName ?? "Trener"}
-                            </p>
-                            <p className="mt-1 text-sm text-brand-muted">
-                              {getAccountApprovalStatusLabel(approval.status)} • wysłano{" "}
-                              {formatDate(approval.createdAt)}
-                            </p>
-                          </div>
-                          <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            {getAccountApprovalStatusLabel(approval.status)}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          </article>
-        )}
-
-        <div className="grid gap-4 md:grid-cols-3">
-          <StatCard label="Aktywne zapisy" value={totalActiveCount} icon={CalendarDays} />
-          <StatCard label="Wymagają uwagi" value={needsAttentionCount} icon={Bell} />
-          <StatCard label="Archiwum" value={totalArchivedCount} icon={RefreshCcw} />
-        </div>
-
-        <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <SectionBlockHeading
-              title="Najbliższe szkolenie"
-              description="Najbliższe wydarzenie z Twoich aktywnych zapisów i przydziałów grupowych."
-            />
-            {nextRecord ? (
-              <div className="mt-5 rounded-3xl bg-brand-shell p-5">
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                  {nextRecord.event.title}
-                </p>
-                <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
-                  {getPanelScheduleRangeLabel(nextRecord.event)}
-                </h3>
-                <p className="mt-3 text-brand-muted">{nextRecord.event.location}</p>
-                {nextRecordIsGroup ? (
-                  <p className="mt-2 text-xs font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                    {getGroupPriorityLabel(
-                      (nextRecord as ParticipantGroupEventRecord).eventParticipant.priority,
-                    )}{" "}
-                    · status {(nextRecord as ParticipantGroupEventRecord).eventParticipant.status}
-                  </p>
-                ) : null}
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <ParticipantContactBlock
-                    title={
-                      nextRecord.event.creatorUserId
-                        ? "Gospodarz wydarzenia"
-                        : "Przekazujący Wiedzę"
-                    }
-                    name={
-                      "request" in nextRecord
-                        ? nextRecord.request.trainerContactName || nextRecord.trainer?.displayName
-                        : nextRecord.trainer?.displayName
-                    }
-                    contact={
-                      "request" in nextRecord
-                        ? nextRecord.request.trainerContactPhone ||
-                          nextRecord.request.trainerContactEmail
-                        : null
-                    }
-                    fallback="Dane osoby prowadzącej"
-                  />
-                  <ParticipantContactBlock
-                    title="Organizator"
-                    name={
-                      "request" in nextRecord
-                        ? nextRecord.request.organizerContactName || nextRecord.organizer?.displayName
-                        : nextRecord.organizer?.displayName
-                    }
-                    contact={
-                      "request" in nextRecord
-                        ? nextRecord.request.organizerContactPhone ||
-                          nextRecord.request.organizerContactEmail
-                        : null
-                    }
-                    fallback="Szkolenie bez dodatkowego organizatora"
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="mt-5">
-                <EmptyPanelState
-                  title="Brak nadchodzących zapisów"
-                  description="Kiedy dołączysz do kolejnego szkolenia, pojawi się tutaj."
-                />
-              </div>
-            )}
-          </article>
-
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <SectionBlockHeading
-              title="Nadchodzące wydarzenia"
-              description="Zobaczysz tu zarówno klasyczne zgłoszenia, jak i wydarzenia przypisane przez grupę."
-            />
-            <div className="mt-5 space-y-4">
-              {upcomingGroupEvents.map((record) => (
-                <div key={record.eventParticipant.id} className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                  <p className="font-semibold text-brand-navy">{record.event.title}</p>
-                  <p className="mt-1 text-sm text-brand-muted">
-                    {formatDate(record.event.startsAt)} • {record.event.location}
-                  </p>
-                  <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
-                    {record.group?.name ?? record.event.groupName ?? "Grupa"} · {record.eventParticipant.status}
-                  </p>
-                </div>
-              ))}
-              {upcomingLegacyEvents.map((record) => (
-                <div key={record.request.id} className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                  <p className="font-semibold text-brand-navy">{record.event.title}</p>
-                  <p className="mt-1 text-sm text-brand-muted">
-                    {formatDate(record.event.startsAt)} • {record.event.location}
-                  </p>
-                  <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-sky-deep">
-                    {getParticipantEnrollmentStatusLabel(record.request)}
-                  </p>
-                </div>
-              ))}
-              {totalActiveCount === 0 && (
-                <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                  Nie masz teraz żadnych aktywnych szkoleń.
-                </p>
-              )}
-            </div>
-          </article>
-        </div>
-      </div>
-  );
-
-  if (currentUser.role === "participant") {
-    return (
-      <PanelSection
-        eyebrow={getRoleLabel(currentUser.role)}
-        title="Twoje szkolenia i najbliższe wydarzenia"
-        showLeadText={false}
-      >
-        {participantDashboardContent}
-      </PanelSection>
-    );
-  }
-
-  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
-  const organizerProfile = store.organizers.find(
-    (item) => item.userId === currentUser.id,
-  );
-  const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-  const relevantEvents = store.trainingEvents.filter(
-    (item) => !isTrainingEventArchived(item) && canManageTrainingEvent(item, currentUser),
-  );
-  const relevantEventIds = new Set(relevantEvents.map((event) => event.id));
-  const relevantRequests = store.enrollmentRequests.filter((item) =>
-    relevantEventIds.has(item.eventId),
-  );
-  const relevantOperationalRequests = useMemo(
-    () => relevantRequests.filter((request) => isOperationalEnrollmentRequest(request, store)),
-    [relevantRequests, store],
-  );
-  const communityEvents = useMemo(
-    () =>
-      hasInheritedRole(currentUser, "trainer") && trainerProfile
-        ? relevantEvents.filter(
-            (item) =>
-              item.trainerId === trainerProfile.id &&
-              isCommunityBrandStatus(item.brandStatus),
-          )
-        : [],
-    [currentUser, relevantEvents, trainerProfile],
-  );
-  const activeCommunityEvents = useMemo(
-    () =>
-      communityEvents.filter(
-        (item) => resolveTrainingEventStatus(item.status) === "active",
-      ),
-    [communityEvents],
-  );
-  const confirmedCommunityEvents = useMemo(
-    () =>
-      communityEvents.filter(
-        (item) => resolveTrainingEventStatus(item.status) === "confirmed",
-      ),
-    [communityEvents],
-  );
-  const activeCommunityStats = useMemo(
-    () => aggregateEventCapacityStats(activeCommunityEvents),
-    [activeCommunityEvents],
-  );
-  const confirmedCommunityStats = useMemo(
-    () => aggregateEventCapacityStats(confirmedCommunityEvents),
-    [confirmedCommunityEvents],
-  );
-  const communityPerformanceData = useMemo(
-    () =>
-      sortEventsByFillRate([...activeCommunityEvents, ...confirmedCommunityEvents]).map(
-        (event) => ({
-          id: event.id,
-          label: event.location || event.title,
-          fillRate: getEventFillRate(event),
-          statusLabel: getTrainingEventStatusLabel(event.status),
-          status: resolveTrainingEventStatus(event.status),
-          occupiedPlaces: event.enrolledCount,
-          availablePlaces: getAvailablePlaces(event),
-          startsAt: event.startsAt,
-        }),
-      ),
-    [activeCommunityEvents, confirmedCommunityEvents],
-  );
-  const hasCommunityKpiData = communityPerformanceData.length > 0;
-  const dashboardMonthBuckets = useMemo(() => getDashboardMonthBuckets(new Date()), []);
-  const dashboardWindow = dashboardMonthBuckets.at(-1);
-  const analyticsEventsInRange = useMemo(() => {
-    if (
-      !dashboardWindow ||
-      !hasInheritedRole(currentUser, "organizer")
-    ) {
-      return [];
-    }
-
-    const windowStart = new Date();
-    return relevantEvents.filter((event) => isDateWithinRange(event.startsAt, windowStart, dashboardWindow.end));
-  }, [currentUser, dashboardWindow, relevantEvents]);
-  const analyticsActiveEvents = useMemo(
-    () =>
-      analyticsEventsInRange.filter((event) => {
-        const status = resolveTrainingEventStatus(event.status);
-        return status === "active" || status === "confirmed";
-      }),
-    [analyticsEventsInRange],
-  );
-  const dashboardEventData = useMemo(
-    () =>
-      analyticsActiveEvents.map((event) => ({
-        id: event.id,
-        label: getDashboardEventLabel(event, currentUser, store),
-        startsAt: event.startsAt,
-        statusLabel: getTrainingEventStatusLabel(event.status),
-        status: resolveTrainingEventStatus(event.status),
-        fillRate: getEventFillRate(event),
-        missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
-        capacity: event.capacity,
-        availablePlaces: getAvailablePlaces(event),
-      })),
-    [analyticsActiveEvents, currentUser, store],
-  );
-  const missingPeopleData = useMemo(
-    () =>
-      [...dashboardEventData].sort((left, right) => {
-        if (right.missingPeople !== left.missingPeople) {
-          return right.missingPeople - left.missingPeople;
-        }
-
-        return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
-      }),
-    [dashboardEventData],
-  );
-  const fillRateData = useMemo(
-    () =>
-      sortEventsByFillRate(analyticsActiveEvents).map((event) => ({
-        id: event.id,
-        label: getDashboardEventLabel(event, currentUser, store),
-        startsAt: event.startsAt,
-        statusLabel: getTrainingEventStatusLabel(event.status),
-        status: resolveTrainingEventStatus(event.status),
-        fillRate: getEventFillRate(event),
-        missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
-        capacity: event.capacity,
-        availablePlaces: getAvailablePlaces(event),
-      })),
-    [analyticsActiveEvents, currentUser, store],
-  );
-  const capacityByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => {
-        const monthEvents = analyticsActiveEvents.filter((event) =>
-          isDateWithinRange(event.startsAt, bucket.start, bucket.end),
-        );
-
-        return {
-          key: bucket.key,
-          label: bucket.label,
-          totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
-          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
-          availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
-        };
-      }),
-    [analyticsActiveEvents, dashboardMonthBuckets],
-  );
-  const organizerGroupsData = useMemo(() => {
-    if (!hasInheritedRole(currentUser, "trainer")) {
-      return [];
-    }
-
-    const grouped = analyticsActiveEvents.reduce<Map<string, DashboardOrganizerGroupsDatum>>(
-      (summary, event) => {
-        if (!event.organizerId) {
-          return summary;
-        }
-
-        const organizer = store.organizers.find((item) => item.id === event.organizerId);
-        const existing = summary.get(event.organizerId);
-
-        if (existing) {
-          existing.plannedGroups += 1;
-          return summary;
-        }
-
-        summary.set(event.organizerId, {
-          organizerId: event.organizerId,
-          label: organizer?.displayName ?? "Nieznany organizator",
-          plannedGroups: 1,
-        });
-
-        return summary;
-      },
-      new Map(),
-    );
-
-    return [...grouped.values()].sort((left, right) => {
-      if (right.plannedGroups !== left.plannedGroups) {
-        return right.plannedGroups - left.plannedGroups;
-      }
-
-      return left.label.localeCompare(right.label, "pl");
-    });
-  }, [analyticsActiveEvents, currentUser, store.organizers]);
-  const analyticsRequestsInRange = useMemo(() => {
-    if (
-      !dashboardWindow ||
-      !hasInheritedRole(currentUser, "organizer")
-    ) {
-      return [];
-    }
-
-    const rangeStart = dashboardMonthBuckets[0]?.start ?? new Date();
-    return relevantOperationalRequests.filter((request) =>
-      isDateWithinRange(request.createdAt, rangeStart, dashboardWindow.end),
-    );
-  }, [currentUser, dashboardMonthBuckets, dashboardWindow, relevantOperationalRequests]);
-  const requestsByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => ({
-        key: bucket.key,
-        label: bucket.label,
-        total: analyticsRequestsInRange.filter((request) =>
-          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
-        ).length,
-      })),
-    [analyticsRequestsInRange, dashboardMonthBuckets],
-  );
-  const requestDecisionsByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => {
-        const monthRequests = analyticsRequestsInRange.filter((request) =>
-          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
-        );
-
-        return {
-          key: bucket.key,
-          label: bucket.label,
-          accepted: monthRequests.filter((request) => request.finalStatus === "accepted").length,
-          pending: monthRequests.filter((request) => request.finalStatus === "pending").length,
-          rejected: monthRequests.filter((request) => request.finalStatus === "rejected").length,
-          partial: monthRequests.filter((request) => request.finalStatus === "partial").length,
-        };
-      }),
-    [analyticsRequestsInRange, dashboardMonthBuckets],
-  );
-  const eventOutcomesByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => ({
-        key: bucket.key,
-        label: bucket.label,
-        confirmed: analyticsEventsInRange.filter(
-          (event) =>
-            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
-            resolveTrainingEventStatus(event.status) === "confirmed",
-        ).length,
-        cancelled: analyticsEventsInRange.filter(
-          (event) =>
-            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
-            resolveTrainingEventStatus(event.status) === "cancelled",
-        ).length,
-      })),
-    [analyticsEventsInRange, dashboardMonthBuckets],
-  );
-  const shouldShowRoleAnalytics = hasInheritedRole(currentUser, "organizer");
-  const relationsCount = currentUser.role === "admin"
-    ? store.relations.length
-    : store.relations.filter((item) => {
-        const matchesTrainer = trainerProfile ? item.trainerId === trainerProfile.id : false;
-        const matchesOrganizer = organizerProfile ? item.organizerId === organizerProfile.id : false;
-        return matchesTrainer || matchesOrganizer;
-      }).length;
-
-  return (
-    <PanelSection
-      eyebrow={getRoleLabel(currentUser.role)}
-      title="Pulpit pracy"
-    >
-      <div className="rounded-[2rem] border border-brand-line bg-white/70 p-4 shadow-soft sm:p-6">
-        <div className="mb-5">
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-            Perspektywa uczestnika
-          </p>
-          <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
-            Twoje zapisy i najbliższe wydarzenia
-          </h3>
-          <p className="mt-2 text-sm text-brand-muted">
-            Wyższy poziom roli nie ukrywa już uczestnika. Ten blok zawsze pokazuje Twoje własne
-            uczestnictwo, niezależnie od tego, czy dodatkowo organizujesz albo prowadzisz wydarzenia.
-          </p>
-        </div>
-        {participantDashboardContent}
-      </div>
-
-      <div className="space-y-4">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-            Perspektywa operacyjna
-          </p>
-          <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
-            Organizacja, relacje i stan terminów
-          </h3>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
-        <StatCard label="Chcą wziąć udział" value={relevantOperationalRequests.length} icon={Bell} />
-        <StatCard label="Powiadomienia" value={notificationsCount} icon={ShieldCheck} />
-        <StatCard label="Relacje" value={relationsCount} icon={Users} />
-      </div>
-
-      {shouldShowRoleAnalytics && (
-        <>
-          <section className="space-y-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                Oblozenie na najblizsze miesiace
-              </p>
-              <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
-                Nadchodzace szkolenia i ile osob jeszcze brakuje
-              </p>
-            </div>
-            <div
-              className={`grid gap-4 xl:grid-cols-2 ${
-                hasInheritedRole(currentUser, "trainer") ? "2xl:grid-cols-4" : "2xl:grid-cols-3"
-              }`}
-            >
-              <DashboardChartCard
-                title="Brakuje osob do domkniecia"
-                description="Szybki podglad, ile miejsc trzeba jeszcze dopelnic w najblizszych terminach."
-              >
-                {missingPeopleData.length === 0 ? (
-                  <DashboardChartEmptyState message="Brak aktywnych albo potwierdzonych wydarzen w najblizszych 3 miesiacach." />
-                ) : (
-                  <div style={{ height: `${getDashboardChartHeight(missingPeopleData.length)}px` }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={missingPeopleData}
-                        layout="vertical"
-                        margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
-                      >
-                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                        <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
-                        <YAxis
-                          type="category"
-                          dataKey="label"
-                          width={190}
-                          tick={{ fill: "#123e78", fontSize: 12 }}
-                        />
-                        <Tooltip content={<MissingPeopleTooltip />} />
-                        <Bar dataKey="missingPeople" fill="#174f9a" radius={[0, 14, 14, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </DashboardChartCard>
-
-              <DashboardChartCard
-                title="Zapelnienie terminow"
-                description="Porownanie wydarzen wedlug procentu zajetych miejsc."
-              >
-                {fillRateData.length === 0 ? (
-                  <DashboardChartEmptyState message="Brak wydarzen do porownania w tym oknie czasu." />
-                ) : (
-                  <div style={{ height: `${getDashboardChartHeight(fillRateData.length)}px` }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={fillRateData}
-                        layout="vertical"
-                        margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
-                      >
-                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                        <XAxis
-                          type="number"
-                          domain={[0, 100]}
-                          tickFormatter={(value) => `${value}%`}
-                          stroke="#6982a0"
-                        />
-                        <YAxis
-                          type="category"
-                          dataKey="label"
-                          width={190}
-                          tick={{ fill: "#123e78", fontSize: 12 }}
-                        />
-                        <Tooltip content={<CancelledEventsTooltip />} />
-                        <Bar dataKey="fillRate" radius={[0, 14, 14, 0]}>
-                          {fillRateData.map((item) => (
-                            <Cell key={item.id} fill={getCommunityChartColor(item.status)} />
-                          ))}
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </DashboardChartCard>
-
-              <DashboardChartCard
-                title="Oblozenie w miesiacach"
-                description="Laczna liczba zapisanych osob versus cala pula miejsc w nadchodzacych miesiacach."
-              >
-                <DashboardLegend
-                  items={[
-                    { label: "Zapisani", color: "#174f9a" },
-                    { label: "Liczba miejsc", color: "#88aee0" },
-                  ]}
-                />
-                <div className="h-[220px] sm:h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={capacityByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
-                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                      <XAxis dataKey="label" stroke="#6982a0" />
-                      <YAxis allowDecimals={false} stroke="#6982a0" />
-                      <Tooltip content={<CapacityByMonthTooltip />} />
-                      <Bar dataKey="enrolledCount" fill="#174f9a" radius={[10, 10, 0, 0]} />
-                      <Bar dataKey="totalCapacity" fill="#88aee0" radius={[10, 10, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </DashboardChartCard>
-
-              {hasInheritedRole(currentUser, "trainer") && (
-                <DashboardChartCard
-                  title="Grupy wedlug organizatorow"
-                  description="Ile zaplanowanych grup masz w tym samym oknie czasu u kazdego organizatora."
-                >
-                  {organizerGroupsData.length === 0 ? (
-                    <DashboardChartEmptyState message="Brak zaplanowanych grup z przypisanym organizatorem w najblizszych 3 miesiacach." />
-                  ) : (
-                    <div style={{ height: `${getDashboardChartHeight(organizerGroupsData.length)}px` }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={organizerGroupsData}
-                          layout="vertical"
-                          margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
-                        >
-                          <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                          <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
-                          <YAxis
-                            type="category"
-                            dataKey="label"
-                            width={190}
-                            tick={{ fill: "#123e78", fontSize: 12 }}
-                          />
-                          <Tooltip content={<OrganizerGroupsTooltip />} />
-                          <Bar dataKey="plannedGroups" fill="#0f766e" radius={[0, 14, 14, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  )}
-                </DashboardChartCard>
-              )}
-            </div>
-          </section>
-
-          <section className="space-y-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                Operacyjnie
-              </p>
-              <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
-                Jak splywaja zgloszenia i czym koncza sie terminy
-              </p>
-            </div>
-            <div className="grid gap-4 xl:grid-cols-3">
-              <DashboardChartCard
-                title="Zgłoszenia udziału w miesiącach"
-                description="Nowe prośby o dołączenie do wydarzeń policzone po miesiącu utworzenia."
-              >
-                {analyticsRequestsInRange.length === 0 ? (
-                  <DashboardChartEmptyState message="Brak zgłoszeń udziału w bieżącym oknie 3 miesięcy." />
-                ) : (
-                  <div className="h-[220px] sm:h-[280px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={requestsByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
-                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                        <XAxis dataKey="label" stroke="#6982a0" />
-                        <YAxis allowDecimals={false} stroke="#6982a0" />
-                        <Tooltip content={<RequestsByMonthTooltip />} />
-                        <Bar dataKey="total" fill="#174f9a" radius={[10, 10, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-              </DashboardChartCard>
-
-              <DashboardChartCard
-                title="Statusy zgłoszeń udziału w miesiącach"
-                description="Widać, ile zgłoszeń nadal czeka, a ile jest już rozstrzygniętych."
-              >
-                {analyticsRequestsInRange.length === 0 ? (
-                  <DashboardChartEmptyState message="Brak zgłoszeń udziału do pokazania w tym okresie." />
-                ) : (
-                  <>
-                    <DashboardLegend
-                      items={[
-                        { label: "Przyjete", color: "#0ea5a4" },
-                        { label: "Oczekujace", color: "#174f9a" },
-                        { label: "Czesciowe", color: "#f59e0b" },
-                        { label: "Odrzucone", color: "#c84b4b" },
-                      ]}
-                    />
-                    <div className="h-[220px] sm:h-[280px]">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={requestDecisionsByMonthData}
-                          margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
-                        >
-                          <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                          <XAxis dataKey="label" stroke="#6982a0" />
-                          <YAxis allowDecimals={false} stroke="#6982a0" />
-                          <Tooltip content={<RequestDecisionsTooltip />} />
-                          <Bar dataKey="accepted" stackId="status" fill="#0ea5a4" />
-                          <Bar dataKey="pending" stackId="status" fill="#174f9a" />
-                          <Bar dataKey="partial" stackId="status" fill="#f59e0b" />
-                          <Bar dataKey="rejected" stackId="status" fill="#c84b4b" radius={[10, 10, 0, 0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </>
-                )}
-              </DashboardChartCard>
-
-              <DashboardChartCard
-                title="Potwierdzenia i anulacje"
-                description="Miesieczny wynik wydarzen, ktore doszly do skutku albo wypadly z kalendarza."
-              >
-                <DashboardLegend
-                  items={[
-                    { label: "Potwierdzone", color: "#0ea5a4" },
-                    { label: "Anulowane", color: "#c84b4b" },
-                  ]}
-                />
-                <div className="h-[220px] sm:h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={eventOutcomesByMonthData}
-                      margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
-                    >
-                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                      <XAxis dataKey="label" stroke="#6982a0" />
-                      <YAxis allowDecimals={false} stroke="#6982a0" />
-                      <Tooltip content={<EventOutcomesTooltip />} />
-                      <Bar dataKey="confirmed" fill="#0ea5a4" radius={[10, 10, 0, 0]} />
-                      <Bar dataKey="cancelled" fill="#c84b4b" radius={[10, 10, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </DashboardChartCard>
-            </div>
-          </section>
-        </>
-      )}
-
-      <div className="grid gap-4 sm:gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
-          <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">Najbliższe szkolenia</h3>
-          <div className="mt-5 space-y-4">
-            {sortEventsByDate(relevantEvents)
-              .slice(0, 4)
-              .map((event) => (
-                <div
-                  key={event.id}
-                  className="rounded-3xl border border-brand-line bg-brand-shell p-4"
-                >
-                  <p className="font-semibold text-brand-navy">{event.title}</p>
-                  <p className="mt-1 text-sm text-brand-muted">
-                    {formatDate(event.startsAt)} • {event.location}
-                  </p>
-                </div>
-              ))}
-            {relevantEvents.length === 0 && (
-              <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                Brak wydarzeń dla tej roli.
-              </p>
-            )}
-          </div>
-        </article>
-
-        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
-          <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">Ostatnie powiadomienia</h3>
-          <div className="mt-5 space-y-4">
-            {store.notifications.slice(0, 4).map((notification) => (
-              <div
-                key={notification.id}
-                className="rounded-3xl border border-brand-line bg-brand-shell p-4"
-              >
-                <p className="font-semibold text-brand-navy">{notification.title}</p>
-                <p className="mt-1 text-sm text-brand-muted">{notification.body}</p>
-              </div>
-            ))}
-            {store.notifications.length === 0 && (
-              <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                Brak nowych powiadomień.
-              </p>
-            )}
-          </div>
-        </article>
-      </div>
-
-      {isCommunityTrainer && (
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-              KPI wydarzen spolecznosci
-            </p>
-            <h3 className="mt-3 text-2xl font-semibold text-brand-navy">
-              Jak wypelniaja sie Twoje otwarte i potwierdzone wydarzenia
-            </h3>
-            <p className="mt-2 text-brand-muted">
-              Sloty liczymy jako laczna liczbe miejsc we wszystkich aktywnych i potwierdzonych
-              wydarzeniach spolecznosci.
-            </p>
-          </div>
-
-          {!hasCommunityKpiData ? (
-            <div className="mt-6">
-              <EmptyPanelState
-                title="Brak danych do KPI"
-                description="Gdy dodasz aktywne lub potwierdzone wydarzenia spolecznosci, zobaczysz tu agregacje miejsc i ranking wypelnienia."
-              />
-            </div>
-          ) : (
-            <>
-              <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                <StatCard
-                  label="Aktywne wydarzenia"
-                  value={activeCommunityStats.eventCount}
-                  icon={CalendarDays}
-                />
-                <StatCard
-                  label="Sloty aktywne"
-                  value={activeCommunityStats.totalCapacity}
-                  icon={Users}
-                />
-                <StatCard
-                  label="Wolne miejsca aktywne"
-                  value={activeCommunityStats.totalRemainingPlaces}
-                  icon={Bell}
-                />
-                <StatCard
-                  label="Potwierdzone wydarzenia"
-                  value={confirmedCommunityStats.eventCount}
-                  icon={ShieldCheck}
-                />
-                <StatCard
-                  label="Sloty potwierdzone"
-                  value={confirmedCommunityStats.totalCapacity}
-                  icon={Users}
-                />
-                <StatCard
-                  label="Wolne miejsca potwierdzone"
-                  value={confirmedCommunityStats.totalRemainingPlaces}
-                  icon={CalendarDays}
-                />
-              </div>
-
-              <div className="mt-6 rounded-[2rem] border border-brand-line bg-brand-shell p-5">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h4 className="text-xl font-semibold text-brand-navy">
-                      Ranking wypelnienia miejsc
-                    </h4>
-                    <p className="mt-1 text-sm text-brand-muted">
-                      Najlepiej i najslabiej performujace wydarzenia wedlug procentu zapelnienia.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-[0.18em]">
-                    <span className="rounded-full bg-brand-navy px-3 py-1 text-white">
-                      Aktywne
-                    </span>
-                    <span className="rounded-full bg-[#0ea5a4] px-3 py-1 text-white">
-                      Potwierdzone
-                    </span>
-                  </div>
-                </div>
-
-                <div className="mt-6 h-[360px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={communityPerformanceData}
-                      layout="vertical"
-                      margin={{ top: 8, right: 24, left: 8, bottom: 8 }}
-                    >
-                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                      <XAxis
-                        type="number"
-                        domain={[0, 100]}
-                        tickFormatter={(value) => `${value}%`}
-                        stroke="#6982a0"
-                      />
-                      <YAxis
-                        type="category"
-                        dataKey="label"
-                        width={180}
-                        tick={{ fill: "#123e78", fontSize: 12 }}
-                      />
-                      <Tooltip content={<CommunityPerformanceTooltip />} />
-                      <Bar dataKey="fillRate" radius={[0, 14, 14, 0]}>
-                        {communityPerformanceData.map((item) => (
-                          <Cell
-                            key={item.id}
-                            fill={getCommunityChartColor(item.status)}
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </>
-          )}
-        </article>
-      )}
-    </PanelSection>
   );
 }
 
@@ -8783,7 +7674,6 @@ export function EventsPage() {
     location.pathname.startsWith("/panel/wydarzenia-spolecznosci");
   const isCommunityCreatorView = location.pathname.endsWith("/wydarzenia-spolecznosci/utworz");
   const isOfficialCreatorView = location.pathname.endsWith("/szkolenia/utworz");
-  const isLegacyCreatorView = location.pathname.endsWith("/kreator-wydarzen");
   const isCreatorView = isCommunityCreatorView || isOfficialCreatorView;
   const canCreateCommunityEvent = true;
   const [eventScope, setEventScope] = useState<"all" | "mine">(
@@ -8791,10 +7681,6 @@ export function EventsPage() {
   );
   const [communityModerationScope, setCommunityModerationScope] =
     useState<CommunityModerationTimelineScope>("pending");
-  const participantRecords = useMemo(
-    () => getParticipantEnrollmentRecords(currentUser.id, store),
-    [currentUser.id, store],
-  );
   const participantGroupRecords = useMemo(
     () =>
       currentUser.participantProfileId
@@ -8804,18 +7690,28 @@ export function EventsPage() {
         : [],
     [currentUser.participantProfileId, store],
   );
-  const participantOfficialRecords = useMemo(
-    () =>
-      participantRecords.filter(
-        (record) =>
-          !isCommunityPanelEvent(record.event) &&
-          !(record.event.groupId && record.request.eventParticipantId),
-      ),
-    [participantRecords],
-  );
   const participantCommunityRecords = useMemo(
-    () => participantRecords.filter((record) => isCommunityPanelEvent(record.event)),
-    [participantRecords],
+    () =>
+      sortEventsByDate(
+        Array.from(
+          new Map(
+            store.enrollmentRequests
+              .filter(
+                (request) =>
+                  (request.submitterUid === currentUser.id ||
+                    request.participantProfileId === currentUser.participantProfileId) &&
+                  request.participantStatus !== "cancelled" &&
+                  request.finalStatus !== "rejected",
+              )
+              .map((request) => {
+                const event = store.trainingEvents.find((item) => item.id === request.eventId);
+                return event && isCommunityPanelEvent(event) ? [event.id, event] : null;
+              })
+              .filter((item): item is [string, TrainingEvent] => Boolean(item)),
+          ).values(),
+        ),
+      ),
+    [currentUser.id, currentUser.participantProfileId, store.enrollmentRequests, store.trainingEvents],
   );
   const officialEvents = useMemo(
     () =>
@@ -8905,27 +7801,6 @@ export function EventsPage() {
         ? undefined
         : "Tutaj widzisz szkolenia Emandar, w których bierzesz udział.";
 
-  const availableOrganizers = useMemo(
-    () =>
-      isTrainerManager && !isCommunityTrainer
-        ? store.relations
-            .filter(
-              (relation) =>
-                relation.trainerId === trainerProfile?.id && relation.status === "approved",
-            )
-            .map((relation) =>
-              store.organizers.find((item) => item.id === relation.organizerId),
-            )
-            .filter((item): item is NonNullable<typeof item> => Boolean(item))
-        : [],
-    [
-      isCommunityTrainer,
-      isTrainerManager,
-      store.organizers,
-      store.relations,
-      trainerProfile?.id,
-    ],
-  );
   const availableTrainers = useMemo(
     () =>
       isOrganizerManager && organizerProfile
@@ -8946,7 +7821,6 @@ export function EventsPage() {
   const [trainerEventForm, setTrainerEventForm] = useState<TrainingEventFormState>(
     createEmptyTrainingEventFormState(),
   );
-  const selfManagedOrganizerPlaceholder = "-";
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [uploadingCreatorImages, setUploadingCreatorImages] = useState(false);
   const [savingEventId, setSavingEventId] = useState<string | null>(null);
@@ -9045,29 +7919,6 @@ export function EventsPage() {
   }
 
   useEffect(() => {
-    if (!isTrainerManager || isCommunityTrainer) {
-      return;
-    }
-
-    setTrainerEventForm((previous) => {
-      const nextOrganizerId = previous.organizerId || availableOrganizers[0]?.id || "";
-      const shouldSelfManage = availableOrganizers.length === 0 || previous.selfManagedByTrainer;
-      if (
-        previous.organizerId === nextOrganizerId &&
-        previous.selfManagedByTrainer === shouldSelfManage
-      ) {
-        return previous;
-      }
-
-      return {
-        ...previous,
-        organizerId: nextOrganizerId,
-        selfManagedByTrainer: shouldSelfManage,
-      };
-    });
-  }, [availableOrganizers, isCommunityTrainer, isTrainerManager]);
-
-  useEffect(() => {
     if (!isOrganizerManager) {
       return;
     }
@@ -9110,19 +7961,6 @@ export function EventsPage() {
     isCommunitySection,
     trainerEventForm.groupId,
   ]);
-
-  if (isLegacyCreatorView) {
-    return (
-      <Navigate
-        to={
-          canCreateOfficialTraining
-            ? "/panel/szkolenia/utworz"
-            : "/panel/wydarzenia-spolecznosci/utworz"
-        }
-        replace
-      />
-    );
-  }
 
   if (isOfficialCreatorView && !canCreateOfficialTraining) {
     return <Navigate to="/panel/szkolenia" replace />;
@@ -9253,10 +8091,10 @@ export function EventsPage() {
               {creatingEvent ? "Zapisywanie..." : "Wyślij wydarzenie do moderacji"}
             </button>
           </form>
-        ) : !isCommunitySection && isOrganizerManager && availableOfficialGroups.length === 0 ? (
+        ) : !isCommunitySection && hasOfficialManagementScope && availableOfficialGroups.length === 0 ? (
           <EmptyPanelState
             title="Najpierw utwórz grupę"
-            description="Oficjalne szkolenie organizatora musi być przypięte do grupy. Najpierw dodaj grupę, a potem wróć do kreatora szkolenia."
+            description="Oficjalne szkolenie musi być przypięte do grupy. Najpierw dodaj albo aktywuj grupę, a potem wróć do kreatora szkolenia."
           />
         ) : (
           <form
@@ -9278,13 +8116,7 @@ export function EventsPage() {
                   eventImages: isCommunitySection ? trainerEventForm.eventImages : undefined,
                   useEventImageAsCover:
                     isCommunitySection ? trainerEventForm.useEventImageAsCover : undefined,
-                  organizerId:
-                    isTrainerManager &&
-                    !isCommunitySection &&
-                    !isCommunityTrainer &&
-                    !trainerEventForm.selfManagedByTrainer
-                      ? trainerEventForm.organizerId
-                      : undefined,
+                  organizerId: undefined,
                   summary: trainerEventForm.summary,
                   description: trainerEventForm.description,
                   tags: parseEventTags(trainerEventForm.tags),
@@ -9313,12 +8145,7 @@ export function EventsPage() {
                     !isCommunitySection && selectedOfficialGroup
                       ? selectedOfficialGroup.defaultEventType
                       : undefined,
-                  selfManagedByTrainer:
-                    isTrainerManager &&
-                    !isCommunitySection &&
-                    !isCommunityTrainer
-                      ? trainerEventForm.selfManagedByTrainer
-                      : undefined,
+                  selfManagedByTrainer: undefined,
                 });
                 toast.success(
                   isCommunitySection
@@ -9359,10 +8186,7 @@ export function EventsPage() {
                       ? selectedOfficialGroup.defaultTags.join(", ")
                       : "",
                   isPublished: !isCommunitySection,
-                  selfManagedByTrainer:
-                    isTrainerManager && !isCommunitySection
-                      ? previous.selfManagedByTrainer
-                      : false,
+                  selfManagedByTrainer: false,
                 }));
               } catch (error) {
                 toast.error(
@@ -9376,54 +8200,17 @@ export function EventsPage() {
             }}
             className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
           >
-            {isTrainerManager &&
-              !isCommunitySection &&
-              !isCommunityTrainer &&
-              availableOrganizers.length === 0 && (
-                <div className="mb-6 rounded-[2rem] border border-brand-sky/35 bg-[linear-gradient(135deg,rgba(14,72,139,0.08),rgba(112,170,230,0.16))] p-5 text-brand-navy shadow-soft">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
-                        Tryb samodzielny
-                      </p>
-                      <h4 className="mt-2 text-xl font-semibold">
-                        Możesz od razu utworzyć własne szkolenie
-                      </h4>
-                      <p className="mt-2 max-w-2xl text-sm text-brand-muted">
-                        Nie masz jeszcze aktywnej relacji z organizatorem, więc to wydarzenie
-                        zapisze się jako szkolenie organizowane bezpośrednio przez Ciebie.
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          selfManagedByTrainer: true,
-                        }))
-                      }
-                      className="inline-flex items-center justify-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft transition hover:bg-brand-navy/90"
-                    >
-                      Tworzę własne szkolenie
-                    </button>
-                  </div>
-                </div>
-              )}
-
             <div className="grid gap-4 xl:grid-cols-2">
               {!isCommunitySection &&
                 hasOfficialManagementScope && (
                 <label className="grid gap-2 xl:col-span-2">
                   <span className="text-sm font-semibold text-brand-navy">Grupa</span>
                   <select
-                    required={isOrganizerManager}
+                    required
                     value={trainerEventForm.groupId}
                     onChange={(event) => applyOfficialGroupToTrainingForm(event.target.value)}
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                   >
-                    {isTrainerManager ? (
-                      <option value="">Bez przypiętej grupy</option>
-                    ) : null}
                     {availableOfficialGroups.map((group) => (
                       <option key={group.id} value={group.id}>
                         {group.name}
@@ -9505,56 +8292,6 @@ export function EventsPage() {
                       </option>
                     ))}
                   </select>
-                </label>
-              )}
-
-              {!isCommunitySection && !isCommunityTrainer && isTrainerManager && (
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Organizator</span>
-                  <select
-                    required={!trainerEventForm.selfManagedByTrainer}
-                    disabled={trainerEventForm.selfManagedByTrainer}
-                    value={
-                      trainerEventForm.selfManagedByTrainer
-                        ? selfManagedOrganizerPlaceholder
-                        : trainerEventForm.organizerId
-                    }
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        organizerId: event.target.value,
-                      }))
-                    }
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  >
-                    <option value={selfManagedOrganizerPlaceholder}>-</option>
-                    {availableOrganizers.map((organizer) => (
-                      <option key={organizer.id} value={organizer.id}>
-                        {organizer.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              {!isCommunitySection && !isCommunityTrainer && isTrainerManager && (
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Tryb organizacji</span>
-                  <span className="flex min-h-[54px] items-center rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy">
-                    <input
-                      type="checkbox"
-                      checked={trainerEventForm.selfManagedByTrainer}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          selfManagedByTrainer: event.target.checked,
-                        }))
-                      }
-                    />
-                    <span className="ml-3 text-sm font-semibold">
-                      Sam organizuję to szkolenie
-                    </span>
-                  </span>
                 </label>
               )}
 
@@ -9970,37 +8707,21 @@ export function EventsPage() {
         )
       ) : !isCreatorView && isOfficialJoinedView ? (
         <div className="space-y-6">
-          {participantOfficialRecords.length === 0 && participantGroupRecords.length === 0 ? (
+          {participantGroupRecords.length === 0 ? (
             <EmptyPanelState
               title="Nie masz jeszcze żadnych szkoleń"
               description="Kiedy zapiszesz się na szkolenie Emandar, pojawi się ono tutaj."
             />
           ) : (
-            <>
-              {participantGroupRecords.length > 0 ? (
-                <div className="space-y-4">
-                  <SectionBlockHeading />
-                  {participantGroupRecords.map((record) => (
-                    <ParticipantGroupEventCard
-                      key={record.eventParticipant.id}
-                      record={record}
-                    />
-                  ))}
-                </div>
-              ) : null}
-
-              {participantOfficialRecords.length > 0 ? (
-                <div className="space-y-4">
-                  <SectionBlockHeading
-                    title="Legacy zgłoszenia i zapisy"
-                    description="To starszy tor obsługi oparty o zgłoszenia, pozostawiony dla wydarzeń poza nowym rosterem grupowym."
-                  />
-                  {participantOfficialRecords.map((record) => (
-                    <ParticipantEnrollmentCard key={record.request.id} record={record} />
-                  ))}
-                </div>
-              ) : null}
-            </>
+            <div className="space-y-4">
+              <SectionBlockHeading />
+              {participantGroupRecords.map((record) => (
+                <ParticipantGroupEventCard
+                  key={record.eventParticipant.id}
+                  record={record}
+                />
+              ))}
+            </div>
           )}
         </div>
       ) : !isCreatorView && isCommunityModerationSection ? (
@@ -10050,8 +8771,8 @@ export function EventsPage() {
                   description="Kiedy dołączysz do community eventu, pojawi się on tutaj."
                 />
               ) : (
-                participantCommunityRecords.map((record) => (
-                  <CommunityEventCard key={record.request.id} event={record.event} />
+                participantCommunityRecords.map((event) => (
+                  <CommunityEventCard key={event.id} event={event} />
                 ))
               )}
             </div>

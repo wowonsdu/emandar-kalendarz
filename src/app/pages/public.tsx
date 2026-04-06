@@ -199,7 +199,7 @@ const demoLoginSections = [
   },
   {
     title: "Uczestnicy",
-    description: "Konta uczestników do testowania własnego dashboardu, archiwum i przenoszenia zapisów.",
+    description: "Konta uczestników do testowania własnego dashboardu i bieżących szkoleń.",
     accounts: [
       { label: "Grzegorz Emanowicz", email: "grzegorz.emanowicz@emandar.pl", accent: "Uczestnik", role: "participant" },
       { label: "Grzegorz Chotnicki", email: "grzegorz.chotnicki@emandar.pl", accent: "Uczestnik", role: "participant" },
@@ -1082,6 +1082,10 @@ export function EventDetailsPage() {
   }
 
   if (isTrainingEventArchived(event)) {
+    return <Navigate to="/kalendarz" replace />;
+  }
+
+  if (!isTrainingEventPubliclyVisible(event)) {
     return <Navigate to="/kalendarz" replace />;
   }
 

@@ -30,7 +30,6 @@ import type {
   OrganizerTrainingDraftDecisionInput,
   OrganizerTrainingDraftInput,
   OrganizerTrainingDraftUpdateInput,
-  ParticipantEnrollmentManagementInput,
   ParticipantGroupEventManagementInput,
   ParticipantRegistrationInput,
   ParticipantOnboardingInput,
@@ -1349,6 +1348,10 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       throw new Error("Nie znaleziono wydarzenia.");
     }
 
+    if (!isCommunityBrandStatus(event.brandStatus) && !event.groupId) {
+      throw new Error("To szkolenie nie przyjmuje już zapisów w tym trybie.");
+    }
+
     ensureRole(actor, "participant");
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone || input.telefon);
@@ -1626,48 +1629,6 @@ export async function manageEnrollmentRequest(
     }
 
     recomputeEventEnrolledCount(store, event.id);
-  });
-}
-
-export async function manageOwnEnrollment(
-  input: {
-    requestId: string;
-    action: ParticipantEnrollmentManagementInput["action"];
-    transferTargetEventId?: string | null;
-  },
-  currentUser: AppUser,
-) {
-  await mutateStore((store) => {
-    const request = store.enrollmentRequests.find(
-      (item) => item.id === input.requestId && item.submitterUid === currentUser.id,
-    );
-    if (!request) {
-      throw new Error("Nie znaleziono zgłoszenia.");
-    }
-
-    if (input.action === "cancel") {
-      request.participantStatus = "cancelled";
-      request.participantManagedAt = nowIso();
-      request.participantActionSource = "participant";
-      return;
-    }
-
-    if (!input.transferTargetEventId) {
-      throw new Error("Wybierz docelowe wydarzenie.");
-    }
-
-    request.participantStatus = "cancelled";
-    request.participantManagedAt = nowIso();
-    request.participantActionSource = "participant";
-    store.enrollmentRequests.unshift({
-      ...cloneValue(request),
-      id: createId("enrollment"),
-      eventId: input.transferTargetEventId,
-      createdAt: nowIso(),
-      intent: request.intent ?? "participating",
-      participantStatus: "active",
-      finalStatus: "pending",
-    });
   });
 }
 
@@ -2608,26 +2569,40 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
       ensureOrganizerFunctionsActive(actor);
     }
 
+    const group = !isCommunityBrandStatus(input.brandStatus)
+      ? store.groups.find((item) => item.id === input.groupId)
+      : null;
+    if (!isCommunityBrandStatus(input.brandStatus) && !group) {
+      throw new Error("Oficjalne szkolenie musi być przypięte do grupy.");
+    }
+
     const base = createEventBase(store, actor, input);
     const organizerHasActiveTrainerRelation =
       actor.role === "organizer" &&
-      Boolean(base.organizerId) &&
+      Boolean(group?.organizerId) &&
       Boolean(base.trainerId) &&
-      canOrganizerAccessTrainer(base.organizerId, base.trainerId, store.relations);
+      canOrganizerAccessTrainer(group.organizerId, base.trainerId, store.relations);
 
     const nextEvent: TrainingEvent = {
       id: createId("event"),
       ...base,
-      groupId: input.groupId ?? null,
-      groupName: store.groups.find((item) => item.id === input.groupId)?.name ?? null,
+      organizerId: group?.organizerId ?? base.organizerId,
+      organizerUserId:
+        group?.organizerId
+          ? store.organizers.find((item) => item.id === group.organizerId)?.userId ?? null
+          : base.organizerUserId,
+      groupId: group?.id ?? null,
+      groupName: group?.name ?? null,
       eventImages: cloneValue(input.eventImages ?? []),
       useEventImageAsCover: input.useEventImageAsCover === true,
-      eventTypeSystem: input.eventTypeSystem ?? null,
+      eventTypeSystem: input.eventTypeSystem ?? group?.defaultEventType ?? null,
       enrolledCount: 0,
       workflowStatus: "published",
-      requiresOrganizerApproval: !base.organizerId ? false : !isCommunityBrandStatus(base.brandStatus),
+      requiresOrganizerApproval:
+        !group?.organizerId ? false : !isCommunityBrandStatus(base.brandStatus),
       eligibleGroupPriorities: cloneValue(input.eligibleGroupPriorities ?? ["stali", "regularni"]),
-      confirmationLeadTimeDays: input.confirmationLeadTimeDays ?? 5,
+      confirmationLeadTimeDays:
+        input.confirmationLeadTimeDays ?? group?.defaultConfirmationLeadTimeDays ?? 5,
       trainerCollaborationStatus:
         actor.role === "organizer" && base.trainerId
           ? organizerHasActiveTrainerRelation && !isCommunityBrandStatus(base.brandStatus)
@@ -2635,8 +2610,12 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
             : "pending"
           : "accepted",
       organizerCollaborationStatus:
-        actor.role === "trainer" && base.organizerId ? "pending" : resolveOrganizerCollaborationStatus(base),
-      selfManagedByTrainer: input.selfManagedByTrainer === true || !base.organizerId,
+        actor.role === "trainer" && group?.organizerId ? "pending" : resolveOrganizerCollaborationStatus({
+          ...base,
+          organizerId: group?.organizerId ?? base.organizerId,
+          selfManagedByTrainer: false,
+        }),
+      selfManagedByTrainer: false,
       createdByRole: actor.role,
       publicationApprovalStatus: isCommunityBrandStatus(base.brandStatus)
         ? input.isPublished
@@ -2644,7 +2623,7 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
           : "pending"
         : undefined,
       enrollmentPhotoRequirement: "optional",
-      joinAudienceSetting: input.joinAudienceSetting ?? "default",
+      joinAudienceSetting: input.joinAudienceSetting ?? group?.defaultJoinAudience ?? "default",
     };
 
     store.trainingEvents.unshift(nextEvent);

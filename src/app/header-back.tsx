@@ -108,10 +108,6 @@ function getPanelFallbackPath(pathname: string, search: string) {
     return "/panel/ustawienia";
   }
 
-  if (pathname === "/panel/kreator-wydarzen") {
-    return "/panel/szkolenia";
-  }
-
   if (pathname.startsWith("/panel/")) {
     return "/panel/dashboard";
   }

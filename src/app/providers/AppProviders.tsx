@@ -37,7 +37,6 @@ import {
   finalizeEventRoster as finalizeEventRosterAction,
   getCommunityEventReview as getCommunityEventReviewAction,
   getTrainerOrganizerGoogleCalendarSubscribeUrl as getTrainerOrganizerGoogleCalendarSubscribeUrlAction,
-  manageOwnEnrollment as manageOwnEnrollmentAction,
   manageOwnGroupEventParticipation as manageOwnGroupEventParticipationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
   publishTrainingEvent as publishTrainingEventAction,
@@ -103,7 +102,6 @@ import type {
   OrganizerTrainingDraftInput,
   OrganizerTrainingDraftUpdateInput,
   ParticipantGroupEventManagementInput,
-  ParticipantEnrollmentManagementInput,
   ParticipantOnboardingInput,
   ParticipantRegistrationInput,
   ParticipantProfileUpdateInput,
@@ -153,11 +151,6 @@ interface AppStateContextValue {
   manageEnrollmentRequest: (
     requestId: string,
     decision: DecisionStatus,
-    transferTargetEventId?: string,
-  ) => Promise<void>;
-  manageOwnEnrollment: (
-    requestId: string,
-    action: ParticipantEnrollmentManagementInput["action"],
     transferTargetEventId?: string,
   ) => Promise<void>;
   manageOwnGroupEventParticipation: (
@@ -513,22 +506,6 @@ export function AppProviders({ children }: { children: ReactNode }) {
             {
               requestId,
               decision,
-              transferTargetEventId,
-            },
-            currentUser,
-          ),
-        );
-      },
-      async manageOwnEnrollment(requestId, action, transferTargetEventId) {
-        if (!currentUser) {
-          throw new Error("Musisz być zalogowany.");
-        }
-
-        await withFriendlyErrors(() =>
-          manageOwnEnrollmentAction(
-            {
-              requestId,
-              action,
               transferTargetEventId,
             },
             currentUser,

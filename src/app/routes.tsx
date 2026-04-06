@@ -95,7 +95,6 @@ export const router = createBrowserRouter(
             { path: "wydarzenia-spolecznosci/:eventId", Component: EventManagementPage },
             { path: "moderacja-wydarzen-spolecznosci", Component: EventsPage },
             { path: "uzytkownicy", Component: UserManagementPage },
-            { path: "kreator-wydarzen", Component: EventsPage },
             { path: "trenerzy", Component: TrainerDirectoryPage },
             { path: "organizatorzy", Component: OrganizerDirectoryPage },
           ],

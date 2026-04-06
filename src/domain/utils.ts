@@ -98,32 +98,6 @@ export function resolveParticipantEnrollmentStatus(
   return value === "cancelled" ? "cancelled" : "active";
 }
 
-export function isParticipantEnrollmentActive(
-  request: Pick<EnrollmentRequest, "participantStatus" | "finalStatus">,
-) {
-  return (
-    resolveParticipantEnrollmentStatus(request.participantStatus) === "active" &&
-    request.finalStatus !== "rejected"
-  );
-}
-
-export function getParticipantEnrollmentStatusLabel(
-  request: Pick<EnrollmentRequest, "participantStatus" | "finalStatus">,
-) {
-  if (resolveParticipantEnrollmentStatus(request.participantStatus) === "cancelled") {
-    return "zrezygnowano";
-  }
-
-  switch (request.finalStatus) {
-    case "accepted":
-      return "potwierdzono";
-    case "rejected":
-      return "odrzucone";
-    default:
-      return "oczekujące";
-  }
-}
-
 export function resolveEnrollmentIntent(
   _value: EnrollmentIntent | null | undefined,
 ): EnrollmentIntent {
@@ -220,6 +194,7 @@ export function isTrainingEventPubliclyVisible(
     TrainingEvent,
     | "archivedAt"
     | "brandStatus"
+    | "groupId"
     | "isPublished"
     | "organizerCollaborationStatus"
     | "organizerId"
@@ -234,6 +209,10 @@ export function isTrainingEventPubliclyVisible(
 
   if (isCommunityBrandStatus(event.brandStatus)) {
     return event.publicationApprovalStatus === "accepted";
+  }
+
+  if (!event.groupId) {
+    return false;
   }
 
   return isTrainingEventCollaborationAccepted(event);

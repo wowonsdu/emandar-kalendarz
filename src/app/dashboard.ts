@@ -1,12 +1,10 @@
 import {
   getHighestRole,
-  isParticipantEnrollmentActive,
   isTrainingEventArchived,
 } from "@/domain/utils";
 import type {
   AppUser,
   DemoStore,
-  EnrollmentRequest,
   EventParticipant,
   Group,
   OrganizerProfile,
@@ -15,14 +13,6 @@ import type {
 } from "@/domain/types";
 
 export type DashboardPerspective = "participant" | "organizer" | "trainer";
-
-export type ParticipantEnrollmentRecord = {
-  request: EnrollmentRequest;
-  event: TrainingEvent;
-  trainer?: TrainerProfile;
-  organizer?: OrganizerProfile | null;
-  isArchived: boolean;
-};
 
 export type ParticipantGroupEventRecord = {
   eventParticipant: EventParticipant;
@@ -38,7 +28,6 @@ export type ParticipantDashboardUpcomingItem = {
   event: TrainingEvent;
   groupName: string;
   daysUntil: number;
-  source: "request" | "group";
 };
 
 export type ParticipantDashboardConfirmationItem = {
@@ -46,7 +35,6 @@ export type ParticipantDashboardConfirmationItem = {
   token: string;
   event: TrainingEvent;
   groupName: string;
-  source: "request" | "group";
 };
 
 export type ParticipantDashboardModel = {
@@ -73,11 +61,6 @@ export function getDashboardPerspectives(
 
   return ["participant"];
 }
-
-export function isSyncedGroupEnrollmentRecord(record: ParticipantEnrollmentRecord) {
-  return Boolean(record.event.groupId && record.request.eventParticipantId);
-}
-
 export function getParticipantDashboardGroupLabel(
   event: Pick<TrainingEvent, "groupName">,
   group?: Pick<Group, "name"> | null,
@@ -90,48 +73,6 @@ function isEventFinished(event: Pick<TrainingEvent, "startsAt" | "endsAt" | "sch
     .sort((left, right) => new Date(right.endsAt).getTime() - new Date(left.endsAt).getTime())[0];
   const endsAt = lastScheduleDay?.endsAt ?? event.endsAt;
   return new Date(endsAt).getTime() < now.getTime();
-}
-
-function isParticipantEnrollmentArchived(
-  request: EnrollmentRequest,
-  event: TrainingEvent,
-  now: Date,
-) {
-  return (
-    !isParticipantEnrollmentActive(request) ||
-    isTrainingEventArchived(event) ||
-    isEventFinished(event, now)
-  );
-}
-
-export function getParticipantEnrollmentRecords(
-  currentUserId: string,
-  store: DemoStore,
-  now: Date = new Date(),
-): ParticipantEnrollmentRecord[] {
-  return [...store.enrollmentRequests]
-    .filter((request) => request.submitterUid === currentUserId)
-    .map((request) => {
-      const event = store.trainingEvents.find((item) => item.id === request.eventId);
-      if (!event) {
-        return null;
-      }
-
-      return {
-        request,
-        event,
-        trainer: store.trainers.find((item) => item.id === event.trainerId),
-        organizer: event.organizerId
-          ? store.organizers.find((item) => item.id === event.organizerId) ?? null
-          : null,
-        isArchived: isParticipantEnrollmentArchived(request, event, now),
-      };
-    })
-    .filter((item): item is ParticipantEnrollmentRecord => Boolean(item))
-    .sort(
-      (left, right) =>
-        new Date(left.event.startsAt).getTime() - new Date(right.event.startsAt).getTime(),
-    );
 }
 
 function isParticipantGroupEventArchived(
@@ -189,65 +130,41 @@ function getDaysUntil(startsAt: string, now: Date) {
 }
 
 export function getParticipantDashboardModel({
-  currentUserId,
   participantProfileId,
   store,
   now = new Date(),
 }: {
-  currentUserId: string;
   participantProfileId?: string | null;
   store: DemoStore;
   now?: Date;
 }): ParticipantDashboardModel {
-  const participantRecords = getParticipantEnrollmentRecords(currentUserId, store, now);
   const participantGroupRecords = participantProfileId
     ? getParticipantGroupEventRecords(participantProfileId, store, now)
     : [];
 
-  const visibleLegacyRecords = participantRecords.filter(
-    (record) => !isSyncedGroupEnrollmentRecord(record),
-  );
-  const activeLegacyRecords = visibleLegacyRecords.filter((record) => !record.isArchived);
-  const archivedLegacyRecords = visibleLegacyRecords.filter((record) => record.isArchived);
   const activeGroupRecords = participantGroupRecords.filter((record) => !record.isArchived);
   const archivedGroupRecords = participantGroupRecords.filter((record) => record.isArchived);
-
-  const combinedActiveRecords = [
-    ...activeLegacyRecords.map((record) => ({ source: "request" as const, record })),
-    ...activeGroupRecords.map((record) => ({ source: "group" as const, record })),
-  ].sort(
+  const sortedActiveGroupRecords = [...activeGroupRecords].sort(
     (left, right) =>
-      new Date(left.record.event.startsAt).getTime() - new Date(right.record.event.startsAt).getTime(),
+      new Date(left.event.startsAt).getTime() - new Date(right.event.startsAt).getTime(),
   );
 
   return {
-    activeEnrollmentCount: activeLegacyRecords.length + activeGroupRecords.length,
-    archivedEnrollmentCount: archivedLegacyRecords.length + archivedGroupRecords.length,
-    upcomingItems: combinedActiveRecords.slice(0, 2).map((item) => ({
-      id: item.source === "request" ? item.record.request.id : item.record.eventParticipant.id,
-      event: item.record.event,
-      groupName:
-        item.source === "request"
-          ? getParticipantDashboardGroupLabel(item.record.event)
-          : getParticipantDashboardGroupLabel(item.record.event, item.record.group),
-      daysUntil: getDaysUntil(item.record.event.startsAt, now),
-      source: item.source,
+    activeEnrollmentCount: activeGroupRecords.length,
+    archivedEnrollmentCount: archivedGroupRecords.length,
+    upcomingItems: sortedActiveGroupRecords.slice(0, 2).map((record) => ({
+      id: record.eventParticipant.id,
+      event: record.event,
+      groupName: getParticipantDashboardGroupLabel(record.event, record.group),
+      daysUntil: getDaysUntil(record.event.startsAt, now),
     })),
-    pendingConfirmationItems: combinedActiveRecords
-      .filter((item) =>
-        item.source === "request"
-          ? item.record.request.attendanceConfirmationStatus === "pending"
-          : item.record.eventParticipant.attendanceConfirmationStatus === "pending",
-      )
-      .map((item) => ({
-        id: item.source === "request" ? item.record.request.id : item.record.eventParticipant.id,
-        token: item.source === "request" ? item.record.request.id : item.record.eventParticipant.id,
-        event: item.record.event,
-        groupName:
-          item.source === "request"
-            ? getParticipantDashboardGroupLabel(item.record.event)
-            : getParticipantDashboardGroupLabel(item.record.event, item.record.group),
-        source: item.source,
+    pendingConfirmationItems: sortedActiveGroupRecords
+      .filter((record) => record.eventParticipant.attendanceConfirmationStatus === "pending")
+      .map((record) => ({
+        id: record.eventParticipant.id,
+        token: record.eventParticipant.id,
+        event: record.event,
+        groupName: getParticipantDashboardGroupLabel(record.event, record.group),
       })),
   };
 }

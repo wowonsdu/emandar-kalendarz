@@ -6,7 +6,6 @@ import {
 import type {
   AppUser,
   DemoStore,
-  EnrollmentRequest,
   EventParticipant,
   Group,
   OrganizerProfile,
@@ -101,29 +100,6 @@ function createEvent(overrides: Partial<TrainingEvent> = {}): TrainingEvent {
   };
 }
 
-function createEnrollmentRequest(overrides: Partial<EnrollmentRequest> = {}): EnrollmentRequest {
-  return {
-    id: "request-1",
-    eventId: "event-1",
-    submitterUid: "user-1",
-    participantProfileId: "participant-1",
-    trainerId: "trainer-1",
-    organizerId: "organizer-1",
-    imieNazwisko: "Jan Test",
-    telefon: "500600700",
-    polecenieOdKogo: "",
-    wiadomosc: "",
-    photoStatus: "pending",
-    trainerDecision: "accepted",
-    organizerDecision: "accepted",
-    finalStatus: "accepted",
-    participantStatus: "active",
-    attendanceConfirmationStatus: "pending",
-    createdAt: "2026-04-01T09:00:00.000Z",
-    ...overrides,
-  };
-}
-
 function createEventParticipant(overrides: Partial<EventParticipant> = {}): EventParticipant {
   return {
     id: "participant-event-1",
@@ -210,19 +186,7 @@ describe("dashboard helpers", () => {
     ).toEqual(["trainer", "organizer", "participant"]);
   });
 
-  it("builds participant dashboard data from active direct and group enrollments without duplicates", () => {
-    const directEvent = createEvent({
-      id: "event-1",
-      title: "Pierwsze szkolenie",
-      startsAt: "2026-04-10T10:00:00.000Z",
-      endsAt: "2026-04-10T14:00:00.000Z",
-      scheduleDays: [
-        {
-          startsAt: "2026-04-10T10:00:00.000Z",
-          endsAt: "2026-04-10T14:00:00.000Z",
-        },
-      ],
-    });
+  it("builds participant dashboard data only from group roster records", () => {
     const groupEvent = createEvent({
       id: "event-2",
       title: "Drugie szkolenie",
@@ -250,60 +214,37 @@ describe("dashboard helpers", () => {
       ],
     });
     const store = createStore({
-      trainingEvents: [directEvent, groupEvent, archivedEvent],
-      enrollmentRequests: [
-        createEnrollmentRequest({
-          id: "request-1",
-          eventId: "event-1",
-          attendanceConfirmationStatus: "pending",
-        }),
-        createEnrollmentRequest({
-          id: "request-2",
-          eventId: "event-2",
-          eventParticipantId: "participant-event-1",
-          attendanceConfirmationStatus: "pending",
-        }),
-        createEnrollmentRequest({
-          id: "request-3",
-          eventId: "event-3",
-          attendanceConfirmationStatus: "confirmed",
-        }),
-      ],
+      trainingEvents: [groupEvent, archivedEvent],
       eventParticipants: [
         createEventParticipant({
           id: "participant-event-1",
           eventId: "event-2",
           attendanceConfirmationStatus: "pending",
         }),
+        createEventParticipant({
+          id: "participant-event-2",
+          eventId: "event-3",
+          status: "confirmed",
+          attendanceConfirmationStatus: "confirmed",
+        }),
       ],
     });
 
     const model = getParticipantDashboardModel({
-      currentUserId: "user-1",
       participantProfileId: "participant-1",
       store,
       now: new Date("2026-04-06T08:00:00.000Z"),
     });
 
-    expect(model.activeEnrollmentCount).toBe(2);
+    expect(model.activeEnrollmentCount).toBe(1);
     expect(model.archivedEnrollmentCount).toBe(1);
     expect(model.upcomingItems).toEqual([
-      expect.objectContaining({
-        id: "request-1",
-        groupName: "Bez przypisanej grupy",
-        daysUntil: 4,
-        source: "request",
-      }),
       expect.objectContaining({
         id: "participant-event-1",
         groupName: "Grupa Poranna",
         daysUntil: 5,
-        source: "group",
       }),
     ]);
-    expect(model.pendingConfirmationItems.map((item) => item.token)).toEqual([
-      "request-1",
-      "participant-event-1",
-    ]);
+    expect(model.pendingConfirmationItems.map((item) => item.token)).toEqual(["participant-event-1"]);
   });
 });

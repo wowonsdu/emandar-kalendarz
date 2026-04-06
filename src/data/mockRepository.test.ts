@@ -662,6 +662,8 @@ describe("submitEnrollment", () => {
           organizerUserId: "user-organizer-1",
           trainerId: "trainer-1",
           trainerUserId: "user-trainer-1",
+          groupId: "group-1",
+          groupName: "Grupa testowa",
         },
         {
           id: actorId,

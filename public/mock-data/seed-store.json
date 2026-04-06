@@ -1630,38 +1630,8 @@
     }
   ],
   "trainerExternalBusyMonths": [],
-  "enrollmentRequests": [
-    {
-      "id": "enrollment-krakow-grzegorz",
-      "eventId": "event-krakow-maj",
-      "trainerId": "trainer-2",
-      "organizerId": "organizer-marek",
-      "submitterUid": "user-participant-grzegorz-c",
-      "participantProfileId": "participant-48605100302",
-      "normalizedPhone": "48605100302",
-      "trainerUserId": "user-trainer-marcin",
-      "organizerUserId": "user-organizer-marek",
-      "imieNazwisko": "Grzegorz Chotnicki",
-      "telefon": "+48 605 100 302",
-      "polecenieOdKogo": "Z grupy krakowskiej",
-      "wiadomosc": "Chcę wrócić na majowy termin.",
-      "photoStatus": "ready",
-      "photoMode": "required",
-      "photoPath": "mock://enrollment-krakow-grzegorz/photo",
-      "finalStatus": "pending",
-      "participantStatus": "active",
-      "createdAt": "2026-04-01T13:00:00.000Z"
-    }
-  ],
+  "enrollmentRequests": [],
   "notifications": [
-    {
-      "id": "notification-1",
-      "userId": "user-organizer-karolina",
-      "title": "Nowe zgłoszenie uczestnika",
-      "body": "Grzegorz Chotnicki czeka na ostateczną decyzję dla terminu krakowskiego.",
-      "createdAt": "2026-04-01T13:05:00.000Z",
-      "entityType": "request"
-    },
     {
       "id": "notification-2",
       "userId": "user-admin-dariusz",

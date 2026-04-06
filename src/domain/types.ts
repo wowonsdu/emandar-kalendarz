@@ -850,12 +850,6 @@ export interface EnrollmentRequestManagementInput {
   transferTargetEventId?: string | null;
 }
 
-export interface ParticipantEnrollmentManagementInput {
-  requestId: string;
-  action: "cancel" | "transfer";
-  transferTargetEventId?: string | null;
-}
-
 export interface ParticipantGroupEventManagementInput {
   eventParticipantId: string;
   action: "cancel" | "transfer";

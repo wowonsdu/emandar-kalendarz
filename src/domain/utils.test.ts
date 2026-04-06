@@ -15,14 +15,12 @@ import {
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
-  getParticipantEnrollmentStatusLabel,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventWorkflowStatusLabel,
   groupParticipantRecordsByPriority,
   isPhotoModeEnabled,
   isPhotoModeRequired,
-  isParticipantEnrollmentActive,
   isOrganizerTrainingDraftEditable,
   isOrganizerTrainingDraftWithdrawable,
   isTrainerSharedSlotActive,
@@ -60,36 +58,6 @@ describe("deriveEnrollmentFinalStatus", () => {
 describe("participant enrollment status", () => {
   it("defaults missing participant status to active", () => {
     expect(resolveParticipantEnrollmentStatus(undefined)).toBe("active");
-  });
-
-  it("treats cancelled enrollment as inactive regardless of review status", () => {
-    expect(
-      isParticipantEnrollmentActive({
-        participantStatus: "cancelled",
-        finalStatus: "accepted",
-      }),
-    ).toBe(false);
-    expect(
-      getParticipantEnrollmentStatusLabel({
-        participantStatus: "cancelled",
-        finalStatus: "accepted",
-      }),
-    ).toBe("zrezygnowano");
-  });
-
-  it("treats rejected enrollment as archived even without participant cancellation", () => {
-    expect(
-      isParticipantEnrollmentActive({
-        participantStatus: "active",
-        finalStatus: "rejected",
-      }),
-    ).toBe(false);
-    expect(
-      getParticipantEnrollmentStatusLabel({
-        participantStatus: "active",
-        finalStatus: "rejected",
-      }),
-    ).toBe("odrzucone");
   });
 });
 
@@ -482,6 +450,7 @@ describe("permissions and sorting", () => {
       isTrainingEventPubliclyVisible({
         archivedAt: null,
         brandStatus: "supported",
+        groupId: null,
         isPublished: true,
         organizerId: null,
         organizerCollaborationStatus: "not-required",
@@ -497,11 +466,28 @@ describe("permissions and sorting", () => {
       isTrainingEventPubliclyVisible({
         archivedAt: null,
         brandStatus: "supported",
+        groupId: null,
         isPublished: true,
         organizerId: null,
         organizerCollaborationStatus: "not-required",
         publicationApprovalStatus: "pending",
         selfManagedByTrainer: true,
+        trainerCollaborationStatus: "accepted",
+      }),
+    ).toBe(false);
+  });
+
+  it("hides official event publicly when it is not attached to a group", () => {
+    expect(
+      isTrainingEventPubliclyVisible({
+        archivedAt: null,
+        brandStatus: "official",
+        groupId: null,
+        isPublished: true,
+        organizerId: "organizer-1",
+        organizerCollaborationStatus: "accepted",
+        publicationApprovalStatus: undefined,
+        selfManagedByTrainer: false,
         trainerCollaborationStatus: "accepted",
       }),
     ).toBe(false);

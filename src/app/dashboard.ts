@@ -1,8 +1,12 @@
 import {
   getHighestRole,
+  getAvailablePlaces,
+  getEventFillRate,
+  isCommunityBrandStatus,
   isTrainingEventArchived,
   resolveEnrollmentIntent,
   resolveParticipantEnrollmentStatus,
+  resolveTrainingEventStatus,
 } from "@/domain/utils";
 import type {
   AppUser,
@@ -11,6 +15,7 @@ import type {
   EnrollmentFinalStatus,
   EventParticipant,
   Group,
+  GroupMember,
   OrganizerProfile,
   TrainerProfile,
   TrainingEvent,
@@ -67,6 +72,38 @@ export type ParticipantDashboardModel = {
   pendingConfirmationItems: ParticipantDashboardConfirmationItem[];
 };
 
+export type OrganizerOfficialDashboardRequestRecord = {
+  request: EnrollmentRequest;
+  event: TrainingEvent;
+  group: Group;
+};
+
+export type OrganizerOfficialDashboardGroupSummary = {
+  group: Group;
+  activeMemberCount: number;
+  pendingRequestCount: number;
+  upcomingEventCount: number;
+  nextEvent: TrainingEvent | null;
+};
+
+export type OrganizerOfficialDashboardEventSummary = {
+  event: TrainingEvent;
+  group: Group;
+  pendingRequestCount: number;
+  missingPeople: number;
+  fillRate: number;
+};
+
+export type OrganizerOfficialDashboardModel = {
+  groups: Group[];
+  activeMemberCount: number;
+  pipelineEvents: TrainingEvent[];
+  requestHistoryRecords: OrganizerOfficialDashboardRequestRecord[];
+  actionablePendingRequests: OrganizerOfficialDashboardRequestRecord[];
+  groupSummaries: OrganizerOfficialDashboardGroupSummary[];
+  eventsRequiringDecision: OrganizerOfficialDashboardEventSummary[];
+};
+
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
 
 export function getDashboardPerspectives(
@@ -89,6 +126,18 @@ export function getParticipantDashboardGroupLabel(
   group?: Pick<Group, "name"> | null,
 ) {
   return group?.name ?? event.groupName ?? "Bez przypisanej grupy";
+}
+
+function isTransferredAwayByStaff(
+  request: Pick<EnrollmentRequest, "participantStatus" | "participantActionSource">,
+) {
+  return request.participantStatus === "cancelled" && request.participantActionSource === "staff";
+}
+
+function isParticipantCancelledEnrollment(
+  request: Pick<EnrollmentRequest, "participantStatus">,
+) {
+  return resolveParticipantEnrollmentStatus(request.participantStatus) === "cancelled";
 }
 
 function isEventFinished(event: Pick<TrainingEvent, "startsAt" | "endsAt" | "scheduleDays">, now: Date) {
@@ -373,5 +422,168 @@ export function getParticipantDashboardModel({
         event: record.event,
         groupName: getParticipantDashboardGroupLabel(record.event, record.group),
       })),
+  };
+}
+
+function isManagedOrganizerOfficialEvent(
+  event: TrainingEvent,
+  activeGroupIds: Set<string>,
+) {
+  return Boolean(event.groupId && activeGroupIds.has(event.groupId) && !isCommunityBrandStatus(event.brandStatus));
+}
+
+function isUpcomingOrganizerPipelineEvent(event: TrainingEvent, now: Date) {
+  const status = resolveTrainingEventStatus(event.status);
+  return !isTrainingEventArchived(event) && !isEventFinished(event, now) && (status === "active" || status === "confirmed");
+}
+
+function isOrganizerDashboardRequestVisible(
+  request: EnrollmentRequest,
+) {
+  if (resolveEnrollmentIntent(request.intent) !== "participating") {
+    return false;
+  }
+
+  if (isTransferredAwayByStaff(request)) {
+    return false;
+  }
+
+  if (isParticipantCancelledEnrollment(request)) {
+    return false;
+  }
+
+  return true;
+}
+
+function getActiveGroupMemberCount(groupMembers: GroupMember[], groupId: string) {
+  return groupMembers.filter(
+    (member) => member.groupId === groupId && member.membershipStatus === "active",
+  ).length;
+}
+
+export function getOrganizerOfficialDashboardModel({
+  organizerProfileId,
+  store,
+  now = new Date(),
+}: {
+  organizerProfileId?: string | null;
+  store: DemoStore;
+  now?: Date;
+}): OrganizerOfficialDashboardModel {
+  if (!organizerProfileId) {
+    return {
+      groups: [],
+      activeMemberCount: 0,
+      pipelineEvents: [],
+      requestHistoryRecords: [],
+      actionablePendingRequests: [],
+      groupSummaries: [],
+      eventsRequiringDecision: [],
+    };
+  }
+
+  const groups = (store.groups ?? [])
+    .filter((group) => group.organizerId === organizerProfileId && group.status === "active")
+    .sort((left, right) => left.name.localeCompare(right.name, "pl"));
+  const activeGroupIds = new Set(groups.map((group) => group.id));
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+  const managedEvents = (store.trainingEvents ?? []).filter((event) =>
+    isManagedOrganizerOfficialEvent(event, activeGroupIds),
+  );
+  const pipelineEvents = managedEvents
+    .filter((event) => isUpcomingOrganizerPipelineEvent(event, now))
+    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+  const visibleRequests = (store.enrollmentRequests ?? [])
+    .filter((request) => isOrganizerDashboardRequestVisible(request))
+    .map((request) => {
+      const event = managedEvents.find((item) => item.id === request.eventId);
+      if (!event?.groupId) {
+        return null;
+      }
+
+      const group = groupById.get(event.groupId);
+      if (!group) {
+        return null;
+      }
+
+      return {
+        request,
+        event,
+        group,
+      };
+    })
+    .filter((item): item is OrganizerOfficialDashboardRequestRecord => Boolean(item));
+  const actionablePendingRequests = visibleRequests.filter(
+    ({ request }) => request.finalStatus === "pending" || request.finalStatus === "partial",
+  );
+  const activeMemberCount = groups.reduce(
+    (sum, group) => sum + getActiveGroupMemberCount(store.groupMembers ?? [], group.id),
+    0,
+  );
+  const groupSummaries = groups
+    .map((group) => {
+      const groupPipelineEvents = pipelineEvents.filter((event) => event.groupId === group.id);
+      const groupPendingRequests = actionablePendingRequests.filter(
+        ({ event }) => event.groupId === group.id,
+      );
+
+      return {
+        group,
+        activeMemberCount: getActiveGroupMemberCount(store.groupMembers ?? [], group.id),
+        pendingRequestCount: groupPendingRequests.length,
+        upcomingEventCount: groupPipelineEvents.length,
+        nextEvent: groupPipelineEvents[0] ?? null,
+      };
+    })
+    .sort((left, right) => {
+      if (right.pendingRequestCount !== left.pendingRequestCount) {
+        return right.pendingRequestCount - left.pendingRequestCount;
+      }
+
+      if (right.upcomingEventCount !== left.upcomingEventCount) {
+        return right.upcomingEventCount - left.upcomingEventCount;
+      }
+
+      return left.group.name.localeCompare(right.group.name, "pl");
+    });
+  const eventsRequiringDecision = pipelineEvents
+    .map((event) => {
+      const group = event.groupId ? groupById.get(event.groupId) ?? null : null;
+      if (!group) {
+        return null;
+      }
+
+      const pendingRequestCount = actionablePendingRequests.filter(
+        ({ event: requestEvent }) => requestEvent.id === event.id,
+      ).length;
+      if (pendingRequestCount <= 0) {
+        return null;
+      }
+
+      return {
+        event,
+        group,
+        pendingRequestCount,
+        missingPeople: getAvailablePlaces(event),
+        fillRate: getEventFillRate(event),
+      };
+    })
+    .filter((item): item is OrganizerOfficialDashboardEventSummary => Boolean(item))
+    .sort((left, right) => {
+      if (right.pendingRequestCount !== left.pendingRequestCount) {
+        return right.pendingRequestCount - left.pendingRequestCount;
+      }
+
+      return new Date(left.event.startsAt).getTime() - new Date(right.event.startsAt).getTime();
+    });
+
+  return {
+    groups,
+    activeMemberCount,
+    pipelineEvents,
+    requestHistoryRecords: visibleRequests,
+    actionablePendingRequests,
+    groupSummaries,
+    eventsRequiringDecision,
   };
 }

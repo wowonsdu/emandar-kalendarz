@@ -39,6 +39,7 @@ import { useAppState } from "../providers/AppProviders";
 import {
   type DashboardPerspective,
   getDashboardPerspectives,
+  getOrganizerOfficialDashboardModel,
   getParticipantDashboardModel,
   getParticipantEnrollmentViewRecords,
   type ParticipantGroupEventRecord,
@@ -1111,6 +1112,16 @@ function getDashboardEventLabel(
 ) {
   const title = getEventCardTitle(event, currentUser, store) || event.title;
   const bounds = getTrainingEventScheduleBounds(event);
+  return `${title} • ${formatDate(bounds.startsAt)}`;
+}
+
+function getOrganizerOfficialDashboardEventLabel(
+  event: TrainingEvent,
+  store: ReturnType<typeof useAppState>["store"],
+) {
+  const group = event.groupId ? store.groups.find((item) => item.id === event.groupId) ?? null : null;
+  const bounds = getTrainingEventScheduleBounds(event);
+  const title = group?.name ?? event.groupName ?? event.title ?? event.location;
   return `${title} • ${formatDate(bounds.startsAt)}`;
 }
 
@@ -4205,6 +4216,7 @@ function OperationalDashboardPerspectiveView({
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser.id) ?? null;
   const isTrainerPerspective = perspective === "trainer";
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
+  const dashboardNow = useMemo(() => new Date(), []);
   const relevantEvents = useMemo(
     () =>
       getScopedManagedEventsForPerspective({
@@ -4278,8 +4290,122 @@ function OperationalDashboardPerspectiveView({
     [activeCommunityEvents, confirmedCommunityEvents],
   );
   const hasCommunityKpiData = communityPerformanceData.length > 0;
-  const dashboardMonthBuckets = useMemo(() => getDashboardMonthBuckets(new Date()), []);
+  const dashboardMonthBuckets = useMemo(() => getDashboardMonthBuckets(dashboardNow), [dashboardNow]);
   const dashboardWindow = dashboardMonthBuckets.at(-1);
+  const organizerOfficialDashboard = useMemo(
+    () =>
+      !isTrainerPerspective && organizerProfile
+        ? getOrganizerOfficialDashboardModel({
+            organizerProfileId: organizerProfile.id,
+            store,
+            now: dashboardNow,
+          })
+        : null,
+    [dashboardNow, isTrainerPerspective, organizerProfile, store],
+  );
+  const organizerAnalyticsEventsInRange = useMemo(() => {
+    if (!organizerOfficialDashboard || !dashboardWindow) {
+      return [];
+    }
+
+    return organizerOfficialDashboard.pipelineEvents.filter((event) =>
+      isDateWithinRange(event.startsAt, dashboardNow, dashboardWindow.end),
+    );
+  }, [dashboardNow, dashboardWindow, organizerOfficialDashboard]);
+  const organizerDashboardEventData = useMemo(
+    () =>
+      organizerAnalyticsEventsInRange.map((event) => ({
+        id: event.id,
+        label: getOrganizerOfficialDashboardEventLabel(event, store),
+        startsAt: event.startsAt,
+        statusLabel: getTrainingEventStatusLabel(event.status),
+        status: resolveTrainingEventStatus(event.status),
+        fillRate: getEventFillRate(event),
+        missingPeople: getAvailablePlaces(event),
+        occupiedPlaces: event.enrolledCount,
+        capacity: event.capacity,
+        availablePlaces: getAvailablePlaces(event),
+      })),
+    [organizerAnalyticsEventsInRange, store],
+  );
+  const organizerMissingPeopleData = useMemo(
+    () =>
+      [...organizerDashboardEventData].sort((left, right) => {
+        if (right.missingPeople !== left.missingPeople) {
+          return right.missingPeople - left.missingPeople;
+        }
+
+        return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+      }),
+    [organizerDashboardEventData],
+  );
+  const organizerFillRateData = useMemo(
+    () =>
+      [...organizerDashboardEventData].sort((left, right) => {
+        if (left.fillRate !== right.fillRate) {
+          return left.fillRate - right.fillRate;
+        }
+
+        return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+      }),
+    [organizerDashboardEventData],
+  );
+  const organizerCapacityByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => {
+        const monthEvents = organizerAnalyticsEventsInRange.filter((event) =>
+          isDateWithinRange(event.startsAt, bucket.start, bucket.end),
+        );
+
+        return {
+          key: bucket.key,
+          label: bucket.label,
+          totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
+          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
+        };
+      }),
+    [dashboardMonthBuckets, organizerAnalyticsEventsInRange],
+  );
+  const organizerAnalyticsRequestsInRange = useMemo(() => {
+    if (!organizerOfficialDashboard || !dashboardWindow) {
+      return [];
+    }
+
+    const rangeStart = dashboardMonthBuckets[0]?.start ?? dashboardNow;
+    return organizerOfficialDashboard.requestHistoryRecords.filter(({ request }) =>
+      isDateWithinRange(request.createdAt, rangeStart, dashboardWindow.end),
+    );
+  }, [dashboardMonthBuckets, dashboardNow, dashboardWindow, organizerOfficialDashboard]);
+  const organizerRequestsByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => ({
+        key: bucket.key,
+        label: bucket.label,
+        total: organizerAnalyticsRequestsInRange.filter(({ request }) =>
+          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
+        ).length,
+      })),
+    [dashboardMonthBuckets, organizerAnalyticsRequestsInRange],
+  );
+  const organizerRequestDecisionsByMonthData = useMemo(
+    () =>
+      dashboardMonthBuckets.map((bucket) => {
+        const monthRequests = organizerAnalyticsRequestsInRange.filter(({ request }) =>
+          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
+        );
+
+        return {
+          key: bucket.key,
+          label: bucket.label,
+          accepted: monthRequests.filter(({ request }) => request.finalStatus === "accepted").length,
+          pending: monthRequests.filter(({ request }) => request.finalStatus === "pending").length,
+          rejected: monthRequests.filter(({ request }) => request.finalStatus === "rejected").length,
+          partial: monthRequests.filter(({ request }) => request.finalStatus === "partial").length,
+        };
+      }),
+    [dashboardMonthBuckets, organizerAnalyticsRequestsInRange],
+  );
   const analyticsEventsInRange = useMemo(() => {
     if (!dashboardWindow) {
       return [];
@@ -4464,6 +4590,292 @@ function OperationalDashboardPerspectiveView({
       ? store.relations.filter((item) => item.organizerId === organizerProfile.id).length
       : 0;
   }, [isTrainerPerspective, organizerProfile, store.relations, trainerProfile]);
+
+  if (!isTrainerPerspective) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+          <StatCard
+            label="Grupy"
+            value={organizerOfficialDashboard?.groups.length ?? 0}
+            icon={Users}
+          />
+          <StatCard
+            label="Aktywni członkowie"
+            value={organizerOfficialDashboard?.activeMemberCount ?? 0}
+            icon={ShieldCheck}
+          />
+          <StatCard
+            label="Terminy w pipeline"
+            value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
+            icon={CalendarDays}
+          />
+          <StatCard
+            label="Czekają na decyzję"
+            value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
+            icon={Bell}
+          />
+        </div>
+
+        <section className="space-y-4">
+          <div>
+            <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
+              Najbliższe terminy i ile osób jeszcze brakuje
+            </p>
+          </div>
+          <div className="grid gap-4 xl:grid-cols-3">
+            <DashboardChartCard
+              title="Brakuje osób do domknięcia"
+              description="Najbliższe terminy uporządkowane według liczby brakujących miejsc."
+            >
+              {organizerMissingPeopleData.length === 0 ? (
+                <DashboardChartEmptyState message="Brak aktywnych grupowych szkoleń Emandar w najbliższych 3 miesiącach." />
+              ) : (
+                <div style={{ height: `${getDashboardChartHeight(organizerMissingPeopleData.length)}px` }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={organizerMissingPeopleData}
+                      layout="vertical"
+                      margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                    >
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={190}
+                        tick={{ fill: "#123e78", fontSize: 12 }}
+                      />
+                      <Tooltip content={<MissingPeopleTooltip />} />
+                      <Bar dataKey="missingPeople" fill="#174f9a" radius={[0, 14, 14, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </DashboardChartCard>
+
+            <DashboardChartCard
+              title="Zapełnienie terminów"
+              description="Porównanie przyszłych terminów według poziomu zajętych miejsc."
+            >
+              {organizerFillRateData.length === 0 ? (
+                <DashboardChartEmptyState message="Brak terminów do porównania w tym oknie czasu." />
+              ) : (
+                <div style={{ height: `${getDashboardChartHeight(organizerFillRateData.length)}px` }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={organizerFillRateData}
+                      layout="vertical"
+                      margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
+                    >
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis
+                        type="number"
+                        domain={[0, 100]}
+                        tickFormatter={(value) => `${value}%`}
+                        stroke="#6982a0"
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="label"
+                        width={190}
+                        tick={{ fill: "#123e78", fontSize: 12 }}
+                      />
+                      <Tooltip content={<CancelledEventsTooltip />} />
+                      <Bar dataKey="fillRate" fill="#174f9a" radius={[0, 14, 14, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </DashboardChartCard>
+
+            <DashboardChartCard
+              title="Obłożenie w miesiącach"
+              description="Łączna liczba zapisanych osób versus cała pula miejsc w pipeline grup."
+            >
+              <DashboardLegend
+                items={[
+                  { label: "Zapisani", color: "#174f9a" },
+                  { label: "Liczba miejsc", color: "#88aee0" },
+                ]}
+              />
+              <div className="h-[220px] sm:h-[280px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={organizerCapacityByMonthData}
+                    margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+                  >
+                    <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                    <XAxis dataKey="label" stroke="#6982a0" />
+                    <YAxis allowDecimals={false} stroke="#6982a0" />
+                    <Tooltip content={<CapacityByMonthTooltip />} />
+                    <Bar dataKey="enrolledCount" fill="#174f9a" radius={[10, 10, 0, 0]} />
+                    <Bar dataKey="totalCapacity" fill="#88aee0" radius={[10, 10, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </DashboardChartCard>
+          </div>
+        </section>
+
+        <section className="space-y-4">
+          <div>
+            <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
+              Jak spływają zgłoszenia do grupowych szkoleń
+            </p>
+          </div>
+          <div className="grid gap-4 xl:grid-cols-2">
+            <DashboardChartCard
+              title="Zgłoszenia udziału w miesiącach"
+              description="Nowe prośby o dołączenie do szkoleń Emandar policzone po miesiącu utworzenia."
+            >
+              {organizerAnalyticsRequestsInRange.length === 0 ? (
+                <DashboardChartEmptyState message="Brak zgłoszeń udziału w bieżącym oknie 3 miesięcy." />
+              ) : (
+                <div className="h-[220px] sm:h-[280px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={organizerRequestsByMonthData}
+                      margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+                    >
+                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                      <XAxis dataKey="label" stroke="#6982a0" />
+                      <YAxis allowDecimals={false} stroke="#6982a0" />
+                      <Tooltip content={<RequestsByMonthTooltip />} />
+                      <Bar dataKey="total" fill="#174f9a" radius={[10, 10, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </DashboardChartCard>
+
+            <DashboardChartCard
+              title="Statusy zgłoszeń udziału"
+              description="Accepted, pending i rejected są liczone z requestów, także po syncu do rosteru."
+            >
+              {organizerAnalyticsRequestsInRange.length === 0 ? (
+                <DashboardChartEmptyState message="Brak zgłoszeń udziału do pokazania w tym okresie." />
+              ) : (
+                <>
+                  <DashboardLegend
+                    items={[
+                      { label: "Potwierdzono", color: "#0ea5a4" },
+                      { label: "Oczekujące", color: "#174f9a" },
+                      { label: "Odrzucono", color: "#c84b4b" },
+                    ]}
+                  />
+                  <div className="h-[220px] sm:h-[280px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={organizerRequestDecisionsByMonthData}
+                        margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+                      >
+                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+                        <XAxis dataKey="label" stroke="#6982a0" />
+                        <YAxis allowDecimals={false} stroke="#6982a0" />
+                        <Tooltip content={<RequestDecisionsTooltip />} />
+                        <Bar dataKey="accepted" stackId="status" fill="#0ea5a4" />
+                        <Bar dataKey="pending" stackId="status" fill="#174f9a" />
+                        <Bar dataKey="rejected" stackId="status" fill="#c84b4b" radius={[10, 10, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
+              )}
+            </DashboardChartCard>
+          </div>
+        </section>
+
+        <div className="grid gap-4 sm:gap-6 xl:grid-cols-3">
+          <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+            <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">
+              Najbliższe grupy do ogarnięcia
+            </h3>
+            <div className="mt-5 space-y-4">
+              {(organizerOfficialDashboard?.groupSummaries ?? []).slice(0, 4).map((summary) => (
+                <div
+                  key={summary.group.id}
+                  className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+                >
+                  <p className="font-semibold text-brand-navy">{summary.group.name}</p>
+                  <p className="mt-1 text-sm text-brand-muted">
+                    Aktywni członkowie: {summary.activeMemberCount}
+                  </p>
+                  <p className="text-sm text-brand-muted">
+                    Terminy w pipeline: {summary.upcomingEventCount}
+                  </p>
+                  <p className="text-sm text-brand-muted">
+                    Czekają na decyzję: {summary.pendingRequestCount}
+                  </p>
+                  <p className="mt-2 text-sm text-brand-navy">
+                    Najbliższy termin:{" "}
+                    {summary.nextEvent
+                      ? `${formatDate(summary.nextEvent.startsAt)} • ${summary.nextEvent.location}`
+                      : "Brak"}
+                  </p>
+                </div>
+              ))}
+              {(organizerOfficialDashboard?.groupSummaries.length ?? 0) === 0 && (
+                <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                  Brak aktywnych grup organizatora.
+                </p>
+              )}
+            </div>
+          </article>
+
+          <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+            <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">
+              Terminy wymagające decyzji
+            </h3>
+            <div className="mt-5 space-y-4">
+              {(organizerOfficialDashboard?.eventsRequiringDecision ?? []).slice(0, 4).map((summary) => (
+                <div
+                  key={summary.event.id}
+                  className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+                >
+                  <p className="font-semibold text-brand-navy">{summary.group.name}</p>
+                  <p className="mt-1 text-sm text-brand-muted">
+                    {formatDate(summary.event.startsAt)} • {summary.event.location}
+                  </p>
+                  <p className="mt-2 text-sm text-brand-navy">
+                    Oczekujące zgłoszenia: {summary.pendingRequestCount}
+                  </p>
+                  <p className="text-sm text-brand-muted">
+                    Wolne miejsca: {summary.missingPeople} • Zapełnienie: {Math.round(summary.fillRate)}%
+                  </p>
+                </div>
+              ))}
+              {(organizerOfficialDashboard?.eventsRequiringDecision.length ?? 0) === 0 && (
+                <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                  Brak terminów z oczekującymi zgłoszeniami.
+                </p>
+              )}
+            </div>
+          </article>
+
+          <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
+            <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">Ostatnie powiadomienia</h3>
+            <div className="mt-5 space-y-4">
+              {store.notifications.slice(0, 4).map((notification) => (
+                <div
+                  key={notification.id}
+                  className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+                >
+                  <p className="font-semibold text-brand-navy">{notification.title}</p>
+                  <p className="mt-1 text-sm text-brand-muted">{notification.body}</p>
+                </div>
+              ))}
+              {store.notifications.length === 0 && (
+                <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                  Brak nowych powiadomień.
+                </p>
+              )}
+            </div>
+          </article>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

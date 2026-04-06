@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   getDashboardPerspectives,
+  getOrganizerOfficialDashboardModel,
   getParticipantDashboardModel,
   getParticipantPendingEnrollmentRequestRecords,
 } from "./dashboard";
@@ -10,6 +11,7 @@ import type {
   EnrollmentRequest,
   EventParticipant,
   Group,
+  GroupMember,
   OrganizerProfile,
   TrainerProfile,
   TrainingEvent,
@@ -141,6 +143,25 @@ function createEnrollmentRequest(overrides: Partial<EnrollmentRequest> = {}): En
     finalStatus: "pending",
     participantStatus: "active",
     createdAt: "2026-04-01T09:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createGroupMember(overrides: Partial<GroupMember> = {}): GroupMember {
+  return {
+    id: "group-member-1",
+    groupId: "group-1",
+    organizerId: "organizer-1",
+    organizerUserId: "organizer-user-1",
+    trainerId: "trainer-1",
+    trainerUserId: "trainer-user-1",
+    participantProfileId: "participant-1",
+    participantUserId: "user-1",
+    participantDisplayName: "Jan Test",
+    participantPhone: "500600700",
+    priority: "regularni",
+    membershipStatus: "active",
+    joinedAt: "2026-04-01T09:00:00.000Z",
     ...overrides,
   };
 }
@@ -358,5 +379,158 @@ describe("dashboard helpers", () => {
 
     expect(records.map((record) => record.request.id)).toEqual(["request-community"]);
     expect(records[0]?.kind).toBe("request");
+  });
+
+  it("builds organizer official dashboard from active groups and grouped official requests", () => {
+    const organizerGroup = createGroup({
+      id: "group-1",
+      name: "EnergyTeam x1",
+    });
+    const secondOrganizerGroup = createGroup({
+      id: "group-2",
+      name: "Centralna",
+    });
+    const foreignGroup = createGroup({
+      id: "group-foreign",
+      organizerId: "organizer-foreign",
+      name: "Obca grupa",
+    });
+    const groupedEventPending = createEvent({
+      id: "event-group-1",
+      title: "Spotkanie z Ola",
+      groupId: "group-1",
+      groupName: "EnergyTeam x1",
+      startsAt: "2026-04-10T10:00:00.000Z",
+      endsAt: "2026-04-10T14:00:00.000Z",
+      scheduleDays: [
+        {
+          startsAt: "2026-04-10T10:00:00.000Z",
+          endsAt: "2026-04-10T14:00:00.000Z",
+        },
+      ],
+      capacity: 10,
+      enrolledCount: 6,
+    });
+    const groupedEventAccepted = createEvent({
+      id: "event-group-2",
+      title: "Jacek Lodz",
+      groupId: "group-2",
+      groupName: "Centralna",
+      startsAt: "2026-04-16T10:00:00.000Z",
+      endsAt: "2026-04-16T14:00:00.000Z",
+      scheduleDays: [
+        {
+          startsAt: "2026-04-16T10:00:00.000Z",
+          endsAt: "2026-04-16T14:00:00.000Z",
+        },
+      ],
+      capacity: 12,
+      enrolledCount: 10,
+      status: "confirmed",
+    });
+    const communityEvent = createEvent({
+      id: "event-community",
+      brandStatus: "supported",
+      groupId: "group-1",
+      groupName: "EnergyTeam x1",
+      title: "Community night",
+    });
+    const store = createStore({
+      groups: [organizerGroup, secondOrganizerGroup, foreignGroup],
+      groupMembers: [
+        createGroupMember({
+          id: "member-1",
+          groupId: "group-1",
+          participantProfileId: "participant-1",
+        }),
+        createGroupMember({
+          id: "member-2",
+          groupId: "group-1",
+          participantProfileId: "participant-2",
+        }),
+        createGroupMember({
+          id: "member-3",
+          groupId: "group-2",
+          participantProfileId: "participant-3",
+        }),
+        createGroupMember({
+          id: "member-removed",
+          groupId: "group-2",
+          participantProfileId: "participant-4",
+          membershipStatus: "removed",
+        }),
+      ],
+      trainingEvents: [groupedEventPending, groupedEventAccepted, communityEvent],
+      enrollmentRequests: [
+        createEnrollmentRequest({
+          id: "request-pending",
+          eventId: "event-group-1",
+          createdAt: "2026-04-03T09:00:00.000Z",
+        }),
+        createEnrollmentRequest({
+          id: "request-accepted",
+          eventId: "event-group-2",
+          finalStatus: "accepted",
+          eventParticipantId: "participant-event-accepted",
+          createdAt: "2026-04-04T09:00:00.000Z",
+        }),
+        createEnrollmentRequest({
+          id: "request-transferred",
+          eventId: "event-group-1",
+          participantStatus: "cancelled",
+          participantActionSource: "staff",
+          createdAt: "2026-04-05T09:00:00.000Z",
+        }),
+        createEnrollmentRequest({
+          id: "request-community",
+          eventId: "event-community",
+          createdAt: "2026-04-06T09:00:00.000Z",
+        }),
+      ],
+      eventParticipants: [
+        createEventParticipant({
+          id: "participant-event-accepted",
+          eventId: "event-group-2",
+        }),
+      ],
+    });
+
+    const model = getOrganizerOfficialDashboardModel({
+      organizerProfileId: "organizer-1",
+      store,
+      now: new Date("2026-04-07T08:00:00.000Z"),
+    });
+
+    expect(model.groups.map((group) => group.id)).toEqual(["group-2", "group-1"]);
+    expect(model.activeMemberCount).toBe(3);
+    expect(model.pipelineEvents.map((event) => event.id)).toEqual(["event-group-1", "event-group-2"]);
+    expect(model.actionablePendingRequests.map((record) => record.request.id)).toEqual(["request-pending"]);
+    expect(model.requestHistoryRecords.map((record) => record.request.id)).toEqual([
+      "request-pending",
+      "request-accepted",
+    ]);
+    expect(model.groupSummaries).toEqual([
+      expect.objectContaining({
+        group: expect.objectContaining({ id: "group-1" }),
+        activeMemberCount: 2,
+        pendingRequestCount: 1,
+        upcomingEventCount: 1,
+        nextEvent: expect.objectContaining({ id: "event-group-1" }),
+      }),
+      expect.objectContaining({
+        group: expect.objectContaining({ id: "group-2" }),
+        activeMemberCount: 1,
+        pendingRequestCount: 0,
+        upcomingEventCount: 1,
+        nextEvent: expect.objectContaining({ id: "event-group-2" }),
+      }),
+    ]);
+    expect(model.eventsRequiringDecision).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({ id: "event-group-1" }),
+        pendingRequestCount: 1,
+        missingPeople: 4,
+      }),
+    ]);
   });
 });

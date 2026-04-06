@@ -1125,6 +1125,30 @@ function getOrganizerOfficialDashboardEventLabel(
   return `${title} • ${formatDate(bounds.startsAt)}`;
 }
 
+function getDaysUntilLabel(startsAt: string, now: Date) {
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+
+  const eventDay = new Date(startsAt);
+  eventDay.setHours(0, 0, 0, 0);
+
+  const daysUntil = Math.max(0, Math.round((eventDay.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+
+  if (daysUntil === 0) {
+    return "dzisiaj";
+  }
+
+  if (daysUntil === 1) {
+    return "za 1 dzień";
+  }
+
+  if (daysUntil % 10 >= 2 && daysUntil % 10 <= 4 && (daysUntil % 100 < 12 || daysUntil % 100 > 14)) {
+    return `za ${daysUntil} dni`;
+  }
+
+  return `za ${daysUntil} dni`;
+}
+
 function isOperationalEnrollmentRequest(
   request: EnrollmentRequest,
   store: ReturnType<typeof useAppState>["store"],
@@ -4607,7 +4631,9 @@ function OperationalDashboardPerspectiveView({
 
   if (!isTrainerPerspective) {
     const nextPipelineEvent = organizerOfficialDashboard?.pipelineEvents[0] ?? null;
-    const nextPipelineEventDate = nextPipelineEvent ? formatDate(nextPipelineEvent.startsAt) : "Brak";
+    const nextPipelineEventDate = nextPipelineEvent
+      ? getDaysUntilLabel(nextPipelineEvent.startsAt, dashboardNow)
+      : "Brak";
     const nextPipelineEventGroup =
       nextPipelineEvent?.groupName ??
       (nextPipelineEvent?.groupId

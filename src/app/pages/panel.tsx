@@ -7020,16 +7020,6 @@ export function GroupsPage() {
               Wróć do listy
             </Link>
           </div>
-        ) : canCreateGroups ? (
-          <div className="flex flex-wrap gap-3">
-            <Link
-              to="/panel/grupy/utworz"
-              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-            >
-              <Plus size={16} />
-              Nowa grupa
-            </Link>
-          </div>
         ) : undefined
       }
     >

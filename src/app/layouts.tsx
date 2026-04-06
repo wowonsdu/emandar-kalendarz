@@ -21,6 +21,7 @@ import {
   HeaderBackButton,
   PanelHeaderTitle,
   PublicDesktopActions,
+  buildStandardHeaderInnerClassName,
   getHeaderBackConfig,
   resolveHeaderBackTarget,
 } from "./header-back";
@@ -163,7 +164,11 @@ export function PublicLayout() {
   return (
     <div className="min-h-screen overflow-x-clip bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:gap-6 sm:px-6 sm:py-4 lg:px-8">
+        <div
+          className={buildStandardHeaderInnerClassName(
+            "mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 sm:gap-6 sm:px-6 lg:px-8",
+          )}
+        >
           <div className="min-w-0 md:hidden">
             <BrandMark />
           </div>
@@ -573,7 +578,11 @@ export function PanelLayout() {
 
         <div className="min-w-0">
           <header className="sticky top-0 z-30 border-b border-brand-line/80 bg-white/90 backdrop-blur-xl">
-            <div className="flex items-center justify-between gap-3 px-3 py-3 sm:gap-4 sm:px-6 sm:py-4 xl:px-10">
+            <div
+              className={buildStandardHeaderInnerClassName(
+                "flex items-center justify-between gap-3 px-3 sm:gap-4 sm:px-6 xl:px-10",
+              )}
+            >
               <PanelHeaderTitle
                 title="Panel zarzadzania"
                 showBackButton={panelBackConfig.showBackButton}

@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   PanelHeaderTitle,
   PublicDesktopActions,
+  STANDARD_HEADER_HEIGHT_CLASS,
+  buildStandardHeaderInnerClassName,
   getHeaderBackConfig,
   resolveHeaderBackTarget,
 } from "./header-back";
@@ -146,6 +148,12 @@ describe("header back target resolution", () => {
 });
 
 describe("header rendering", () => {
+  it("builds the same standard header height class for every layout wrapper", () => {
+    expect(STANDARD_HEADER_HEIGHT_CLASS).toBe("h-[72px] md:h-20");
+    expect(buildStandardHeaderInnerClassName("flex items-center")).toContain(STANDARD_HEADER_HEIGHT_CLASS);
+    expect(buildStandardHeaderInnerClassName("flex items-center")).toContain("flex items-center");
+  });
+
   it("renders the panel desktop back button before the panel title", () => {
     const markup = renderToStaticMarkup(
       <PanelHeaderTitle

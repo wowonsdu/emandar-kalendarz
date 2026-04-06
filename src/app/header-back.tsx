@@ -12,6 +12,8 @@ export type HeaderBackTarget =
   | { kind: "history" }
   | { kind: "path"; path: string };
 
+export const STANDARD_HEADER_HEIGHT_CLASS = "h-[72px] md:h-20";
+
 type HeaderLayoutKind = "public" | "panel";
 
 type HeaderBackConfigInput = {
@@ -190,6 +192,10 @@ export function HeaderBackButton({
       <ArrowLeft size={20} />
     </button>
   );
+}
+
+export function buildStandardHeaderInnerClassName(className: string) {
+  return `${STANDARD_HEADER_HEIGHT_CLASS} ${className}`.trim();
 }
 
 export function PanelHeaderTitle({

@@ -4,9 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   EnrollmentRequestDecisionButtons,
   EnrollmentRequestSlimRow,
+  splitGroupsByArchivedStatus,
   splitEnrollmentRequestsByIntent,
 } from "./pages/panel";
-import type { EnrollmentRequest, TrainingEvent } from "@/domain/types";
+import type { EnrollmentRequest, Group, TrainingEvent } from "@/domain/types";
 
 function createEnrollmentRequest(
   overrides: Partial<EnrollmentRequest> = {},
@@ -53,6 +54,21 @@ function createTrainingEvent(overrides: Partial<TrainingEvent> = {}): TrainingEv
     brandStatus: "official",
     publicationApprovalStatus: "accepted",
     status: "active",
+    ...overrides,
+  };
+}
+
+function createGroup(overrides: Partial<Group> = {}): Group {
+  return {
+    id: "group-1",
+    name: "Grupa testowa",
+    organizerId: "organizer-1",
+    trainerId: "trainer-1",
+    status: "active",
+    defaultEventType: "training",
+    defaultConfirmationLeadTimeDays: 7,
+    defaultJoinAudience: "new-people",
+    createdAt: "2026-04-01T09:00:00.000Z",
     ...overrides,
   };
 }
@@ -179,5 +195,17 @@ describe("EnrollmentRequestDecisionButtons", () => {
 
     expect(markup).toContain("Potwierdź");
     expect(markup).not.toContain("Odrzuć");
+  });
+});
+
+describe("splitGroupsByArchivedStatus", () => {
+  it("separates active groups from archived ones", () => {
+    const result = splitGroupsByArchivedStatus([
+      createGroup({ id: "group-active", status: "active" }),
+      createGroup({ id: "group-archived", status: "archived" }),
+    ]);
+
+    expect(result.active.map((group) => group.id)).toEqual(["group-active"]);
+    expect(result.archived.map((group) => group.id)).toEqual(["group-archived"]);
   });
 });

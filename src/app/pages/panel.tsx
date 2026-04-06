@@ -625,6 +625,13 @@ function sortGroupsByStatusAndName(groups: Group[]) {
   });
 }
 
+export function splitGroupsByArchivedStatus(groups: Group[]) {
+  return {
+    active: groups.filter((group) => group.status !== "archived"),
+    archived: groups.filter((group) => group.status === "archived"),
+  };
+}
+
 function getParticipantConfirmationLabel(profile?: ParticipantProfile | null) {
   if (!profile) {
     return "Brak profilu";
@@ -6264,6 +6271,7 @@ export function GroupsPage() {
     {},
   );
   const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
+  const [isArchivedGroupsOpen, setIsArchivedGroupsOpen] = useState(false);
   const [expandedMemberIds, setExpandedMemberIds] = useState<string[]>([]);
   const [savingGroup, setSavingGroup] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
@@ -6394,6 +6402,10 @@ export function GroupsPage() {
 
     return ownedGroups;
   }, [isParticipantGroupViewer, joinedGroups, ownedGroups]);
+  const { active: activeVisibleGroups, archived: archivedVisibleGroups } = useMemo(
+    () => splitGroupsByArchivedStatus(visibleGroups),
+    [visibleGroups],
+  );
   const isCreateGroupRoute = location.pathname === "/panel/grupy/utworz";
   const isGroupDetailView = Boolean(groupId);
   const selectedGroup = groupId
@@ -6844,6 +6856,32 @@ export function GroupsPage() {
     });
   }
 
+  function renderGroupRows(groups: Group[]) {
+    return (
+      <div className="divide-y divide-brand-line/70 border-y border-brand-line/70 bg-white sm:space-y-3 sm:divide-y-0 sm:border-y-0 sm:bg-transparent">
+        {groups.map((group) => {
+          const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
+          const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);
+
+          return (
+            <GroupListSlimRow
+              key={group.id}
+              activeMemberCount={activeMemberCounts[group.id] ?? 0}
+              eventCount={groupEventCounts[group.id] ?? 0}
+              group={group}
+              isExpanded={expandedGroupIds.includes(group.id)}
+              isOwnedGroup={isOwnedGroup}
+              isParticipantGroupViewer={isParticipantGroupViewer}
+              nearestEventLabel={nearestGroupEventLabels[group.id] ?? null}
+              onExpandedChange={(open) => toggleExpandedGroup(group.id, open)}
+              trainerName={trainerName}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
   function getMemberSaveStateTone(memberId: string) {
     switch (memberSaveStates[memberId]?.status) {
       case "saving":
@@ -7251,27 +7289,20 @@ export function GroupsPage() {
               }
             />
           ) : (
-            <div className="divide-y divide-brand-line/70 border-y border-brand-line/70 bg-white sm:space-y-3 sm:divide-y-0 sm:border-y-0 sm:bg-transparent">
-              {visibleGroups.map((group) => {
-                const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-                const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);
+            <>
+              {activeVisibleGroups.length > 0 ? renderGroupRows(activeVisibleGroups) : null}
 
-                return (
-                  <GroupListSlimRow
-                    key={group.id}
-                    activeMemberCount={activeMemberCounts[group.id] ?? 0}
-                    eventCount={groupEventCounts[group.id] ?? 0}
-                    group={group}
-                    isExpanded={expandedGroupIds.includes(group.id)}
-                    isOwnedGroup={isOwnedGroup}
-                    isParticipantGroupViewer={isParticipantGroupViewer}
-                    nearestEventLabel={nearestGroupEventLabels[group.id] ?? null}
-                    onExpandedChange={(open) => toggleExpandedGroup(group.id, open)}
-                    trainerName={trainerName}
-                  />
-                );
-              })}
-            </div>
+              {archivedVisibleGroups.length > 0 ? (
+                <EnrollmentRequestArchiveSectionBlock
+                  title="Archiwalne"
+                  count={archivedVisibleGroups.length}
+                  open={isArchivedGroupsOpen}
+                  onOpenChange={setIsArchivedGroupsOpen}
+                >
+                  {renderGroupRows(archivedVisibleGroups)}
+                </EnrollmentRequestArchiveSectionBlock>
+              ) : null}
+            </>
           )}
         </div>
       ) : selectedGroup ? (

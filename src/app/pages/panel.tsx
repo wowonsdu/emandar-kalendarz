@@ -40,8 +40,9 @@ import {
   type DashboardPerspective,
   getDashboardPerspectives,
   getParticipantDashboardModel,
-  getParticipantGroupEventRecords,
+  getParticipantEnrollmentViewRecords,
   type ParticipantGroupEventRecord,
+  type ParticipantPendingEnrollmentRequestRecord,
 } from "@/app/dashboard";
 import { CommunityEventCard } from "@/app/components/community-event-card";
 import {
@@ -1384,6 +1385,63 @@ function ParticipantGroupEventCard({
           ) : null}
         </div>
       ) : null}
+    </article>
+  );
+}
+
+function ParticipantPendingEnrollmentRequestCard({
+  record,
+}: {
+  record: ParticipantPendingEnrollmentRequestRecord;
+}) {
+  return (
+    <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+            {record.group?.name ?? record.event.groupName ?? "Grupa Emandar"}
+          </p>
+          <h3 className="mt-2 break-words text-2xl font-semibold text-brand-navy">
+            {record.event.title}
+          </h3>
+          <p className="mt-2 text-brand-muted">{record.event.summary}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
+            {getEnrollmentFinalStatusLabel(record.displayStatus)}
+          </span>
+          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
+            Zgloszenie
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-2">
+        <ParticipantContactBlock
+          title="Przekazujący Wiedzę"
+          name={record.trainer?.displayName ?? record.request.trainerContactName}
+          contact={record.request.trainerContactPhone ?? record.request.trainerContactEmail ?? null}
+          fallback="Dane prowadzącego pojawią się po akceptacji."
+        />
+        <ParticipantContactBlock
+          title="Organizator"
+          name={record.organizer?.displayName ?? record.request.organizerContactName}
+          contact={record.request.organizerContactPhone ?? record.request.organizerContactEmail ?? null}
+          fallback="Dane organizatora pojawią się po akceptacji."
+        />
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-brand-muted">
+        <span>{getPanelScheduleRangeLabel(record.event)}</span>
+        <span>{record.event.location}</span>
+        <span>
+          {record.event.enrolledCount}/{record.event.capacity} miejsc
+        </span>
+      </div>
+
+      <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
+        To zgłoszenie czeka na decyzję organizatora albo prowadzącego.
+      </p>
     </article>
   );
 }
@@ -3360,10 +3418,11 @@ function ParticipantDashboardPerspectiveView({
   const participantDashboard = useMemo(
     () =>
       getParticipantDashboardModel({
+        userId: currentUser.id,
         participantProfileId: currentUser.participantProfileId,
         store,
       }),
-    [currentUser.participantProfileId, store],
+    [currentUser.id, currentUser.participantProfileId, store],
   );
   const ownAccountApprovals = store.trainerAccountApprovals.filter(
     (approval) => approval.requesterUserId === currentUser.id,
@@ -3462,6 +3521,9 @@ function ParticipantDashboardPerspectiveView({
             Na tyle aktywnych szkoleń jesteś teraz zapisany.
           </p>
           <p className="mt-4 text-sm text-brand-muted">
+            Oczekujace decyzje: {participantDashboard.pendingJoinRequestCount}
+          </p>
+          <p className="mt-4 text-sm text-brand-muted">
             Archiwum: {participantDashboard.archivedEnrollmentCount}
           </p>
         </article>
@@ -3513,9 +3575,14 @@ function ParticipantDashboardPerspectiveView({
                 to={getPanelEventListPath(item.event)}
                 className="rounded-[1.75rem] border border-brand-line bg-brand-shell p-5 transition hover:border-brand-sky-deep hover:bg-white"
               >
-                <p className="text-sm font-semibold uppercase tracking-[0.22em] text-brand-sky-deep">
-                  {formatDaysUntilLabel(item.daysUntil)}
-                </p>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <p className="text-sm font-semibold uppercase tracking-[0.22em] text-brand-sky-deep">
+                    {formatDaysUntilLabel(item.daysUntil)}
+                  </p>
+                  <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+                    {item.statusLabel}
+                  </span>
+                </div>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-muted">
@@ -7681,37 +7748,24 @@ export function EventsPage() {
   );
   const [communityModerationScope, setCommunityModerationScope] =
     useState<CommunityModerationTimelineScope>("pending");
-  const participantGroupRecords = useMemo(
+  const participantEnrollmentRecords = useMemo(
     () =>
-      currentUser.participantProfileId
-        ? getParticipantGroupEventRecords(currentUser.participantProfileId, store).filter(
-            (record) => !isCommunityPanelEvent(record.event),
-          )
-        : [],
-    [currentUser.participantProfileId, store],
+      getParticipantEnrollmentViewRecords({
+        userId: currentUser.id,
+        participantProfileId: currentUser.participantProfileId,
+        store,
+      }),
+    [currentUser.id, currentUser.participantProfileId, store],
+  );
+  const participantOfficialRecords = useMemo(
+    () =>
+      participantEnrollmentRecords.filter((record) => !isCommunityPanelEvent(record.event)),
+    [participantEnrollmentRecords],
   );
   const participantCommunityRecords = useMemo(
     () =>
-      sortEventsByDate(
-        Array.from(
-          new Map(
-            store.enrollmentRequests
-              .filter(
-                (request) =>
-                  (request.submitterUid === currentUser.id ||
-                    request.participantProfileId === currentUser.participantProfileId) &&
-                  request.participantStatus !== "cancelled" &&
-                  request.finalStatus !== "rejected",
-              )
-              .map((request) => {
-                const event = store.trainingEvents.find((item) => item.id === request.eventId);
-                return event && isCommunityPanelEvent(event) ? [event.id, event] : null;
-              })
-              .filter((item): item is [string, TrainingEvent] => Boolean(item)),
-          ).values(),
-        ),
-      ),
-    [currentUser.id, currentUser.participantProfileId, store.enrollmentRequests, store.trainingEvents],
+      participantEnrollmentRecords.filter((record) => isCommunityPanelEvent(record.event)),
+    [participantEnrollmentRecords],
   );
   const officialEvents = useMemo(
     () =>
@@ -8707,7 +8761,7 @@ export function EventsPage() {
         )
       ) : !isCreatorView && isOfficialJoinedView ? (
         <div className="space-y-6">
-          {participantGroupRecords.length === 0 ? (
+          {participantOfficialRecords.length === 0 ? (
             <EmptyPanelState
               title="Nie masz jeszcze żadnych szkoleń"
               description="Kiedy zapiszesz się na szkolenie Emandar, pojawi się ono tutaj."
@@ -8715,11 +8769,18 @@ export function EventsPage() {
           ) : (
             <div className="space-y-4">
               <SectionBlockHeading />
-              {participantGroupRecords.map((record) => (
-                <ParticipantGroupEventCard
-                  key={record.eventParticipant.id}
-                  record={record}
-                />
+              {participantOfficialRecords.map((record) => (
+                record.kind === "request" ? (
+                  <ParticipantPendingEnrollmentRequestCard
+                    key={record.request.id}
+                    record={record}
+                  />
+                ) : (
+                  <ParticipantGroupEventCard
+                    key={record.eventParticipant.id}
+                    record={record}
+                  />
+                )
               ))}
             </div>
           )}
@@ -8771,8 +8832,20 @@ export function EventsPage() {
                   description="Kiedy dołączysz do community eventu, pojawi się on tutaj."
                 />
               ) : (
-                participantCommunityRecords.map((event) => (
-                  <CommunityEventCard key={event.id} event={event} />
+                participantCommunityRecords.map((record) => (
+                  <CommunityEventCard
+                    key={record.kind === "request" ? record.request.id : record.eventParticipant.id}
+                    event={record.event}
+                    statusItems={[
+                      {
+                        label: "Status udziału",
+                        value:
+                          record.kind === "request"
+                            ? getEnrollmentFinalStatusLabel(record.displayStatus)
+                            : getEventParticipantStatusLabel(record.eventParticipant.status),
+                      },
+                    ]}
+                  />
                 ))
               )}
             </div>

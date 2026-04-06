@@ -1840,6 +1840,97 @@ function parseGroupMemberPriorityPromptValue(value: string | null) {
   return null;
 }
 
+function getFutureOpenGroupEvents(
+  store: Pick<DemoStore, "trainingEvents">,
+  groupId: string,
+  currentEventId?: string,
+) {
+  return sortEventsByDate(
+    store.trainingEvents.filter(
+      (item) =>
+        item.groupId === groupId &&
+        item.id !== currentEventId &&
+        !isTrainingEventArchived(item) &&
+        !item.rosterFinalizedAt &&
+        new Date(item.startsAt).getTime() > Date.now(),
+    ),
+  );
+}
+
+function hasActiveGroupMember(
+  store: Pick<DemoStore, "groupMembers">,
+  groupId: string,
+  participantProfileId: string,
+) {
+  return (store.groupMembers ?? []).some(
+    (item) =>
+      item.groupId === groupId &&
+      item.participantProfileId === participantProfileId &&
+      item.membershipStatus === "active",
+  );
+}
+
+async function maybeAddAcceptedRequestToGroup({
+  request,
+  event,
+  store,
+  addGroupMember,
+}: {
+  request: EnrollmentRequest;
+  event: Pick<TrainingEvent, "id" | "groupId">;
+  store: Pick<DemoStore, "groupMembers" | "trainingEvents">;
+  addGroupMember: (
+    input: {
+      groupId: string;
+      participantProfileId: string;
+      priority: GroupMemberPriority;
+      syncFutureEvents?: boolean;
+    },
+  ) => Promise<void>;
+}) {
+  if (!event.groupId || !request.participantProfileId) {
+    return false;
+  }
+
+  if (hasActiveGroupMember(store, event.groupId, request.participantProfileId)) {
+    return false;
+  }
+
+  const shouldAddToGroup = window.confirm(
+    "Osoba trafiła na roster wydarzenia. Dopisać ją też do grupy?",
+  );
+  if (!shouldAddToGroup) {
+    return false;
+  }
+
+  const priorityValue = window.prompt(
+    "Podaj rangę w grupie: stali, regularni albo rezerwowi.",
+    "regularni",
+  );
+  const priority = parseGroupMemberPriorityPromptValue(priorityValue);
+  if (!priority) {
+    toast.error("Osoba została dodana do rosteru. Do grupy wpisz: stali, regularni albo rezerwowi.");
+    return false;
+  }
+
+  const futureOpenGroupEvents = getFutureOpenGroupEvents(store, event.groupId, event.id);
+  const shouldSyncFutureEvents =
+    futureOpenGroupEvents.length > 0
+      ? window.confirm(
+          `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
+        )
+      : false;
+
+  await addGroupMember({
+    groupId: event.groupId,
+    participantProfileId: request.participantProfileId,
+    priority,
+    syncFutureEvents: shouldSyncFutureEvents,
+  });
+
+  return true;
+}
+
 type EnrollmentRequestArchiveSectionKey = "active" | "confirmed";
 
 type EnrollmentRequestArchiveSection = {
@@ -2165,6 +2256,183 @@ function EnrollmentRequestArchiveSectionBlock({
       </CollapsibleContent>
     </Collapsible>
   );
+}
+
+function getEnrollmentRequestContextLabels(
+  event: Pick<TrainingEvent, "groupName" | "location" | "title">,
+  group?: Pick<Group, "name"> | null,
+) {
+  const groupLabel =
+    group?.name?.trim() || event.groupName?.trim() || event.title?.trim() || "Termin Emandar";
+  const locationLabel = event.location?.trim() || "Brak lokalizacji";
+
+  return {
+    groupLabel,
+    locationLabel,
+  };
+}
+
+function EnrollmentRequestMetaRow({
+  request,
+}: {
+  request: Pick<EnrollmentRequest, "telefon" | "polecenieOdKogo">;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-brand-muted">
+      <span className="inline-flex items-center gap-1.5 sm:gap-2">
+        <Phone size={12} className="sm:size-[14px]" />
+        {request.telefon}
+      </span>
+      <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
+    </div>
+  );
+}
+
+function hasEnrollmentRequestMessage(
+  request: Pick<EnrollmentRequest, "wiadomosc">,
+) {
+  return request.wiadomosc.trim().length > 0;
+}
+
+function EnrollmentRequestMessageBlock({
+  request,
+}: {
+  request: Pick<EnrollmentRequest, "wiadomosc">;
+}) {
+  if (!hasEnrollmentRequestMessage(request)) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-3xl bg-brand-shell px-4 py-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-muted sm:text-[11px]">
+        Wiadomość
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-brand-muted">{request.wiadomosc.trim()}</p>
+    </div>
+  );
+}
+
+function EnrollmentRequestDecisionButtons({
+  disabled = false,
+  onDecision,
+}: {
+  disabled?: boolean;
+  onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      {(["rejected", "accepted"] as const).map((decision) => (
+        <button
+          key={decision}
+          type="button"
+          disabled={disabled}
+          onClick={() => onDecision(decision)}
+          className={
+            decision === "accepted"
+              ? "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
+              : "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+          }
+        >
+          {decision === "accepted" ? "Potwierdź" : "Odrzuć"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function EnrollmentRequestSlimRow({
+  request,
+  event,
+  eventGroup,
+  isExpanded,
+  onExpandedChange,
+  isSaving = false,
+  children,
+}: {
+  request: EnrollmentRequest;
+  event: Pick<TrainingEvent, "groupName" | "location" | "title">;
+  eventGroup?: Pick<Group, "name"> | null;
+  isExpanded: boolean;
+  onExpandedChange: (open: boolean) => void;
+  isSaving?: boolean;
+  children: ReactNode;
+}) {
+  const { groupLabel, locationLabel } = getEnrollmentRequestContextLabels(event, eventGroup);
+
+  return (
+    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+      <article
+        className={cn(
+          "bg-white px-6 py-3",
+          "sm:rounded-3xl sm:border sm:bg-white sm:p-4 sm:shadow-soft",
+        )}
+      >
+        <div className="flex min-w-0 items-start gap-3 sm:items-center">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-[13px] sm:tracking-[0.22em]">
+              {groupLabel}
+            </p>
+            <p className="mt-1 truncate text-sm text-brand-muted">{locationLabel}</p>
+            <p className="mt-1.5 truncate text-[17px] font-semibold leading-tight text-brand-navy sm:text-lg">
+              {request.imieNazwisko}
+            </p>
+          </div>
+
+          <div className="flex shrink-0 items-start gap-2 sm:items-center">
+            <div className="flex flex-col items-end gap-1.5 pt-0.5">
+              <span className="rounded-full bg-brand-navy px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white sm:px-3 sm:text-xs">
+                {getEnrollmentFinalStatusLabel(request.finalStatus)}
+              </span>
+              <div className="flex min-h-4 items-center gap-1 text-[11px] text-brand-muted sm:text-xs">
+                {isSaving ? (
+                  <span
+                    title="Zapisywanie zgłoszenia"
+                    aria-label="Zapisywanie zgłoszenia"
+                    className="inline-flex size-4 items-center justify-center text-brand-navy sm:size-5"
+                  >
+                    <RefreshCcw size={10} className="animate-spin sm:size-3.5" />
+                  </span>
+                ) : null}
+                <span>{formatDate(request.createdAt)}</span>
+              </div>
+            </div>
+
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex size-9 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
+                aria-label={
+                  isExpanded
+                    ? `Ukryj szczegóły ${request.imieNazwisko}`
+                    : `Pokaż szczegóły ${request.imieNazwisko}`
+                }
+              >
+                <ChevronDown
+                  size={16}
+                  className={cn(
+                    "transition-transform duration-200",
+                    isExpanded ? "rotate-180" : "",
+                    "sm:size-[18px]",
+                  )}
+                />
+              </button>
+            </CollapsibleTrigger>
+          </div>
+        </div>
+
+        <CollapsibleContent className="mt-3 border-t border-brand-line/60 pt-3 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
+          {children}
+        </CollapsibleContent>
+      </article>
+    </Collapsible>
+  );
+}
+
+function hasEnrollmentRequestReadyPhoto(
+  request: Pick<EnrollmentRequest, "photoPath" | "photoStatus">,
+) {
+  return Boolean(request.photoPath && request.photoStatus === "ready");
 }
 
 function EventScopeSwitch({
@@ -3063,9 +3331,10 @@ function CancelledEventsTooltip({
 function EnrollmentPhotoCard({ request }: { request: EnrollmentRequest }) {
   const { resolveEnrollmentPhoto } = useAppState();
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const shouldShowPhoto = hasEnrollmentRequestReadyPhoto(request);
 
   useEffect(() => {
-    if (!request.photoPath || request.photoStatus !== "ready") {
+    if (!shouldShowPhoto || !request.photoPath || request.photoStatus !== "ready") {
       setPhotoUrl(null);
       return;
     }
@@ -3095,7 +3364,11 @@ function EnrollmentPhotoCard({ request }: { request: EnrollmentRequest }) {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [request.photoPath, request.photoStatus, resolveEnrollmentPhoto]);
+  }, [request.photoPath, request.photoStatus, resolveEnrollmentPhoto, shouldShowPhoto]);
+
+  if (!shouldShowPhoto) {
+    return null;
+  }
 
   return (
     <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
@@ -3110,11 +3383,7 @@ function EnrollmentPhotoCard({ request }: { request: EnrollmentRequest }) {
           className="h-56 w-full rounded-2xl object-cover"
         />
       ) : (
-        <p className="text-sm text-brand-muted">
-          {request.photoStatus === "error"
-            ? "Plik nie został jeszcze poprawnie zapisany."
-            : "Zdjęcie jest przygotowywane albo nie zostało jeszcze dodane."}
-        </p>
+        <div className="h-56 animate-pulse rounded-2xl bg-white/70" />
       )}
     </div>
   );
@@ -5213,9 +5482,10 @@ function LegacyAdminDashboardView() {
 
 export function RequestsPage() {
   const {
+    addGroupMember,
     currentUser,
-    decideEnrollment,
     decideTrainerAccountApproval,
+    manageEnrollmentRequest,
     store,
   } = useAppState();
 
@@ -5229,6 +5499,8 @@ export function RequestsPage() {
     active: true,
     confirmed: false,
   });
+  const [expandedRequestIds, setExpandedRequestIds] = useState<string[]>([]);
+  const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
 
   const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
@@ -5253,10 +5525,18 @@ export function RequestsPage() {
     return false;
   });
 
-  const requests = store.enrollmentRequests.filter((request) => {
-    return manageableEventIds.has(request.eventId) && isOperationalEnrollmentRequest(request, store);
-  });
+  const requests = store.enrollmentRequests.filter((request) =>
+    manageableEventIds.has(request.eventId),
+  );
   const requestSections = splitEnrollmentRequestsByIntent(requests);
+
+  function toggleExpandedRequest(requestId: string, open: boolean) {
+    setExpandedRequestIds((previous) =>
+      open
+        ? Array.from(new Set([...previous, requestId]))
+        : previous.filter((item) => item !== requestId),
+    );
+  }
 
   return (
     <PanelSection
@@ -5268,7 +5548,7 @@ export function RequestsPage() {
         {requests.length === 0 && (
           <EmptyPanelState
             title="Brak zgłoszeń"
-            description="Nowe zgłoszenia do Twoich wydarzeń pojawią się tutaj."
+            description="Archiwum zgłoszeń do Twoich wydarzeń pojawi się tutaj."
           />
         )}
         {requestSections.map((section) => (
@@ -5285,128 +5565,75 @@ export function RequestsPage() {
             }
           >
             {section.requests.map((request) => {
-          const event = store.trainingEvents.find((item) => item.id === request.eventId);
-          if (!event) {
-            return null;
-          }
+              const event = store.trainingEvents.find((item) => item.id === request.eventId);
+              if (!event) {
+                return null;
+              }
 
-          const canDecideRequest = canManageTrainingEvent(event, currentUser);
+              const eventGroup = event.groupId
+                ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
+                : null;
+              const canDecideRequest = canManageTrainingEvent(event, currentUser);
+              const isExpanded = expandedRequestIds.includes(request.id);
 
-          return (
-            <article
-              key={request.id}
-              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                    {event.title}
-                  </p>
-                  <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
-                    {request.imieNazwisko}
-                  </h3>
-                  <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
-                    <span className="inline-flex items-center gap-2">
-                      <Phone size={14} />
-                      {request.telefon}
-                    </span>
-                    <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                    <span>{formatDate(request.createdAt)}</span>
+              return (
+                <EnrollmentRequestSlimRow
+                  key={request.id}
+                  request={request}
+                  event={event}
+                  eventGroup={eventGroup}
+                  isExpanded={isExpanded}
+                  onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                  isSaving={updatingRequestId === request.id}
+                >
+                  <div className="space-y-4">
+                    <EnrollmentRequestMetaRow request={request} />
+                    <EnrollmentRequestMessageBlock request={request} />
+
+                    <EnrollmentPhotoCard request={request} />
+
+                    {canDecideRequest ? (
+                      <EnrollmentRequestDecisionButtons
+                        disabled={updatingRequestId === request.id}
+                        onDecision={(decision) => {
+                          void (async () => {
+                            setUpdatingRequestId(request.id);
+
+                            try {
+                              await manageEnrollmentRequest(request.id, decision);
+                              if (decision === "accepted") {
+                                const addedToGroup = await maybeAddAcceptedRequestToGroup({
+                                  request,
+                                  event,
+                                  store,
+                                  addGroupMember,
+                                });
+                                toast.success(
+                                  event.groupId
+                                    ? addedToGroup
+                                      ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+                                      : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+                                    : "Potwierdzono zgłoszenie.",
+                                );
+                              } else if (decision === "rejected") {
+                                toast.success("Odrzucono zgłoszenie.");
+                              }
+                            } catch (error) {
+                              toast.error(
+                                error instanceof Error
+                                  ? error.message
+                                  : "Nie udało się zaktualizować zgłoszenia.",
+                              );
+                            } finally {
+                              setUpdatingRequestId(null);
+                            }
+                          })();
+                        }}
+                      />
+                    ) : null}
                   </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                    {request.finalStatus}
-                  </span>
-                </div>
-              </div>
-
-              <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                {request.wiadomosc || "Brak dodatkowej wiadomości."}
-              </p>
-
-              <div
-                className={`mt-4 grid gap-4 ${
-                  request.requiresOrganizerApproval === false
-                    ? "md:grid-cols-[1fr_1fr_1.15fr]"
-                    : "md:grid-cols-[1fr_1fr_1fr_1.15fr]"
-                }`}
-              >
-                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                    Potwierdzenie uczestnika
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-brand-navy">
-                    {resolveAttendanceConfirmationStatusLabel(
-                      request.attendanceConfirmationStatus,
-                    )}
-                  </p>
-                </div>
-                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                    Decyzja Przekazującego Wiedzę
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-brand-navy">
-                    {request.trainerDecision}
-                  </p>
-                </div>
-                {request.requiresOrganizerApproval !== false && (
-                  <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                      Decyzja organizatora
-                    </p>
-                    <p className="mt-2 text-lg font-semibold text-brand-navy">
-                      {request.organizerDecision}
-                    </p>
-                  </div>
-                )}
-                <EnrollmentPhotoCard request={request} />
-              </div>
-
-              {canDecideRequest && (
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideEnrollment(request.id, "accepted");
-                        toast.success("Zaktualizowano decyzję dla zgłoszenia.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zaktualizować zgłoszenia.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                  >
-                    <Check size={16} />
-                    Akceptuj
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideEnrollment(request.id, "rejected");
-                        toast.success("Zaktualizowano decyzję dla zgłoszenia.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zaktualizować zgłoszenia.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-                  >
-                    <X size={16} />
-                    Odrzuć
-                  </button>
-                </div>
-              )}
-            </article>
-          );
+                </EnrollmentRequestSlimRow>
+              );
             })}
           </EnrollmentRequestArchiveSectionBlock>
         ))}
@@ -10066,17 +10293,8 @@ export function EventManagementPage() {
     return <Navigate to={fallbackListPath} replace />;
   }
 
-  const requests = store.enrollmentRequests.filter((item) => {
-    if (item.eventId !== event.id) {
-      return false;
-    }
-
-    if (!event.groupId) {
-      return true;
-    }
-
-    return !item.eventParticipantId;
-  });
+  const eventRequests = store.enrollmentRequests.filter((item) => item.eventId === event.id);
+  const requests = eventRequests;
   const participantProfilesById = useMemo(
     () => new Map((store.participantProfiles ?? []).map((profile) => [profile.id, profile])),
     [store.participantProfiles],
@@ -10668,103 +10886,68 @@ export function EventManagementPage() {
                     }))
                   }
                 >
-                  {section.requests.map((request) => (
-                    <article
-                      key={request.id}
-                      className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <h3 className="text-2xl font-semibold text-brand-navy">
-                            {request.imieNazwisko}
-                          </h3>
-                          <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
-                            <span className="inline-flex items-center gap-2">
-                              <Phone size={14} />
-                              {request.telefon}
-                            </span>
-                            <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                            <span>{formatDate(request.createdAt)}</span>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-                            {request.finalStatus}
-                          </span>
-                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            SMS:{" "}
-                            {resolveAttendanceConfirmationStatusLabel(
-                              request.attendanceConfirmationStatus,
-                            )}
-                          </span>
-                        </div>
-                      </div>
+                  <div className="-mx-6 mt-1 sm:mx-0 sm:mt-0">
+                    <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80 sm:space-y-3 sm:divide-y-0 sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:shadow-none">
+                      {section.requests.map((request) => (
+                        <EnrollmentRequestSlimRow
+                          key={request.id}
+                          request={request}
+                          event={event}
+                          eventGroup={eventGroup}
+                          isExpanded={expandedRequestIds.includes(request.id)}
+                          onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                          isSaving={updatingRequestId === request.id}
+                        >
+                          <div className="space-y-4">
+                            <EnrollmentRequestMetaRow request={request} />
+                            <EnrollmentRequestMessageBlock request={request} />
 
-                      <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                        {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                      </p>
+                            <EnrollmentPhotoCard request={request} />
 
-                      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                        <EnrollmentPhotoCard request={request} />
-                        <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                            Stan zgłoszenia
-                          </p>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                              trener: {request.trainerDecision}
-                            </span>
-                            {request.requiresOrganizerApproval !== false ? (
-                              <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                                organizator: {request.organizerDecision}
-                              </span>
+                            {canManageEvent && !eventIsArchived ? (
+                              <EnrollmentRequestDecisionButtons
+                                disabled={updatingRequestId === request.id}
+                                onDecision={(decision) => {
+                                  void (async () => {
+                                    setUpdatingRequestId(request.id);
+
+                                    try {
+                                      await manageEnrollmentRequest(request.id, decision);
+                                      if (decision === "accepted") {
+                                        const addedToGroup = await maybeAddAcceptedRequestToGroup({
+                                          request,
+                                          event,
+                                          store,
+                                          addGroupMember,
+                                        });
+                                        toast.success(
+                                          event.groupId
+                                            ? addedToGroup
+                                              ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+                                              : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+                                            : "Potwierdzono zgłoszenie.",
+                                        );
+                                      } else if (decision === "rejected") {
+                                        toast.success("Odrzucono zgłoszenie.");
+                                      }
+                                    } catch (error) {
+                                      toast.error(
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Nie udało się zmienić statusu osoby.",
+                                      );
+                                    } finally {
+                                      setUpdatingRequestId(null);
+                                    }
+                                  })();
+                                }}
+                              />
                             ) : null}
                           </div>
-                        </div>
-                      </div>
-
-                      {canManageEvent && !eventIsArchived ? (
-                        <div className="mt-5 flex flex-wrap gap-3">
-                          {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                            <button
-                              key={decision}
-                              type="button"
-                              disabled={updatingRequestId === request.id}
-                              onClick={async () => {
-                                setUpdatingRequestId(request.id);
-
-                                try {
-                                  await manageEnrollmentRequest(request.id, decision);
-                                  toast.success("Zmieniono status osoby w wydarzeniu.");
-                                } catch (error) {
-                                  toast.error(
-                                    error instanceof Error
-                                      ? error.message
-                                      : "Nie udało się zmienić statusu osoby.",
-                                  );
-                                } finally {
-                                  setUpdatingRequestId(null);
-                                }
-                              }}
-                              className={
-                                decision === "accepted"
-                                  ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                  : decision === "rejected"
-                                    ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                    : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                              }
-                            >
-                              {decision === "accepted"
-                                ? "Zaakceptuj"
-                                : decision === "rejected"
-                                  ? "Odrzuć"
-                                  : "Ustaw oczekuje"}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
+                        </EnrollmentRequestSlimRow>
+                      ))}
+                    </div>
+                  </div>
                 </EnrollmentRequestArchiveSectionBlock>
               ))
             )}
@@ -11724,161 +11907,74 @@ export function EventManagementPage() {
                 >
                   <div className="-mx-6 mt-1 sm:mx-0 sm:mt-0">
                     <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80 sm:space-y-3 sm:divide-y-0 sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:shadow-none">
-                      {section.requests.map((request, rowIndex) => {
+                      {section.requests.map((request) => {
                         const transferTargetEventId = transferSelections[request.id] ?? "";
                         const isExpanded = expandedRequestIds.includes(request.id);
 
                         return (
-                          <Collapsible
+                          <EnrollmentRequestSlimRow
                             key={request.id}
-                            open={isExpanded}
-                            onOpenChange={(open) => toggleExpandedRequest(request.id, open)}
+                            request={request}
+                            event={event}
+                            eventGroup={eventGroup}
+                            isExpanded={isExpanded}
+                            onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                            isSaving={updatingRequestId === request.id}
                           >
-                            <article
-                              className={cn(
-                                "bg-white px-6 py-2.5",
-                                rowIndex % 2 === 0 ? "sm:bg-white" : "sm:bg-brand-shell/35",
-                                "sm:rounded-3xl sm:border sm:p-4",
-                              )}
-                            >
-                              <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
-                                    {request.imieNazwisko}
+                            <div className="space-y-4">
+                              <EnrollmentRequestMetaRow request={request} />
+                              <EnrollmentRequestMessageBlock request={request} />
+
+                              <div
+                                className={cn(
+                                  "grid gap-4",
+                                  hasEnrollmentRequestReadyPhoto(request)
+                                    ? "lg:grid-cols-[1.2fr_1fr]"
+                                    : "",
+                                )}
+                              >
+                                <EnrollmentPhotoCard request={request} />
+                                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                    Przenieś na inny termin
                                   </p>
-                                </div>
-
-                                {updatingRequestId === request.id ? (
-                                  <span
-                                    title="Zapisywanie zgłoszenia"
-                                    aria-label="Zapisywanie zgłoszenia"
-                                    className="inline-flex size-6 shrink-0 items-center justify-center text-brand-navy sm:size-8"
+                                  <select
+                                    value={transferTargetEventId}
+                                    onChange={(changeEvent) =>
+                                      setTransferSelections((previous) => ({
+                                        ...previous,
+                                        [request.id]: changeEvent.target.value,
+                                      }))
+                                    }
+                                    className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
                                   >
-                                    <RefreshCcw size={12} className="animate-spin sm:size-[14px]" />
-                                  </span>
-                                ) : null}
+                                    <option value="">Wybierz termin</option>
+                                    {manageableEvents.map((item) => (
+                                      <option key={item.id} value={item.id}>
+                                        {item.location} | {formatDate(item.startsAt)}
+                                      </option>
+                                    ))}
+                                  </select>
 
-                                <CollapsibleTrigger asChild>
                                   <button
                                     type="button"
-                                    className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
-                                    aria-label={
-                                      isExpanded
-                                        ? `Ukryj szczegóły ${request.imieNazwisko}`
-                                        : `Pokaż szczegóły ${request.imieNazwisko}`
-                                    }
+                                    disabled={!transferTargetEventId || movingRequestId === request.id}
+                                    onClick={() => void handleTransferEnrollmentRequest(request)}
+                                    className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
                                   >
-                                    <ChevronDown
-                                      size={16}
-                                      className={cn(
-                                        "transition-transform duration-200",
-                                        isExpanded ? "rotate-180" : "",
-                                        "sm:size-[18px]",
-                                      )}
-                                    />
+                                    {movingRequestId === request.id
+                                      ? "Przenoszenie..."
+                                      : "Przenieś osobę"}
                                   </button>
-                                </CollapsibleTrigger>
+                                </div>
                               </div>
 
-                              <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
-                                <div className="space-y-4">
-                                  <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
-                                    <span className="inline-flex items-center gap-1.5 sm:gap-2">
-                                      <Phone size={12} className="sm:size-[14px]" />
-                                      {request.telefon}
-                                    </span>
-                                    <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                                    <span>{formatDate(request.createdAt)}</span>
-                                  </div>
-
-                                  <div className="flex flex-wrap gap-2">
-                                    <span className="rounded-full bg-brand-navy px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white sm:text-xs">
-                                      {getEnrollmentFinalStatusLabel(request.finalStatus)}
-                                    </span>
-                                    <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                      SMS:{" "}
-                                      {resolveAttendanceConfirmationStatusLabel(
-                                        request.attendanceConfirmationStatus,
-                                      )}
-                                    </span>
-                                    <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                      trener: {request.trainerDecision}
-                                    </span>
-                                    {request.requiresOrganizerApproval !== false ? (
-                                      <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                        organizator: {request.organizerDecision}
-                                      </span>
-                                    ) : null}
-                                  </div>
-
-                                  <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                                    {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                                  </p>
-
-                                  <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                                    <EnrollmentPhotoCard request={request} />
-                                    <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                                      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                                        Przenieś na inny termin
-                                      </p>
-                                      <select
-                                        value={transferTargetEventId}
-                                        onChange={(changeEvent) =>
-                                          setTransferSelections((previous) => ({
-                                            ...previous,
-                                            [request.id]: changeEvent.target.value,
-                                          }))
-                                        }
-                                        className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                                      >
-                                        <option value="">Wybierz termin</option>
-                                        {manageableEvents.map((item) => (
-                                          <option key={item.id} value={item.id}>
-                                            {item.location} | {formatDate(item.startsAt)}
-                                          </option>
-                                        ))}
-                                      </select>
-
-                                      <button
-                                        type="button"
-                                        disabled={!transferTargetEventId || movingRequestId === request.id}
-                                        onClick={() => void handleTransferEnrollmentRequest(request)}
-                                        className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                      >
-                                        {movingRequestId === request.id
-                                          ? "Przenoszenie..."
-                                          : "Przenieś osobę"}
-                                      </button>
-                                    </div>
-                                  </div>
-
-                                  <div className="flex flex-wrap gap-3">
-                                    {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                                      <button
-                                        key={decision}
-                                        type="button"
-                                        disabled={updatingRequestId === request.id}
-                                        onClick={() => void handleEnrollmentDecision(request, decision)}
-                                        className={
-                                          decision === "accepted"
-                                            ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                            : decision === "rejected"
-                                              ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                              : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                        }
-                                      >
-                                        {decision === "accepted"
-                                          ? "Zaakceptuj"
-                                          : decision === "rejected"
-                                            ? "Odrzuć"
-                                            : "Ustaw oczekuje"}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              </CollapsibleContent>
-                            </article>
-                          </Collapsible>
+                              <EnrollmentRequestDecisionButtons
+                                disabled={updatingRequestId === request.id}
+                                onDecision={(decision) => void handleEnrollmentDecision(request, decision)}
+                              />
+                            </div>
+                          </EnrollmentRequestSlimRow>
                         );
                       })}
                     </div>
@@ -11913,114 +12009,77 @@ export function EventManagementPage() {
                   }))
                 }
               >
-                {section.requests.map((request) => {
-                  const transferTargetEventId = transferSelections[request.id] ?? "";
+                <div className="-mx-6 mt-1 sm:mx-0 sm:mt-0">
+                  <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80 sm:space-y-3 sm:divide-y-0 sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:shadow-none">
+                    {section.requests.map((request) => {
+                      const transferTargetEventId = transferSelections[request.id] ?? "";
 
-                  return (
-                    <article
-                      key={request.id}
-                      className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <h3 className="text-2xl font-semibold text-brand-navy">
-                            {request.imieNazwisko}
-                          </h3>
-                          <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
-                            <span className="inline-flex items-center gap-2">
-                              <Phone size={14} />
-                              {request.telefon}
-                            </span>
-                            <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                            <span>{formatDate(request.createdAt)}</span>
+                      return (
+                        <EnrollmentRequestSlimRow
+                          key={request.id}
+                          request={request}
+                          event={event}
+                          eventGroup={eventGroup}
+                          isExpanded={expandedRequestIds.includes(request.id)}
+                          onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                          isSaving={updatingRequestId === request.id}
+                        >
+                          <div className="space-y-4">
+                            <EnrollmentRequestMetaRow request={request} />
+                            <EnrollmentRequestMessageBlock request={request} />
+
+                            <div
+                              className={cn(
+                                "grid gap-4",
+                                hasEnrollmentRequestReadyPhoto(request)
+                                  ? "lg:grid-cols-[1.2fr_1fr]"
+                                  : "",
+                              )}
+                            >
+                              <EnrollmentPhotoCard request={request} />
+                              <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                  Przenieś na inny termin
+                                </p>
+                                <select
+                                  value={transferTargetEventId}
+                                  onChange={(changeEvent) =>
+                                    setTransferSelections((previous) => ({
+                                      ...previous,
+                                      [request.id]: changeEvent.target.value,
+                                    }))
+                                  }
+                                  className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+                                >
+                                  <option value="">Wybierz termin</option>
+                                  {manageableEvents.map((item) => (
+                                    <option key={item.id} value={item.id}>
+                                      {item.location} | {formatDate(item.startsAt)}
+                                    </option>
+                                  ))}
+                                </select>
+
+                                <button
+                                  type="button"
+                                  disabled={!transferTargetEventId || movingRequestId === request.id}
+                                  onClick={() => void handleTransferEnrollmentRequest(request)}
+                                  className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                                >
+                                  {movingRequestId === request.id ? "Przenoszenie..." : "Przenieś osobę"}
+                                </button>
+                              </div>
+                            </div>
+
+                            <EnrollmentRequestDecisionButtons
+                              disabled={updatingRequestId === request.id}
+                              onDecision={(decision) => void handleEnrollmentDecision(request, decision)}
+                            />
                           </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-                            {request.finalStatus}
-                          </span>
-                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            SMS:{" "}
-                            {resolveAttendanceConfirmationStatusLabel(
-                              request.attendanceConfirmationStatus,
-                            )}
-                          </span>
-                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            trener: {request.trainerDecision}
-                          </span>
-                          {request.requiresOrganizerApproval !== false && (
-                            <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                              organizator: {request.organizerDecision}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                        {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                      </p>
-
-                      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                        <EnrollmentPhotoCard request={request} />
-                        <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                            Przenies na inny termin
-                          </p>
-                          <select
-                            value={transferTargetEventId}
-                            onChange={(changeEvent) =>
-                              setTransferSelections((previous) => ({
-                                ...previous,
-                                [request.id]: changeEvent.target.value,
-                              }))
-                            }
-                            className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                          >
-                            <option value="">Wybierz termin</option>
-                            {manageableEvents.map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.location} | {formatDate(item.startsAt)}
-                              </option>
-                            ))}
-                          </select>
-
-                          <button
-                            type="button"
-                            disabled={!transferTargetEventId || movingRequestId === request.id}
-                            onClick={() => void handleTransferEnrollmentRequest(request)}
-                            className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                          >
-                            {movingRequestId === request.id ? "Przenoszenie..." : "Przenies osobe"}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 flex flex-wrap gap-3">
-                        {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                          <button
-                            key={decision}
-                            type="button"
-                            disabled={updatingRequestId === request.id}
-                            onClick={() => void handleEnrollmentDecision(request, decision)}
-                            className={
-                              decision === "accepted"
-                                ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                : decision === "rejected"
-                                  ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                  : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                            }
-                          >
-                            {decision === "accepted"
-                              ? "Zaakceptuj"
-                              : decision === "rejected"
-                                ? "Odrzuc"
-                                : "Ustaw oczekuje"}
-                          </button>
-                        ))}
-                      </div>
-                    </article>
-                  );
-                })}
+                        </EnrollmentRequestSlimRow>
+                      );
+                    })}
+                  </div>
+                </div>
               </EnrollmentRequestArchiveSectionBlock>
             ))}
           </div>

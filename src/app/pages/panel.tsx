@@ -2134,6 +2134,7 @@ function StatCard({
   detail,
   valueClassName = "",
   className = "",
+  labelClassName = "",
 }: {
   label: string;
   value: string | number;
@@ -2141,6 +2142,7 @@ function StatCard({
   detail?: string;
   valueClassName?: string;
   className?: string;
+  labelClassName?: string;
 }) {
   return (
     <article
@@ -2153,7 +2155,12 @@ function StatCard({
         <Icon size={18} />
       </div>
       <div className="min-w-0">
-        <p className="break-words text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:text-sm sm:tracking-[0.2em]">
+        <p
+          className={cn(
+            "break-words text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:text-sm sm:tracking-[0.2em]",
+            labelClassName,
+          )}
+        >
           {label}
         </p>
         <p
@@ -4655,19 +4662,22 @@ function OperationalDashboardPerspectiveView({
             label="Grupy"
             value={organizerOfficialDashboard?.groups.length ?? 0}
             icon={Users}
-            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
+            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            labelClassName="whitespace-nowrap"
           />
           <StatCard
             label="Szkolenia"
             value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
             icon={CalendarDays}
-            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
+            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            labelClassName="whitespace-nowrap"
           />
           <StatCard
             label="Uczestnicy"
             value={organizerOfficialDashboard?.activeMemberCount ?? 0}
             icon={ShieldCheck}
-            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
+            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            labelClassName="whitespace-nowrap"
           />
           <StatCard
             label="Najbliższe"
@@ -4675,13 +4685,15 @@ function OperationalDashboardPerspectiveView({
             detail={nextPipelineEventGroup}
             valueClassName="text-lg leading-tight sm:text-2xl"
             icon={CalendarDays}
-            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
+            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            labelClassName="whitespace-nowrap"
           />
           <StatCard
             label="Czeka na decyzję"
             value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
             icon={Bell}
-            className="min-h-[132px] w-[168px] items-start p-4 sm:min-h-[172px] sm:w-[200px] sm:p-5"
+            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            labelClassName="whitespace-nowrap"
           />
         </div>
 

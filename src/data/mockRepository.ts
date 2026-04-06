@@ -55,6 +55,7 @@ import type {
 } from "@/domain/types";
 import { normalizeNotificationSettings } from "@/domain/notifications";
 import {
+  canApproveEnrollmentRequest,
   canManageTrainingEvent,
   canModerateTrainingEvent,
   canUseOrganizerFunctions,
@@ -1366,9 +1367,6 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
 
     const trainer = findTrainer(store, event.trainerId);
     const organizer = findOrganizer(store, event.organizerId);
-    const requiresOrganizerApproval = !isCommunityBrandStatus(event.brandStatus) && Boolean(event.organizerId);
-    const trainerDecision: DecisionStatus = "pending";
-    const organizerDecision: DecisionStatus = requiresOrganizerApproval ? "pending" : "accepted";
     const requestId = createId("enrollment");
 
     store.enrollmentRequests.unshift({
@@ -1390,16 +1388,9 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
       photoMode: resolvePhotoModeForEvent(event, store.appSettings.enrollmentPhotoMode),
       photoPath: photoUrl ?? undefined,
       photoUploadedAt: photoUrl ? nowIso() : undefined,
-      trainerDecision,
-      organizerDecision,
-      finalStatus: deriveEnrollmentFinalStatus(
-        trainerDecision,
-        organizerDecision,
-        requiresOrganizerApproval,
-      ),
+      finalStatus: deriveEnrollmentFinalStatus("pending"),
       participantStatus: "active",
       createdAt: nowIso(),
-      requiresOrganizerApproval,
     });
 
     createNotification(
@@ -1500,30 +1491,6 @@ function syncEventParticipantFromEnrollment(
   recomputeEventEnrolledCount(store, event.id);
 }
 
-function resolveEnrollmentDecisionState(
-  decision: DecisionStatus,
-  requiresOrganizerApproval: boolean,
-) {
-  if (decision === "accepted") {
-    return {
-      trainerDecision: "accepted" as const,
-      organizerDecision: "accepted" as const,
-    };
-  }
-
-  if (decision === "rejected") {
-    return {
-      trainerDecision: "rejected" as const,
-      organizerDecision: requiresOrganizerApproval ? ("rejected" as const) : ("accepted" as const),
-    };
-  }
-
-  return {
-    trainerDecision: "pending" as const,
-    organizerDecision: requiresOrganizerApproval ? ("pending" as const) : ("accepted" as const),
-  };
-}
-
 function transferEnrollmentRequestToEvent(
   store: DemoStore,
   request: EnrollmentRequest,
@@ -1532,9 +1499,6 @@ function transferEnrollmentRequestToEvent(
 ) {
   const trainer = findTrainer(store, targetEvent.trainerId);
   const organizer = findOrganizer(store, targetEvent.organizerId);
-  const requiresOrganizerApproval =
-    !isCommunityBrandStatus(targetEvent.brandStatus) && Boolean(targetEvent.organizerId);
-  const decisionState = resolveEnrollmentDecisionState(decision, requiresOrganizerApproval);
   const transferredRequest: EnrollmentRequest = {
     ...cloneValue(request),
     id: createId("enrollment"),
@@ -1551,14 +1515,7 @@ function transferEnrollmentRequestToEvent(
     attendanceConfirmationStatus: undefined,
     attendanceConfirmationRequestedAt: undefined,
     attendanceConfirmationRespondedAt: undefined,
-    trainerDecision: decisionState.trainerDecision,
-    organizerDecision: decisionState.organizerDecision,
-    finalStatus: deriveEnrollmentFinalStatus(
-      decisionState.trainerDecision,
-      decisionState.organizerDecision,
-      requiresOrganizerApproval,
-    ),
-    requiresOrganizerApproval,
+    finalStatus: deriveEnrollmentFinalStatus(decision),
   };
 
   store.enrollmentRequests.unshift(transferredRequest);
@@ -1599,8 +1556,8 @@ export async function manageEnrollmentRequest(
       throw new Error("Nie znaleziono wydarzenia dla zgłoszenia.");
     }
 
-    const canManageRequest = canManageTrainingEvent(event, currentUser);
-    if (!canManageRequest) {
+    const canApproveRequest = canApproveEnrollmentRequest(event, currentUser);
+    if (!canApproveRequest) {
       throw new Error("Nie możesz zarządzać tym zgłoszeniem.");
     }
 
@@ -1616,7 +1573,7 @@ export async function manageEnrollmentRequest(
         throw new Error("Wybierz inny termin docelowy.");
       }
 
-      if (!canManageTrainingEvent(targetEvent, currentUser)) {
+      if (!canApproveEnrollmentRequest(targetEvent, currentUser)) {
         throw new Error("Nie możesz zarządzać docelowym wydarzeniem.");
       }
 
@@ -1627,37 +1584,7 @@ export async function manageEnrollmentRequest(
       return;
     }
 
-    const isSelfManagedEvent =
-      request.requiresOrganizerApproval === false || isCommunityBrandStatus(event.brandStatus);
-
-    if (currentUser.role === "admin") {
-      request.trainerDecision = input.decision;
-      request.organizerDecision = input.decision;
-    } else if (isSelfManagedEvent) {
-      request.trainerDecision = input.decision;
-      request.organizerDecision = "accepted";
-    } else if (
-      currentUser.id === event.trainerUserId ||
-      currentUser.trainerProfileId === event.trainerId
-    ) {
-      request.trainerDecision = input.decision;
-    } else if (
-      currentUser.id === event.organizerUserId ||
-      currentUser.organizerProfileId === event.organizerId
-    ) {
-      request.organizerDecision = input.decision;
-    } else if (currentUser.id === event.creatorUserId) {
-      request.trainerDecision = input.decision;
-      if (request.requiresOrganizerApproval === false) {
-        request.organizerDecision = "accepted";
-      }
-    }
-
-    request.finalStatus = deriveEnrollmentFinalStatus(
-      request.trainerDecision,
-      request.organizerDecision,
-      request.requiresOrganizerApproval !== false,
-    );
+    request.finalStatus = deriveEnrollmentFinalStatus(input.decision);
 
     if (request.finalStatus === "accepted") {
       syncEventParticipantFromEnrollment(store, request, event.groupId ? "invited" : "confirmed");
@@ -1710,8 +1637,6 @@ export async function manageOwnEnrollment(
       createdAt: nowIso(),
       intent: request.intent ?? "participating",
       participantStatus: "active",
-      trainerDecision: "pending",
-      organizerDecision: request.requiresOrganizerApproval === false ? "accepted" : "pending",
       finalStatus: "pending",
     });
   });
@@ -1768,12 +1693,9 @@ export async function manageOwnGroupEventParticipation(
       polecenieOdKogo: "Transfer uczestnika",
       wiadomosc: "Przeniesione przez uczestnika.",
       photoStatus: "pending",
-      trainerDecision: "pending",
-      organizerDecision: "pending",
       finalStatus: "pending",
       participantStatus: "active",
       createdAt: nowIso(),
-      requiresOrganizerApproval: true,
     });
   });
 }

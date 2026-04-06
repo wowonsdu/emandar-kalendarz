@@ -647,8 +647,6 @@ describe("submitEnrollment", () => {
 
     const request = mockedApi.getStore().enrollmentRequests[0];
     expect(request?.intent).toBe("participating");
-    expect(request?.trainerDecision).toBe("pending");
-    expect(request?.organizerDecision).toBe("accepted");
     expect(request?.finalStatus).toBe("pending");
   });
 
@@ -781,12 +779,9 @@ describe("manageEnrollmentRequest", () => {
         polecenieOdKogo: "",
         wiadomosc: "Chcę dołączyć",
         photoStatus: "pending",
-        trainerDecision: "pending",
-        organizerDecision: "pending",
         finalStatus: "pending",
         participantStatus: "active",
         createdAt: "2026-04-02T12:00:00.000Z",
-        requiresOrganizerApproval: true,
       },
     ];
     const mockedApi = mockStoreFetch(store);
@@ -811,6 +806,131 @@ describe("manageEnrollmentRequest", () => {
     expect(updatedStore.eventParticipants[0]).toMatchObject({
       id: "event-group__participant-1",
       eventId: "event-group",
+      participantProfileId: "participant-1",
+      status: "invited",
+      source: "public-form",
+    });
+  });
+
+  it("lets an organizer finalize grouped enrollments into the roster", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const store = createStore(
+      {
+        id: "event-group-organizer",
+        title: "Szkolenie grupowe",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+      },
+      actor,
+    );
+    store.groups = [
+      {
+        id: "group-1",
+        name: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        status: "active",
+        defaultEventType: "training",
+        defaultConfirmationLeadTimeDays: 7,
+        defaultJoinAudience: "new-people",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.organizers = [
+      {
+        id: "organizer-1",
+        userId: "user-organizer-1",
+        displayName: "Anita",
+        description: "Opis",
+        isVisible: true,
+      },
+    ];
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: "user-trainer-1",
+        slug: "jacek",
+        displayName: "Jacek",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Łódź"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+      },
+    ];
+    store.participantProfiles = [
+      {
+        id: "participant-1",
+        linkedUserId: null,
+        displayName: "Anna Nowak",
+        firstName: "Anna",
+        lastName: "Nowak",
+        phone: "+48 605 100 304",
+        phoneLookupKey: "48605100304",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-organizer-group",
+        eventId: "event-group-organizer",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-1",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        intent: "participating",
+        imieNazwisko: "Anna Nowak",
+        telefon: "+48 605 100 304",
+        polecenieOdKogo: "",
+        wiadomosc: "Chcę dołączyć",
+        photoStatus: "pending",
+        finalStatus: "pending",
+        participantStatus: "active",
+        createdAt: "2026-04-02T12:00:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-organizer-group",
+          decision: "accepted",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.enrollmentRequests[0]).toMatchObject({
+      id: "enrollment-organizer-group",
+      finalStatus: "accepted",
+      eventParticipantId: "event-group-organizer__participant-1",
+      participantStatus: "active",
+    });
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      id: "event-group-organizer__participant-1",
+      eventId: "event-group-organizer",
       participantProfileId: "participant-1",
       status: "invited",
       source: "public-form",
@@ -918,12 +1038,9 @@ describe("manageEnrollmentRequest", () => {
         polecenieOdKogo: "",
         wiadomosc: "Pasuje mi inny termin",
         photoStatus: "pending",
-        trainerDecision: "pending",
-        organizerDecision: "pending",
         finalStatus: "pending",
         participantStatus: "active",
         createdAt: "2026-04-02T12:00:00.000Z",
-        requiresOrganizerApproval: true,
       },
     ];
     const mockedApi = mockStoreFetch(store);

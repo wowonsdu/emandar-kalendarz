@@ -8,10 +8,12 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { AppUser, DemoStore } from "@/domain/types";
 import {
+  canApproveEnrollmentRequest,
   getHighestRole,
   hasInheritedRole,
   hasModeratorAccess,
   isCommunityBrandStatus,
+  isOperationalEnrollmentRequest,
 } from "@/domain/utils";
 
 export type AppNavigationItem = {
@@ -42,8 +44,17 @@ export function buildPublicNavigationSections(): AppNavigationSection[] {
 }
 
 export function buildAuthenticatedNavigationSections(
-  user: Pick<AppUser, "id" | "role" | "roles" | "primaryRole">,
-  store: Pick<DemoStore, "trainers" | "trainingEvents">,
+  user: Pick<
+    AppUser,
+    | "id"
+    | "role"
+    | "roles"
+    | "primaryRole"
+    | "trainerProfileId"
+    | "organizerProfileId"
+    | "organizerFunctionsBlockedAt"
+  >,
+  store: Pick<DemoStore, "trainers" | "trainingEvents" | "enrollmentRequests">,
 ): AppNavigationSection[] {
   const highestRole = getHighestRole(user);
   const trainerProfile = store.trainers.find((item) => item.userId === user.id);
@@ -56,6 +67,22 @@ export function buildAuthenticatedNavigationSections(
           item.publicationApprovalStatus === "pending",
       ).length
     : 0;
+  const pendingEnrollmentRequests = store.enrollmentRequests.filter((request) => {
+    if (request.finalStatus !== "pending") {
+      return false;
+    }
+
+    if (!isOperationalEnrollmentRequest(request, store)) {
+      return false;
+    }
+
+    const event = store.trainingEvents.find((item) => item.id === request.eventId);
+    if (!event) {
+      return false;
+    }
+
+    return canApproveEnrollmentRequest(event, user);
+  }).length;
 
   const sections: AppNavigationSection[] = [
     {
@@ -73,7 +100,12 @@ export function buildAuthenticatedNavigationSections(
           label: "Wydarzenia społeczności",
           icon: CalendarDays,
         },
-        { to: "/panel/zgloszenia", label: "Chcą wziąć udział", icon: Bell },
+        {
+          to: "/panel/zgloszenia",
+          label: "Chcą wziąć udział",
+          icon: Bell,
+          badgeCount: pendingEnrollmentRequests || undefined,
+        },
         { to: "/panel/ustawienia", label: "Ustawienia", icon: ShieldCheck },
       ],
     },

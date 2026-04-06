@@ -7,8 +7,7 @@ export type AccountApprovalStatus = "pending" | "approved" | "rejected";
 export type EnrollmentFinalStatus =
   | "pending"
   | "accepted"
-  | "rejected"
-  | "partial";
+  | "rejected";
 export type EnrollmentIntent = "participating";
 export type ParticipantEnrollmentStatus = "active" | "cancelled";
 export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
@@ -485,8 +484,6 @@ export interface EnrollmentRequest {
   photoPath?: string;
   photoUploadedAt?: string;
   photoContentType?: string;
-  trainerDecision: DecisionStatus;
-  organizerDecision: DecisionStatus;
   finalStatus: EnrollmentFinalStatus;
   participantStatus?: ParticipantEnrollmentStatus;
   participantManagedAt?: string;
@@ -495,7 +492,6 @@ export interface EnrollmentRequest {
   attendanceConfirmationRequestedAt?: string;
   attendanceConfirmationRespondedAt?: string;
   createdAt: string;
-  requiresOrganizerApproval?: boolean;
 }
 
 export interface NotificationRecord {

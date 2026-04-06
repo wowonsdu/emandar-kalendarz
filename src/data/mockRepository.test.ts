@@ -939,7 +939,89 @@ describe("manageEnrollmentRequest", () => {
     });
   });
 
-  it("creates a transferred request on the target event and syncs it into the new roster", async () => {
+  it("syncs accepted community enrollments into event participants", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor();
+    const store = createStore(
+      {
+        id: "event-community-accept",
+        title: "Spotkanie społeczności",
+        type: "Wydarzenie społeczności",
+        eventTypeSystem: "post",
+        brandStatus: "supported",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: null,
+        groupName: null,
+      },
+      actor,
+    );
+    store.participantProfiles = [
+      {
+        id: "participant-community-1",
+        linkedUserId: "user-participant-1",
+        displayName: "Ola Chotnicka",
+        firstName: "Ola",
+        lastName: "Chotnicka",
+        phone: "+48 605 100 302",
+        phoneLookupKey: "48605100302",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-community-1",
+        eventId: "event-community-accept",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-community-1",
+        submitterUid: "user-participant-1",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        intent: "participating",
+        imieNazwisko: "Ola Chotnicka",
+        telefon: "+48 605 100 302",
+        polecenieOdKogo: "",
+        wiadomosc: "Chcę dołączyć",
+        photoStatus: "pending",
+        finalStatus: "pending",
+        participantStatus: "active",
+        createdAt: "2026-04-02T12:00:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-community-1",
+          decision: "accepted",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.enrollmentRequests[0]).toMatchObject({
+      id: "enrollment-community-1",
+      finalStatus: "accepted",
+      eventParticipantId: "event-community-accept__participant-community-1",
+      participantStatus: "active",
+    });
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      id: "event-community-accept__participant-community-1",
+      eventId: "event-community-accept",
+      participantProfileId: "participant-community-1",
+      status: "confirmed",
+      source: "public-form",
+    });
+  });
+
+  it("creates a transferred pending request on the target event", async () => {
     const { manageEnrollmentRequest } = await import("./mockRepository");
     const actor = createActor();
     const store = createStore(
@@ -1070,16 +1152,11 @@ describe("manageEnrollmentRequest", () => {
       });
     expect(transferredRequest).toMatchObject({
       eventId: "event-group-b",
-      finalStatus: "accepted",
+      finalStatus: "pending",
       participantStatus: "active",
-      eventParticipantId: "event-group-b__participant-2",
+      eventParticipantId: null,
     });
-    expect(updatedStore.eventParticipants[0]).toMatchObject({
-      id: "event-group-b__participant-2",
-      eventId: "event-group-b",
-      participantProfileId: "participant-2",
-      status: "invited",
-    });
+    expect(updatedStore.eventParticipants).toEqual([]);
   });
 
   it("moves a previously accepted grouped enrollment into rejected state and declines the roster entry", async () => {

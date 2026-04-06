@@ -1438,18 +1438,22 @@ function syncEventParticipantFromEnrollment(
     return;
   }
 
-  const group = store.groups.find((item) => item.id === event.groupId);
+  const group = event.groupId
+    ? store.groups.find((item) => item.id === event.groupId) ?? null
+    : null;
   const participantProfile = store.participantProfiles.find(
     (item) => item.id === request.participantProfileId,
   );
-  const activeGroupMember = store.groupMembers.find(
-    (item) =>
-      item.groupId === event.groupId &&
-      item.participantProfileId === request.participantProfileId &&
-      item.membershipStatus === "active",
-  );
+  const activeGroupMember = event.groupId
+    ? store.groupMembers.find(
+        (item) =>
+          item.groupId === event.groupId &&
+          item.participantProfileId === request.participantProfileId &&
+          item.membershipStatus === "active",
+      )
+    : null;
 
-  if (!group || !participantProfile) {
+  if (!participantProfile) {
     return;
   }
 
@@ -1462,12 +1466,12 @@ function syncEventParticipantFromEnrollment(
     id: eventParticipantId,
     eventId: event.id,
     eventTitle: event.title || event.location,
-    groupId: group.id,
-    groupName: group.name,
-    organizerId: group.organizerId,
-    organizerUserId: group.organizerUserId ?? "",
-    trainerId: group.trainerId,
-    trainerUserId: group.trainerUserId ?? "",
+    groupId: group?.id ?? event.groupId ?? "",
+    groupName: group?.name ?? event.groupName ?? event.title ?? event.location,
+    organizerId: event.organizerId ?? group?.organizerId ?? "",
+    organizerUserId: event.organizerUserId ?? group?.organizerUserId ?? "",
+    trainerId: event.trainerId ?? group?.trainerId ?? "",
+    trainerUserId: event.trainerUserId ?? group?.trainerUserId ?? "",
     participantProfileId: participantProfile.id,
     participantDisplayName: participantProfile.displayName,
     participantPhone: participantProfile.phone,
@@ -1526,7 +1530,6 @@ function transferEnrollmentRequestToEvent(
   store: DemoStore,
   request: EnrollmentRequest,
   targetEvent: TrainingEvent,
-  decision: DecisionStatus,
 ) {
   const trainer = findTrainer(store, targetEvent.trainerId);
   const organizer = findOrganizer(store, targetEvent.organizerId);
@@ -1546,18 +1549,10 @@ function transferEnrollmentRequestToEvent(
     attendanceConfirmationStatus: undefined,
     attendanceConfirmationRequestedAt: undefined,
     attendanceConfirmationRespondedAt: undefined,
-    finalStatus: deriveEnrollmentFinalStatus(decision),
+    finalStatus: deriveEnrollmentFinalStatus("pending"),
   };
 
   store.enrollmentRequests.unshift(transferredRequest);
-
-  if (transferredRequest.finalStatus === "accepted") {
-    syncEventParticipantFromEnrollment(
-      store,
-      transferredRequest,
-      targetEvent.groupId ? "invited" : "confirmed",
-    );
-  }
 }
 
 export async function decideEnrollment(
@@ -1611,7 +1606,9 @@ export async function manageEnrollmentRequest(
       request.participantStatus = "cancelled";
       request.participantManagedAt = nowIso();
       request.participantActionSource = "staff";
-      transferEnrollmentRequestToEvent(store, request, targetEvent, input.decision);
+      markEventParticipantFromEnrollmentAsDeclined(store, request);
+      recomputeEventEnrolledCount(store, event.id);
+      transferEnrollmentRequestToEvent(store, request, targetEvent);
       return;
     }
 

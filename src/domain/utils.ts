@@ -3,6 +3,7 @@ import type {
   AppUser,
   AppRole,
   DecisionStatus,
+  DemoStore,
   EmandarBrandStatus,
   EnrollmentIntent,
   ExternalBusyInterval,
@@ -78,32 +79,14 @@ export function groupParticipantRecordsByPriority<T extends PrioritizedParticipa
 }
 
 export function deriveEnrollmentFinalStatus(
-  trainerDecision: DecisionStatus,
-  organizerDecision: DecisionStatus,
-  requiresOrganizerApproval = true,
+  decision: DecisionStatus,
 ): EnrollmentFinalStatus {
-  if (!requiresOrganizerApproval) {
-    if (trainerDecision === "rejected") {
-      return "rejected";
-    }
-
-    if (trainerDecision === "accepted") {
-      return "accepted";
-    }
-
-    return "pending";
-  }
-
-  if (trainerDecision === "rejected" || organizerDecision === "rejected") {
-    return "rejected";
-  }
-
-  if (trainerDecision === "accepted" && organizerDecision === "accepted") {
+  if (decision === "accepted") {
     return "accepted";
   }
 
-  if (trainerDecision === "accepted" || organizerDecision === "accepted") {
-    return "partial";
+  if (decision === "rejected") {
+    return "rejected";
   }
 
   return "pending";
@@ -133,13 +116,11 @@ export function getParticipantEnrollmentStatusLabel(
 
   switch (request.finalStatus) {
     case "accepted":
-      return "przyjęte";
-    case "partial":
-      return "częściowo przyjęte";
+      return "potwierdzono";
     case "rejected":
       return "odrzucone";
     default:
-      return "oczekuje";
+      return "oczekujące";
   }
 }
 
@@ -343,6 +324,73 @@ export function canManageTrainingEvent(
   }
 
   return false;
+}
+
+export function canApproveEnrollmentRequest(
+  event: Pick<
+    TrainingEvent,
+    | "archivedAt"
+    | "brandStatus"
+    | "creatorUserId"
+    | "organizerId"
+    | "selfManagedByTrainer"
+    | "trainerId"
+  >,
+  actor: Pick<
+    AppUser,
+    | "id"
+    | "role"
+    | "trainerProfileId"
+    | "organizerProfileId"
+    | "organizerFunctionsBlockedAt"
+  >,
+) {
+  if (actor.role === "admin") {
+    return !isTrainingEventArchived(event);
+  }
+
+  if (isTrainingEventArchived(event)) {
+    return false;
+  }
+
+  if (
+    actor.organizerProfileId === event.organizerId &&
+    !isOrganizerFunctionsBlocked(actor)
+  ) {
+    return true;
+  }
+
+  if (isSelfManagedTrainingEvent(event)) {
+    if (actor.trainerProfileId === event.trainerId) {
+      return true;
+    }
+
+    if (actor.id === event.creatorUserId) {
+      return true;
+    }
+  }
+
+  if (isCommunityBrandStatus(event.brandStatus) && actor.id === event.creatorUserId) {
+    return true;
+  }
+
+  return false;
+}
+
+export function isOperationalEnrollmentRequest(
+  request: Pick<EnrollmentRequest, "eventId" | "eventParticipantId" | "finalStatus">,
+  store: Pick<DemoStore, "trainingEvents">,
+) {
+  if (request.finalStatus === "accepted") {
+    return false;
+  }
+
+  const event = store.trainingEvents.find((item) => item.id === request.eventId);
+  if (!event?.groupId) {
+    return true;
+  }
+
+  return !request.eventParticipantId;
 }
 
 export function canDecideTrainingEventCollaboration(

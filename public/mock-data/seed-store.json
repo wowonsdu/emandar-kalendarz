@@ -1648,12 +1648,9 @@
       "photoStatus": "ready",
       "photoMode": "required",
       "photoPath": "mock://enrollment-krakow-grzegorz/photo",
-      "trainerDecision": "accepted",
-      "organizerDecision": "pending",
-      "finalStatus": "partial",
+      "finalStatus": "pending",
       "participantStatus": "active",
-      "createdAt": "2026-04-01T13:00:00.000Z",
-      "requiresOrganizerApproval": true
+      "createdAt": "2026-04-01T13:00:00.000Z"
     }
   ],
   "notifications": [

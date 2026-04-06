@@ -44,26 +44,16 @@ import {
 } from "./utils";
 
 describe("deriveEnrollmentFinalStatus", () => {
-  it("returns accepted only after both approvals", () => {
-    expect(deriveEnrollmentFinalStatus("accepted", "accepted")).toBe(
-      "accepted",
-    );
+  it("returns accepted for a confirmed request", () => {
+    expect(deriveEnrollmentFinalStatus("accepted")).toBe("accepted");
   });
 
-  it("returns rejected when any side rejects", () => {
-    expect(deriveEnrollmentFinalStatus("rejected", "accepted")).toBe(
-      "rejected",
-    );
+  it("returns rejected for a rejected request", () => {
+    expect(deriveEnrollmentFinalStatus("rejected")).toBe("rejected");
   });
 
-  it("returns partial when only one side accepted", () => {
-    expect(deriveEnrollmentFinalStatus("accepted", "pending")).toBe("partial");
-  });
-
-  it("returns trainer decision only for community events", () => {
-    expect(deriveEnrollmentFinalStatus("accepted", "pending", false)).toBe(
-      "accepted",
-    );
+  it("returns pending when the request is still open", () => {
+    expect(deriveEnrollmentFinalStatus("pending")).toBe("pending");
   });
 });
 

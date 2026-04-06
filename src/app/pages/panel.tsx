@@ -63,6 +63,7 @@ import {
 import {
   aggregateEventCapacityStats,
   buildTrainerFreeDaySlices,
+  canApproveEnrollmentRequest,
   canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
@@ -81,6 +82,7 @@ import {
   hasModeratorAccess,
   hasInheritedRole,
   isParticipantEnrollmentActive,
+  isOperationalEnrollmentRequest,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
@@ -102,6 +104,7 @@ import {
 import type {
   AvatarCropSettings,
   DecisionStatus,
+  DemoStore,
   EmandarBrandStatus,
   EnrollmentFinalStatus,
   EnrollmentIntent,
@@ -1122,18 +1125,6 @@ function isSyncedGroupEnrollmentRecord(record: ParticipantEnrollmentRecord) {
   return Boolean(record.event.groupId && record.request.eventParticipantId);
 }
 
-function isOperationalEnrollmentRequest(
-  request: EnrollmentRequest,
-  store: ReturnType<typeof useAppState>["store"],
-) {
-  const event = store.trainingEvents.find((item) => item.id === request.eventId);
-  if (!event?.groupId) {
-    return true;
-  }
-
-  return !request.eventParticipantId;
-}
-
 function isEventFinished(event: TrainingEvent) {
   const bounds = getTrainingEventScheduleBounds(event);
   return new Date(bounds.endsAt).getTime() < Date.now();
@@ -1389,7 +1380,7 @@ function ParticipantEnrollmentCard({
           <p className="font-semibold text-brand-navy">{record.event.location}</p>
           <p className="mt-2">Start: {formatDateTime(record.event.startsAt)}</p>
           <p>Koniec: {formatDateTime(record.event.endsAt)}</p>
-          <p className="mt-2">Status zapisu: {record.request.finalStatus}</p>
+          <p className="mt-2">Status zapisu: {getEnrollmentFinalStatusLabel(record.request.finalStatus)}</p>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
           <ParticipantContactBlock
@@ -1816,13 +1807,11 @@ function getDashboardChartHeight(itemCount: number) {
 function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
   switch (status) {
     case "accepted":
-      return "Przyjete";
+      return "Potwierdzono";
     case "rejected":
-      return "Odrzucone";
-    case "partial":
-      return "Czesciowe";
+      return "Odrzucono";
     default:
-      return "Oczekujace";
+      return "Oczekujące";
   }
 }
 
@@ -1928,6 +1917,97 @@ function parseGroupMemberPriorityPromptValue(value: string | null) {
   }
 
   return null;
+}
+
+function getFutureOpenGroupEvents(
+  store: Pick<DemoStore, "trainingEvents">,
+  groupId: string,
+  currentEventId?: string,
+) {
+  return sortEventsByDate(
+    store.trainingEvents.filter(
+      (item) =>
+        item.groupId === groupId &&
+        item.id !== currentEventId &&
+        !isTrainingEventArchived(item) &&
+        !item.rosterFinalizedAt &&
+        new Date(item.startsAt).getTime() > Date.now(),
+    ),
+  );
+}
+
+function hasActiveGroupMember(
+  store: Pick<DemoStore, "groupMembers">,
+  groupId: string,
+  participantProfileId: string,
+) {
+  return (store.groupMembers ?? []).some(
+    (item) =>
+      item.groupId === groupId &&
+      item.participantProfileId === participantProfileId &&
+      item.membershipStatus === "active",
+  );
+}
+
+async function maybeAddAcceptedRequestToGroup({
+  request,
+  event,
+  store,
+  addGroupMember,
+}: {
+  request: EnrollmentRequest;
+  event: Pick<TrainingEvent, "id" | "groupId">;
+  store: Pick<DemoStore, "groupMembers" | "trainingEvents">;
+  addGroupMember: (
+    input: {
+      groupId: string;
+      participantProfileId: string;
+      priority: GroupMemberPriority;
+      syncFutureEvents?: boolean;
+    },
+  ) => Promise<void>;
+}) {
+  if (!event.groupId || !request.participantProfileId) {
+    return false;
+  }
+
+  if (hasActiveGroupMember(store, event.groupId, request.participantProfileId)) {
+    return false;
+  }
+
+  const shouldAddToGroup = window.confirm(
+    "Osoba trafiła na roster wydarzenia. Dopisać ją też do grupy?",
+  );
+  if (!shouldAddToGroup) {
+    return false;
+  }
+
+  const priorityValue = window.prompt(
+    "Podaj rangę w grupie: stali, regularni albo rezerwowi.",
+    "regularni",
+  );
+  const priority = parseGroupMemberPriorityPromptValue(priorityValue);
+  if (!priority) {
+    toast.error("Osoba została dodana do rosteru. Do grupy wpisz: stali, regularni albo rezerwowi.");
+    return false;
+  }
+
+  const futureOpenGroupEvents = getFutureOpenGroupEvents(store, event.groupId, event.id);
+  const shouldSyncFutureEvents =
+    futureOpenGroupEvents.length > 0
+      ? window.confirm(
+          `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
+        )
+      : false;
+
+  await addGroupMember({
+    groupId: event.groupId,
+    participantProfileId: request.participantProfileId,
+    priority,
+    syncFutureEvents: shouldSyncFutureEvents,
+  });
+
+  return true;
 }
 
 function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
@@ -2089,6 +2169,7 @@ function PanelSection({
   title,
   description,
   action,
+  showHeader = true,
   showLeadText = true,
   children,
 }: {
@@ -2096,24 +2177,27 @@ function PanelSection({
   title: string;
   description?: string;
   action?: ReactNode;
+  showHeader?: boolean;
   showLeadText?: boolean;
   children: ReactNode;
 }) {
   return (
     <section className="space-y-4 sm:space-y-5">
-      <div className="flex flex-col gap-2.5 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <h2 className="break-words text-xl font-medium leading-snug text-brand-navy sm:text-2xl">
-            {title}
-          </h2>
-          {showLeadText && description ? (
-            <p className="mt-2 max-w-3xl break-words text-sm text-brand-muted sm:text-base">
-              {description}
-            </p>
-          ) : null}
+      {showHeader ? (
+        <div className="flex flex-col gap-2.5 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <h2 className="break-words text-xl font-medium leading-snug text-brand-navy sm:text-2xl">
+              {title}
+            </h2>
+            {showLeadText && description ? (
+              <p className="mt-2 max-w-3xl break-words text-sm text-brand-muted sm:text-base">
+                {description}
+              </p>
+            ) : null}
+          </div>
+          {action ? <div className="shrink-0">{action}</div> : null}
         </div>
-        {action ? <div className="shrink-0">{action}</div> : null}
-      </div>
+      ) : null}
       {children}
     </section>
   );
@@ -2176,6 +2260,192 @@ function SectionBlockHeading({
       ) : null}
       {description ? <p className="mt-2 text-sm text-brand-muted">{description}</p> : null}
     </div>
+  );
+}
+
+function getEnrollmentRequestContextLabels(
+  event: Pick<TrainingEvent, "groupName" | "location" | "title">,
+  group?: Pick<Group, "name"> | null,
+) {
+  const groupLabel =
+    group?.name?.trim() || event.groupName?.trim() || event.title?.trim() || "Termin Emandar";
+  const locationLabel = event.location?.trim() || "Brak lokalizacji";
+
+  return {
+    groupLabel,
+    locationLabel,
+  };
+}
+
+function EnrollmentRequestMetaRow({
+  request,
+}: {
+  request: Pick<EnrollmentRequest, "telefon" | "polecenieOdKogo" | "createdAt">;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
+      <span className="inline-flex items-center gap-1.5 sm:gap-2">
+        <Phone size={12} className="sm:size-[14px]" />
+        {request.telefon}
+      </span>
+      <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
+      <span>{formatDate(request.createdAt)}</span>
+    </div>
+  );
+}
+
+function EnrollmentRequestStatusBadges({
+  request,
+}: {
+  request: Pick<EnrollmentRequest, "finalStatus" | "attendanceConfirmationStatus">;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <span className="rounded-full bg-brand-navy px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white sm:text-xs">
+        {getEnrollmentFinalStatusLabel(request.finalStatus)}
+      </span>
+      <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
+        SMS: {resolveAttendanceConfirmationStatusLabel(request.attendanceConfirmationStatus)}
+      </span>
+    </div>
+  );
+}
+
+function EnrollmentRequestDecisionButtons({
+  disabled = false,
+  onDecision,
+}: {
+  disabled?: boolean;
+  onDecision: (decision: DecisionStatus) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-3">
+      {(["accepted", "pending", "rejected"] as const).map((decision) => (
+        <button
+          key={decision}
+          type="button"
+          disabled={disabled}
+          onClick={() => onDecision(decision)}
+          className={
+            decision === "accepted"
+              ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+              : decision === "rejected"
+                ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+          }
+        >
+          {decision === "accepted"
+            ? "Potwierdź"
+            : decision === "rejected"
+              ? "Odrzuć"
+              : "Ustaw oczekujące"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function EnrollmentRequestSmsStatusCard({
+  request,
+}: {
+  request: Pick<EnrollmentRequest, "attendanceConfirmationStatus">;
+}) {
+  return (
+    <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+      <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+        Status potwierdzenia SMS
+      </p>
+      <p className="mt-2 text-lg font-semibold text-brand-navy">
+        {resolveAttendanceConfirmationStatusLabel(request.attendanceConfirmationStatus)}
+      </p>
+    </div>
+  );
+}
+
+function EnrollmentRequestSlimRow({
+  request,
+  event,
+  eventGroup,
+  rowIndex,
+  isExpanded,
+  onExpandedChange,
+  isSaving = false,
+  children,
+}: {
+  request: EnrollmentRequest;
+  event: Pick<TrainingEvent, "groupName" | "location" | "title">;
+  eventGroup?: Pick<Group, "name"> | null;
+  rowIndex: number;
+  isExpanded: boolean;
+  onExpandedChange: (open: boolean) => void;
+  isSaving?: boolean;
+  children: ReactNode;
+}) {
+  const { groupLabel, locationLabel } = getEnrollmentRequestContextLabels(event, eventGroup);
+
+  return (
+    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
+      <article
+        className={cn(
+          "border-b border-brand-line/70 px-6 py-3 last:border-b-0",
+          rowIndex % 2 === 0 ? "bg-white" : "bg-brand-shell/35",
+          "sm:rounded-3xl sm:border sm:bg-brand-shell/60 sm:p-4",
+        )}
+      >
+        <div className="flex min-w-0 items-start gap-3 sm:items-center">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-[11px] sm:tracking-[0.22em]">
+              {groupLabel}
+            </p>
+            <p className="mt-1 truncate text-xs text-brand-muted sm:text-sm">{locationLabel}</p>
+            <p className="mt-1.5 truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
+              {request.imieNazwisko}
+            </p>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <span className="rounded-full bg-brand-navy px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white sm:px-3 sm:text-xs">
+              {getEnrollmentFinalStatusLabel(request.finalStatus)}
+            </span>
+
+            {isSaving ? (
+              <span
+                title="Zapisywanie zgłoszenia"
+                aria-label="Zapisywanie zgłoszenia"
+                className="inline-flex size-6 items-center justify-center text-brand-navy sm:size-8"
+              >
+                <RefreshCcw size={12} className="animate-spin sm:size-[14px]" />
+              </span>
+            ) : null}
+
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex size-9 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
+                aria-label={
+                  isExpanded
+                    ? `Ukryj szczegóły ${request.imieNazwisko}`
+                    : `Pokaż szczegóły ${request.imieNazwisko}`
+                }
+              >
+                <ChevronDown
+                  size={16}
+                  className={cn(
+                    "transition-transform duration-200",
+                    isExpanded ? "rotate-180" : "",
+                    "sm:size-[18px]",
+                  )}
+                />
+              </button>
+            </CollapsibleTrigger>
+          </div>
+        </div>
+
+        <CollapsibleContent className="mt-3 border-t border-brand-line/60 pt-3 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
+          {children}
+        </CollapsibleContent>
+      </article>
+    </Collapsible>
   );
 }
 
@@ -2897,7 +3167,6 @@ type DashboardMonthDecisionDatum = {
   accepted: number;
   pending: number;
   rejected: number;
-  partial: number;
 };
 
 type DashboardMonthOutcomeDatum = {
@@ -2999,7 +3268,6 @@ function RequestDecisionsTooltip({
       <div className="mt-2 space-y-1 text-sm text-brand-navy">
         <p>{getEnrollmentFinalStatusLabel("accepted")}: {item.accepted}</p>
         <p>{getEnrollmentFinalStatusLabel("pending")}: {item.pending}</p>
-        <p>{getEnrollmentFinalStatusLabel("partial")}: {item.partial}</p>
         <p>{getEnrollmentFinalStatusLabel("rejected")}: {item.rejected}</p>
       </div>
     </div>
@@ -3163,8 +3431,7 @@ export function DashboardPage() {
           : nextLegacyRecord;
   const needsAttentionCount =
     activeRecords.filter(
-      (record) =>
-        record.request.finalStatus === "pending" || record.request.finalStatus === "partial",
+      (record) => record.request.finalStatus === "pending",
     ).length +
     activeGroupRecords.filter((record) => record.eventParticipant.status === "invited").length;
   const totalActiveCount = activeRecords.length + activeGroupRecords.length;
@@ -3601,7 +3868,6 @@ export function DashboardPage() {
           accepted: monthRequests.filter((request) => request.finalStatus === "accepted").length,
           pending: monthRequests.filter((request) => request.finalStatus === "pending").length,
           rejected: monthRequests.filter((request) => request.finalStatus === "rejected").length,
-          partial: monthRequests.filter((request) => request.finalStatus === "partial").length,
         };
       }),
     [analyticsRequestsInRange, dashboardMonthBuckets],
@@ -3856,10 +4122,9 @@ export function DashboardPage() {
                   <>
                     <DashboardLegend
                       items={[
-                        { label: "Przyjete", color: "#0ea5a4" },
-                        { label: "Oczekujace", color: "#174f9a" },
-                        { label: "Czesciowe", color: "#f59e0b" },
-                        { label: "Odrzucone", color: "#c84b4b" },
+                        { label: "Potwierdzono", color: "#0ea5a4" },
+                        { label: "Oczekujące", color: "#174f9a" },
+                        { label: "Odrzucono", color: "#c84b4b" },
                       ]}
                     />
                     <div className="h-[220px] sm:h-[280px]">
@@ -3874,7 +4139,6 @@ export function DashboardPage() {
                           <Tooltip content={<RequestDecisionsTooltip />} />
                           <Bar dataKey="accepted" stackId="status" fill="#0ea5a4" />
                           <Bar dataKey="pending" stackId="status" fill="#174f9a" />
-                          <Bar dataKey="partial" stackId="status" fill="#f59e0b" />
                           <Bar dataKey="rejected" stackId="status" fill="#c84b4b" radius={[10, 10, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
@@ -4080,9 +4344,10 @@ export function DashboardPage() {
 
 export function RequestsPage() {
   const {
+    addGroupMember,
     currentUser,
-    decideEnrollment,
     decideTrainerAccountApproval,
+    manageEnrollmentRequest,
     store,
   } = useAppState();
 
@@ -4094,7 +4359,7 @@ export function RequestsPage() {
   const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
   const manageableEventIds = new Set(
     store.trainingEvents
-      .filter((event) => canManageTrainingEvent(event, currentUser))
+      .filter((event) => canApproveEnrollmentRequest(event, currentUser))
       .map((event) => event.id),
   );
 
@@ -4117,11 +4382,22 @@ export function RequestsPage() {
     return manageableEventIds.has(request.eventId) && isOperationalEnrollmentRequest(request, store);
   });
   const requestSections = splitEnrollmentRequestsByIntent(requests);
+  const [expandedRequestIds, setExpandedRequestIds] = useState<string[]>([]);
+  const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
+
+  function toggleExpandedRequest(requestId: string, open: boolean) {
+    setExpandedRequestIds((previous) =>
+      open
+        ? Array.from(new Set([...previous, requestId]))
+        : previous.filter((item) => item !== requestId),
+    );
+  }
 
   return (
     <PanelSection
       eyebrow="Chcą wziąć udział"
       title="Osoby, które chcą wziąć udział"
+      showHeader={false}
       showLeadText={false}
     >
       <div className="space-y-4">
@@ -4135,132 +4411,93 @@ export function RequestsPage() {
           <div key={section.key} className="space-y-4">
             <SectionBlockHeading
               title={section.title}
-              description="Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
+              description="Tu zostają zgłoszenia oczekujące oraz odrzucone."
             />
-            {section.requests.map((request) => {
-          const event = store.trainingEvents.find((item) => item.id === request.eventId);
-          if (!event) {
-            return null;
-          }
+            <div className="-mx-6 mt-4 sm:mx-0 sm:mt-6">
+              <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
+                {section.requests.map((request, rowIndex) => {
+                  const event = store.trainingEvents.find((item) => item.id === request.eventId);
+                  if (!event) {
+                    return null;
+                  }
 
-          const canDecideRequest = canManageTrainingEvent(event, currentUser);
+                  const eventGroup = event.groupId
+                    ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
+                    : null;
+                  const canDecideRequest = canApproveEnrollmentRequest(event, currentUser);
+                  const isExpanded = expandedRequestIds.includes(request.id);
 
-          return (
-            <article
-              key={request.id}
-              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                    {event.title}
-                  </p>
-                  <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
-                    {request.imieNazwisko}
-                  </h3>
-                  <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
-                    <span className="inline-flex items-center gap-2">
-                      <Phone size={14} />
-                      {request.telefon}
-                    </span>
-                    <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                    <span>{formatDate(request.createdAt)}</span>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white">
-                    {request.finalStatus}
-                  </span>
-                </div>
+                  return (
+                    <EnrollmentRequestSlimRow
+                      key={request.id}
+                      request={request}
+                      event={event}
+                      eventGroup={eventGroup}
+                      rowIndex={rowIndex}
+                      isExpanded={isExpanded}
+                      onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                      isSaving={updatingRequestId === request.id}
+                    >
+                      <div className="space-y-4">
+                        <EnrollmentRequestMetaRow request={request} />
+                        <EnrollmentRequestStatusBadges request={request} />
+
+                        <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                          {request.wiadomosc || "Brak dodatkowej wiadomości."}
+                        </p>
+
+                        <div className="grid gap-4 md:grid-cols-[1fr_1.15fr]">
+                          <EnrollmentRequestSmsStatusCard request={request} />
+                          <EnrollmentPhotoCard request={request} />
+                        </div>
+
+                        {canDecideRequest ? (
+                          <EnrollmentRequestDecisionButtons
+                            disabled={updatingRequestId === request.id}
+                            onDecision={(decision) => {
+                              void (async () => {
+                                setUpdatingRequestId(request.id);
+
+                                try {
+                                  await manageEnrollmentRequest(request.id, decision);
+                                  if (decision === "accepted") {
+                                    const addedToGroup = await maybeAddAcceptedRequestToGroup({
+                                      request,
+                                      event,
+                                      store,
+                                      addGroupMember,
+                                    });
+                                    toast.success(
+                                      event.groupId
+                                        ? addedToGroup
+                                          ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+                                          : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+                                        : "Potwierdzono zgłoszenie.",
+                                    );
+                                  } else if (decision === "rejected") {
+                                    toast.success("Odrzucono zgłoszenie.");
+                                  } else {
+                                    toast.success("Ustawiono zgłoszenie jako oczekujące.");
+                                  }
+                                } catch (error) {
+                                  toast.error(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Nie udało się zaktualizować zgłoszenia.",
+                                  );
+                                } finally {
+                                  setUpdatingRequestId(null);
+                                }
+                              })();
+                            }}
+                          />
+                        ) : null}
+                      </div>
+                    </EnrollmentRequestSlimRow>
+                  );
+                })}
               </div>
-
-              <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                {request.wiadomosc || "Brak dodatkowej wiadomości."}
-              </p>
-
-              <div
-                className={`mt-4 grid gap-4 ${
-                  request.requiresOrganizerApproval === false
-                    ? "md:grid-cols-[1fr_1fr_1.15fr]"
-                    : "md:grid-cols-[1fr_1fr_1fr_1.15fr]"
-                }`}
-              >
-                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                    Potwierdzenie uczestnika
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-brand-navy">
-                    {resolveAttendanceConfirmationStatusLabel(
-                      request.attendanceConfirmationStatus,
-                    )}
-                  </p>
-                </div>
-                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                  <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                    Decyzja Przekazującego Wiedzę
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-brand-navy">
-                    {request.trainerDecision}
-                  </p>
-                </div>
-                {request.requiresOrganizerApproval !== false && (
-                  <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                      Decyzja organizatora
-                    </p>
-                    <p className="mt-2 text-lg font-semibold text-brand-navy">
-                      {request.organizerDecision}
-                    </p>
-                  </div>
-                )}
-                <EnrollmentPhotoCard request={request} />
-              </div>
-
-              {canDecideRequest && (
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideEnrollment(request.id, "accepted");
-                        toast.success("Zaktualizowano decyzję dla zgłoszenia.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zaktualizować zgłoszenia.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                  >
-                    <Check size={16} />
-                    Akceptuj
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await decideEnrollment(request.id, "rejected");
-                        toast.success("Zaktualizowano decyzję dla zgłoszenia.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zaktualizować zgłoszenia.",
-                        );
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-                  >
-                    <X size={16} />
-                    Odrzuć
-                  </button>
-                </div>
-              )}
-            </article>
-          );
-            })}
+            </div>
           </div>
         ))}
       </div>
@@ -4734,6 +4971,7 @@ export function GroupsPage() {
   const [memberSaveStates, setMemberSaveStates] = useState<Record<string, GroupMemberSaveState>>(
     {},
   );
+  const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [expandedMemberIds, setExpandedMemberIds] = useState<string[]>([]);
   const [savingGroup, setSavingGroup] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
@@ -4841,6 +5079,7 @@ export function GroupsPage() {
 
     return ownedGroups;
   }, [isParticipantGroupViewer, joinedGroups, ownedGroups]);
+  const groupMode = useMemo(() => new URLSearchParams(location.search).get("mode"), [location.search]);
   const isCreateGroupRoute = location.pathname === "/panel/grupy/utworz";
   const isGroupDetailView = Boolean(groupId);
   const selectedGroup = groupId
@@ -5061,6 +5300,17 @@ export function GroupsPage() {
   }, [groupScope, hasOrganizerGroupScope]);
 
   useEffect(() => {
+    if (isGroupDetailView) {
+      setExpandedGroupId(null);
+      return;
+    }
+
+    if (expandedGroupId && !visibleGroups.some((group) => group.id === expandedGroupId)) {
+      setExpandedGroupId(null);
+    }
+  }, [expandedGroupId, isGroupDetailView, visibleGroups]);
+
+  useEffect(() => {
     if (!canCreateGroups || editingGroupId || groupForm.trainerId || availableTrainers.length === 0) {
       return;
     }
@@ -5070,6 +5320,20 @@ export function GroupsPage() {
       trainerId: availableTrainers[0].id,
     }));
   }, [availableTrainers, canCreateGroups, editingGroupId, groupForm.trainerId]);
+
+  useEffect(() => {
+    if (
+      groupMode !== "edit" ||
+      !selectedGroup ||
+      !canManageGroups ||
+      !selectedGroupIsOwnedByCurrentUser
+    ) {
+      return;
+    }
+
+    setEditingGroupId(selectedGroup.id);
+    setGroupForm(createGroupFormStateFromGroup(selectedGroup));
+  }, [canManageGroups, groupMode, selectedGroup, selectedGroupIsOwnedByCurrentUser]);
 
   useEffect(() => {
     memberDraftsRef.current = memberDrafts;
@@ -5126,6 +5390,9 @@ export function GroupsPage() {
   function resetGroupForm() {
     setEditingGroupId(null);
     setGroupForm(createEmptyGroupFormState(availableTrainers[0]?.id ?? ""));
+    if (selectedGroup && groupMode === "edit") {
+      navigate(`/panel/grupy/${selectedGroup.id}`, { replace: true });
+    }
   }
 
   const isCreateGroupFormVisible = canCreateGroups && !isGroupDetailView && isCreateGroupRoute;
@@ -5341,21 +5608,30 @@ export function GroupsPage() {
     }
   }
 
+  async function handleArchiveGroup(group: Group) {
+    try {
+      await archiveGroup(group.id);
+      toast.success("Grupa została zarchiwizowana.");
+      if (editingGroupId === group.id) {
+        resetGroupForm();
+      }
+      if (expandedGroupId === group.id) {
+        setExpandedGroupId(null);
+      }
+      if (selectedGroup?.id === group.id) {
+        navigate("/panel/grupy", { replace: true });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Nie udało się zarchiwizować grupy.");
+    }
+  }
+
   async function handleArchiveSelectedGroup() {
     if (!selectedGroup) {
       return;
     }
 
-    try {
-      await archiveGroup(selectedGroup.id);
-      toast.success("Grupa została zarchiwizowana.");
-      if (editingGroupId === selectedGroup.id) {
-        resetGroupForm();
-      }
-      navigate("/panel/grupy", { replace: true });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udało się zarchiwizować grupy.");
-    }
+    await handleArchiveGroup(selectedGroup);
   }
 
   function handleMemberPhoneChange(event: ChangeEvent<HTMLInputElement>) {
@@ -5701,46 +5977,161 @@ export function GroupsPage() {
             <div className="space-y-3">
               {visibleGroups.map((group) => {
                 const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-                const isSelected = selectedGroup?.id === group.id;
                 const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);
+                const isExpanded = expandedGroupId === group.id;
 
                 return (
-                  <Link
+                  <Collapsible
                     key={group.id}
-                    to={`/panel/grupy/${group.id}`}
-                    className={`block rounded-[1.75rem] border p-4 shadow-soft transition sm:rounded-[2rem] sm:p-5 ${
-                      isSelected
-                        ? "border-brand-navy bg-brand-navy/5"
-                        : "border-brand-line bg-white hover:bg-brand-shell/70"
-                    }`}
+                    open={isExpanded}
+                    onOpenChange={(open) => setExpandedGroupId(open ? group.id : null)}
                   >
-                    <div className="flex flex-col gap-3">
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          {isOwnedGroup && !isParticipantGroupViewer ? (
-                            <span className="rounded-full bg-brand-navy/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:text-xs sm:tracking-[0.2em]">
+                    <article
+                      className={cn(
+                        "overflow-hidden rounded-[1.75rem] border bg-white shadow-soft transition sm:rounded-[2rem]",
+                        isExpanded
+                          ? "border-brand-navy bg-brand-navy/5"
+                          : "border-brand-line hover:bg-brand-shell/70",
+                      )}
+                    >
+                      <CollapsibleTrigger asChild>
+                        <button type="button" className="w-full px-4 py-3 text-left sm:px-5 sm:py-4">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className="min-w-0 flex-1 md:hidden">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                {trainerName}
+                              </p>
+                              <p className="mt-1 truncate text-lg font-semibold leading-tight text-brand-navy">
+                                {group.name}
+                              </p>
+                              <div className="mt-2 flex items-center gap-4 text-sm text-brand-muted">
+                                <span>{activeMemberCounts[group.id] ?? 0} osób</span>
+                                <span>{groupEventCounts[group.id] ?? 0} wydarzeń</span>
+                              </div>
+                            </div>
+                            <div className="hidden min-w-0 flex-1 md:grid md:grid-cols-[minmax(0,0.45fr)_minmax(0,0.9fr)_auto] md:items-center md:gap-4">
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                  Trener
+                                </p>
+                                <p className="truncate text-sm font-semibold text-brand-navy">
+                                  {trainerName}
+                                </p>
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                  Nazwa grupy
+                                </p>
+                                <p className="truncate text-lg font-semibold leading-tight text-brand-navy">
+                                  {group.name}
+                                </p>
+                              </div>
+                              <div className="flex items-center justify-end gap-5 text-sm text-brand-muted">
+                                <span>{activeMemberCounts[group.id] ?? 0} osób</span>
+                                <span>{groupEventCounts[group.id] ?? 0} wydarzeń</span>
+                              </div>
+                            </div>
+                            <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-brand-line bg-white text-brand-navy shadow-soft">
+                              <ChevronDown
+                                size={18}
+                                className={cn(
+                                  "transition-transform duration-200",
+                                  isExpanded ? "rotate-180" : "",
+                                )}
+                              />
+                            </span>
+                          </div>
+                        </button>
+                      </CollapsibleTrigger>
+
+                      <CollapsibleContent className="border-t border-brand-line/70 px-4 py-4 sm:px-5 sm:py-5">
+                        <div className="flex flex-wrap gap-2">
+                          {isOwnedGroup ? (
+                            <span className="rounded-full bg-brand-navy/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:text-xs">
                               Twoja grupa
                             </span>
                           ) : null}
-                          <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.2em]">
+                          <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs">
                             {group.status === "active" ? "Aktywna" : "Archiwum"}
                           </span>
-                          <span className="text-xs text-brand-muted">
+                          <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:text-xs">
                             {getGroupEventTypeLabel(group.defaultEventType)}
                           </span>
                         </div>
-                        <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-lg">
-                          {group.name}
-                        </p>
-                        <p className="text-sm text-brand-muted">{trainerName}</p>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3 text-sm text-brand-muted">
-                        <p>{activeMemberCounts[group.id] ?? 0} aktywnych osób</p>
-                        <p className="text-right">{groupEventCounts[group.id] ?? 0} wydarzeń</p>
-                      </div>
-                      <p className="text-sm font-semibold text-brand-navy">Otwórz grupę</p>
-                    </div>
-                  </Link>
+
+                        <div className="mt-4 grid gap-3 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted md:grid-cols-2 xl:grid-cols-4">
+                          <div>
+                            <p className="font-semibold text-brand-navy">Trener</p>
+                            <p>{trainerName}</p>
+                          </div>
+                          <div>
+                            <p className="font-semibold text-brand-navy">Lokalizacja</p>
+                            <p>{group.defaultLocation || "Brak ustawionej lokalizacji"}</p>
+                          </div>
+                          <div>
+                            <p className="font-semibold text-brand-navy">SMS potwierdzenia</p>
+                            <p>{group.defaultConfirmationLeadTimeDays} dni przed wydarzeniem</p>
+                          </div>
+                          <div>
+                            <p className="font-semibold text-brand-navy">Mogą dołączyć</p>
+                            <p>{getTrainingJoinAudienceLabel(group.defaultJoinAudience)}</p>
+                          </div>
+                        </div>
+
+                        {group.notes ? (
+                          <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+                            {group.notes}
+                          </div>
+                        ) : null}
+
+                        {isParticipantGroupViewer ? (
+                          <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+                            {isOwnedGroup
+                              ? hasActiveOrganizerAccess
+                                ? "To Twoja grupa organizatora. Możesz przejść do pełnego widoku, żeby zarządzać nią bez zmiany perspektywy konta."
+                                : "To Twoja wcześniejsza grupa organizatora. Bez aktywnego trenera pozostaje dostępna tylko do podglądu."
+                              : "W rozwinięciu widzisz szybkie podsumowanie grupy. Pełne szczegóły i powiązane sekcje są dostępne w osobnym widoku."}
+                          </div>
+                        ) : null}
+
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          <Link
+                            to={`/panel/grupy/${group.id}`}
+                            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                          >
+                            <Users size={16} />
+                            Otwórz pełny widok grupy
+                          </Link>
+                          {canManageGroups && isOwnedGroup ? (
+                            <>
+                              <Link
+                                to={`/panel/grupy/${group.id}?mode=edit`}
+                                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                              >
+                                <ShieldCheck size={16} />
+                                Edytuj grupę
+                              </Link>
+                              <Link
+                                to={`/panel/terminy?groupId=${group.id}`}
+                                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                              >
+                                <CalendarDays size={16} />
+                                Utwórz draft dla grupy
+                              </Link>
+                              <button
+                                type="button"
+                                onClick={() => void handleArchiveGroup(group)}
+                                className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700 shadow-soft"
+                              >
+                                <Trash2 size={16} />
+                                Archiwizuj
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </CollapsibleContent>
+                    </article>
+                  </Collapsible>
                 );
               })}
             </div>
@@ -8593,9 +8984,7 @@ export function EventsPage() {
               (item) => item.eventId === event.id,
             );
             const activeRequestsCount = eventRequests.filter((item) =>
-              event.groupId
-                ? !item.eventParticipantId && item.finalStatus !== "rejected"
-                : item.finalStatus !== "rejected",
+              isOperationalEnrollmentRequest(item, store),
             ).length;
             const canDecideCollaboration =
               !isCommunitySection &&
@@ -8913,41 +9302,25 @@ export function EventManagementPage() {
     return <Navigate to={fallbackListPath} replace />;
   }
 
-  const requests = store.enrollmentRequests.filter((item) => {
-    if (item.eventId !== event.id) {
-      return false;
-    }
-
-    if (!event.groupId) {
-      return true;
-    }
-
-    return !item.eventParticipantId;
-  });
+  const eventRequests = store.enrollmentRequests.filter((item) => item.eventId === event.id);
+  const requests = eventRequests.filter((item) => isOperationalEnrollmentRequest(item, store));
   const participantProfilesById = useMemo(
     () => new Map((store.participantProfiles ?? []).map((profile) => [profile.id, profile])),
     [store.participantProfiles],
   );
-  const activeGroupMembersByParticipantProfileId = useMemo(() => {
-    if (!event.groupId) {
-      return new Map<string, GroupMember>();
-    }
-
-    return new Map(
+  const groupEventParticipants = (store.eventParticipants ?? []).filter(
+    (item) => item.eventId === event.id,
+  );
+  const groupEventRosterSections = buildGroupEventRosterSections(
+    groupEventParticipants,
+    new Map(
       (store.groupMembers ?? [])
         .filter(
           (member) =>
             member.groupId === event.groupId && member.membershipStatus === "active",
         )
         .map((member) => [member.participantProfileId, member]),
-    );
-  }, [event.groupId, store.groupMembers]);
-  const groupEventParticipants = (store.eventParticipants ?? []).filter(
-    (item) => item.eventId === event.id,
-  );
-  const groupEventRosterSections = buildGroupEventRosterSections(
-    groupEventParticipants,
-    activeGroupMembersByParticipantProfileId,
+    ),
   );
   const assignableGroupMembers =
     event.groupId && (isEventOrganizerOwner || currentUser.role === "admin")
@@ -8972,23 +9345,11 @@ export function EventManagementPage() {
       return canManageTrainingEvent(item, currentUser);
     }),
   );
-  const futureOpenGroupEvents = event.groupId
-    ? sortEventsByDate(
-        store.trainingEvents.filter(
-          (item) =>
-            item.groupId === event.groupId &&
-            item.id !== event.id &&
-            !isTrainingEventArchived(item) &&
-            !item.rosterFinalizedAt &&
-            new Date(item.startsAt).getTime() > Date.now(),
-        ),
-      )
-    : [];
   const pendingRequestsCount = requests.filter(
-    (item) => item.finalStatus === "pending" || item.finalStatus === "partial",
+    (item) => item.finalStatus === "pending",
   ).length;
-  const communityParticipantRequests = requests.filter(
-    (item) => item.finalStatus === "accepted" || item.finalStatus === "partial",
+  const communityParticipantRequests = eventRequests.filter(
+    (item) => item.finalStatus === "accepted",
   );
   const requestSections = splitEnrollmentRequestsByIntent(requests);
 
@@ -9008,49 +9369,6 @@ export function EventManagementPage() {
     );
   }
 
-  async function maybeAddAcceptedRequestToGroup(request: EnrollmentRequest) {
-    if (
-      !event.groupId ||
-      !request.participantProfileId ||
-      activeGroupMembersByParticipantProfileId.has(request.participantProfileId)
-    ) {
-      return false;
-    }
-
-    const shouldAddToGroup = window.confirm(
-      "Osoba trafiła na roster wydarzenia. Dopisać ją też do grupy?",
-    );
-    if (!shouldAddToGroup) {
-      return false;
-    }
-
-    const priorityValue = window.prompt(
-      "Podaj rangę w grupie: stali, regularni albo rezerwowi.",
-      "regularni",
-    );
-    const priority = parseGroupMemberPriorityPromptValue(priorityValue);
-    if (!priority) {
-      toast.error("Osoba została dodana do rosteru. Do grupy wpisz: stali, regularni albo rezerwowi.");
-      return false;
-    }
-
-    const shouldSyncFutureEvents =
-      futureOpenGroupEvents.length > 0
-        ? window.confirm(
-            `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
-          )
-        : false;
-
-    await addGroupMember({
-      groupId: event.groupId,
-      participantProfileId: request.participantProfileId,
-      priority,
-      syncFutureEvents: shouldSyncFutureEvents,
-    });
-
-    return true;
-  }
-
   async function handleEnrollmentDecision(
     request: EnrollmentRequest,
     decision: DecisionStatus,
@@ -9061,13 +9379,18 @@ export function EventManagementPage() {
       await manageEnrollmentRequest(request.id, decision);
 
       if (decision === "accepted") {
-        const addedToGroup = await maybeAddAcceptedRequestToGroup(request);
+        const addedToGroup = await maybeAddAcceptedRequestToGroup({
+          request,
+          event,
+          store,
+          addGroupMember,
+        });
         toast.success(
           event.groupId
             ? addedToGroup
-              ? "Zaakceptowano zgłoszenie, dodano osobę do rosteru i do grupy."
-              : "Zaakceptowano zgłoszenie i dodano osobę do rosteru wydarzenia."
-            : "Zaakceptowano zgłoszenie.",
+              ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+              : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+            : "Potwierdzono zgłoszenie.",
         );
       } else if (decision === "rejected") {
         toast.success("Odrzucono zgłoszenie.");
@@ -9446,7 +9769,7 @@ export function EventManagementPage() {
           <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
               title="Uczestnicy wydarzenia"
-              description="Lista osób, które mają już potwierdzony udział albo są częściowo przetworzone w tym wydarzeniu."
+              description="Lista osób, które mają już potwierdzony udział w tym wydarzeniu."
             />
             {communityParticipantRequests.length === 0 ? (
               <EmptyPanelState
@@ -9470,7 +9793,7 @@ export function EventManagementPage() {
                             <Phone size={14} />
                             {request.telefon}
                           </span>
-                          <span>Status: {request.finalStatus}</span>
+                          <span>Status: {getEnrollmentFinalStatusLabel(request.finalStatus)}</span>
                           <span>
                             SMS:{" "}
                             {resolveAttendanceConfirmationStatusLabel(
@@ -9494,7 +9817,7 @@ export function EventManagementPage() {
           <div className="space-y-4">
             <SectionBlockHeading
               title="Chcą wziąć udział"
-              description="Tutaj widzisz wszystkie osoby, które chcą wziąć udział, a licznik na zakładce pokazuje te, które nie zostały jeszcze przeprocesowane."
+              description="Tutaj widzisz zgłoszenia oczekujące i odrzucone, a licznik na zakładce pokazuje tylko oczekujące."
             />
             {requests.length === 0 ? (
               <EmptyPanelState
@@ -9506,105 +9829,77 @@ export function EventManagementPage() {
                 <div key={section.key} className="space-y-4">
                   <SectionBlockHeading
                     title={section.title}
-                    description="Osoby deklarujące gotowość udziału, ale nadal oczekujące na decyzję."
+                    description="Tu zostają zgłoszenia oczekujące oraz odrzucone."
                   />
-                  {section.requests.map((request) => (
-                    <article
-                      key={request.id}
-                      className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <h3 className="text-2xl font-semibold text-brand-navy">
-                            {request.imieNazwisko}
-                          </h3>
-                          <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
-                            <span className="inline-flex items-center gap-2">
-                              <Phone size={14} />
-                              {request.telefon}
-                            </span>
-                            <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                            <span>{formatDate(request.createdAt)}</span>
-                          </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-                            {request.finalStatus}
-                          </span>
-                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            SMS:{" "}
-                            {resolveAttendanceConfirmationStatusLabel(
-                              request.attendanceConfirmationStatus,
-                            )}
-                          </span>
-                        </div>
-                      </div>
+                  <div className="-mx-6 mt-4 sm:mx-0 sm:mt-6">
+                    <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
+                      {section.requests.map((request, rowIndex) => (
+                        <EnrollmentRequestSlimRow
+                          key={request.id}
+                          request={request}
+                          event={event}
+                          eventGroup={eventGroup}
+                          rowIndex={rowIndex}
+                          isExpanded={expandedRequestIds.includes(request.id)}
+                          onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                          isSaving={updatingRequestId === request.id}
+                        >
+                          <div className="space-y-4">
+                            <EnrollmentRequestMetaRow request={request} />
+                            <EnrollmentRequestStatusBadges request={request} />
 
-                      <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                        {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                      </p>
+                            <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                              {request.wiadomosc || "Brak dodatkowej wiadomości."}
+                            </p>
 
-                      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                        <EnrollmentPhotoCard request={request} />
-                        <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                            Stan zgłoszenia
-                          </p>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                              trener: {request.trainerDecision}
-                            </span>
-                            {request.requiresOrganizerApproval !== false ? (
-                              <span className="rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                                organizator: {request.organizerDecision}
-                              </span>
+                            <EnrollmentPhotoCard request={request} />
+
+                            {canApproveEnrollmentRequest(event, currentUser) && !eventIsArchived ? (
+                              <EnrollmentRequestDecisionButtons
+                                disabled={updatingRequestId === request.id}
+                                onDecision={(decision) => {
+                                  void (async () => {
+                                    setUpdatingRequestId(request.id);
+
+                                    try {
+                                      await manageEnrollmentRequest(request.id, decision);
+                                      if (decision === "accepted") {
+                                        const addedToGroup = await maybeAddAcceptedRequestToGroup({
+                                          request,
+                                          event,
+                                          store,
+                                          addGroupMember,
+                                        });
+                                        toast.success(
+                                          event.groupId
+                                            ? addedToGroup
+                                              ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+                                              : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+                                            : "Potwierdzono zgłoszenie.",
+                                        );
+                                      } else if (decision === "rejected") {
+                                        toast.success("Odrzucono zgłoszenie.");
+                                      } else {
+                                        toast.success("Ustawiono zgłoszenie jako oczekujące.");
+                                      }
+                                    } catch (error) {
+                                      toast.error(
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Nie udało się zmienić statusu osoby.",
+                                      );
+                                    } finally {
+                                      setUpdatingRequestId(null);
+                                    }
+                                  })();
+                                }}
+                              />
                             ) : null}
                           </div>
-                        </div>
-                      </div>
-
-                      {canManageEvent && !eventIsArchived ? (
-                        <div className="mt-5 flex flex-wrap gap-3">
-                          {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                            <button
-                              key={decision}
-                              type="button"
-                              disabled={updatingRequestId === request.id}
-                              onClick={async () => {
-                                setUpdatingRequestId(request.id);
-
-                                try {
-                                  await manageEnrollmentRequest(request.id, decision);
-                                  toast.success("Zmieniono status osoby w wydarzeniu.");
-                                } catch (error) {
-                                  toast.error(
-                                    error instanceof Error
-                                      ? error.message
-                                      : "Nie udało się zmienić statusu osoby.",
-                                  );
-                                } finally {
-                                  setUpdatingRequestId(null);
-                                }
-                              }}
-                              className={
-                                decision === "accepted"
-                                  ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                  : decision === "rejected"
-                                    ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                    : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                              }
-                            >
-                              {decision === "accepted"
-                                ? "Zaakceptuj"
-                                : decision === "rejected"
-                                  ? "Odrzuć"
-                                  : "Ustaw oczekuje"}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  ))}
+                        </EnrollmentRequestSlimRow>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               ))
             )}
@@ -10556,156 +10851,67 @@ export function EventManagementPage() {
                     const isExpanded = expandedRequestIds.includes(request.id);
 
                     return (
-                      <Collapsible
+                      <EnrollmentRequestSlimRow
                         key={request.id}
-                        open={isExpanded}
-                        onOpenChange={(open) => toggleExpandedRequest(request.id, open)}
+                        request={request}
+                        event={event}
+                        eventGroup={eventGroup}
+                        rowIndex={rowIndex}
+                        isExpanded={isExpanded}
+                        onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                        isSaving={updatingRequestId === request.id}
                       >
-                        <article
-                          className={cn(
-                            "border-b border-brand-line/70 px-6 py-2.5 last:border-b-0",
-                            rowIndex % 2 === 0 ? "bg-white" : "bg-brand-shell/35",
-                            "sm:rounded-3xl sm:border sm:bg-brand-shell/60 sm:p-4",
-                          )}
-                        >
-                          <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
-                                {request.imieNazwisko}
+                        <div className="space-y-4">
+                          <EnrollmentRequestMetaRow request={request} />
+                          <EnrollmentRequestStatusBadges request={request} />
+
+                          <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                            {request.wiadomosc || "Brak dodatkowej wiadomości."}
+                          </p>
+
+                          <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+                            <EnrollmentPhotoCard request={request} />
+                            <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                Przenieś na inny termin
                               </p>
-                            </div>
-
-                            {updatingRequestId === request.id ? (
-                              <span
-                                title="Zapisywanie zgłoszenia"
-                                aria-label="Zapisywanie zgłoszenia"
-                                className="inline-flex size-6 shrink-0 items-center justify-center text-brand-navy sm:size-8"
+                              <select
+                                value={transferTargetEventId}
+                                onChange={(changeEvent) =>
+                                  setTransferSelections((previous) => ({
+                                    ...previous,
+                                    [request.id]: changeEvent.target.value,
+                                  }))
+                                }
+                                className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
                               >
-                                <RefreshCcw size={12} className="animate-spin sm:size-[14px]" />
-                              </span>
-                            ) : null}
+                                <option value="">Wybierz termin</option>
+                                {manageableEvents.map((item) => (
+                                  <option key={item.id} value={item.id}>
+                                    {item.location} | {formatDate(item.startsAt)}
+                                  </option>
+                                ))}
+                              </select>
 
-                            <CollapsibleTrigger asChild>
                               <button
                                 type="button"
-                                className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
-                                aria-label={
-                                  isExpanded
-                                    ? `Ukryj szczegóły ${request.imieNazwisko}`
-                                    : `Pokaż szczegóły ${request.imieNazwisko}`
-                                }
+                                disabled={!transferTargetEventId || movingRequestId === request.id}
+                                onClick={() => void handleTransferEnrollmentRequest(request)}
+                                className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
                               >
-                                <ChevronDown
-                                  size={16}
-                                  className={cn(
-                                    "transition-transform duration-200",
-                                    isExpanded ? "rotate-180" : "",
-                                    "sm:size-[18px]",
-                                  )}
-                                />
+                                {movingRequestId === request.id
+                                  ? "Przenoszenie..."
+                                  : "Przenieś osobę"}
                               </button>
-                            </CollapsibleTrigger>
+                            </div>
                           </div>
 
-                          <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
-                            <div className="space-y-4">
-                              <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
-                                <span className="inline-flex items-center gap-1.5 sm:gap-2">
-                                  <Phone size={12} className="sm:size-[14px]" />
-                                  {request.telefon}
-                                </span>
-                                <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                                <span>{formatDate(request.createdAt)}</span>
-                              </div>
-
-                              <div className="flex flex-wrap gap-2">
-                                <span className="rounded-full bg-brand-navy px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white sm:text-xs">
-                                  {getEnrollmentFinalStatusLabel(request.finalStatus)}
-                                </span>
-                                <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                  SMS:{" "}
-                                  {resolveAttendanceConfirmationStatusLabel(
-                                    request.attendanceConfirmationStatus,
-                                  )}
-                                </span>
-                                <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                  trener: {request.trainerDecision}
-                                </span>
-                                {request.requiresOrganizerApproval !== false ? (
-                                  <span className="rounded-full border border-brand-line bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy sm:text-xs">
-                                    organizator: {request.organizerDecision}
-                                  </span>
-                                ) : null}
-                              </div>
-
-                              <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                                {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                              </p>
-
-                              <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                                <EnrollmentPhotoCard request={request} />
-                                <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                                  <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                                    Przenieś na inny termin
-                                  </p>
-                                  <select
-                                    value={transferTargetEventId}
-                                    onChange={(changeEvent) =>
-                                      setTransferSelections((previous) => ({
-                                        ...previous,
-                                        [request.id]: changeEvent.target.value,
-                                      }))
-                                    }
-                                    className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                                  >
-                                    <option value="">Wybierz termin</option>
-                                    {manageableEvents.map((item) => (
-                                      <option key={item.id} value={item.id}>
-                                        {item.location} | {formatDate(item.startsAt)}
-                                      </option>
-                                    ))}
-                                  </select>
-
-                                  <button
-                                    type="button"
-                                    disabled={!transferTargetEventId || movingRequestId === request.id}
-                                    onClick={() => void handleTransferEnrollmentRequest(request)}
-                                    className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                  >
-                                    {movingRequestId === request.id
-                                      ? "Przenoszenie..."
-                                      : "Przenieś osobę"}
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="flex flex-wrap gap-3">
-                                {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                                  <button
-                                    key={decision}
-                                    type="button"
-                                    disabled={updatingRequestId === request.id}
-                                    onClick={() => void handleEnrollmentDecision(request, decision)}
-                                    className={
-                                      decision === "accepted"
-                                        ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                        : decision === "rejected"
-                                          ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                          : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                    }
-                                  >
-                                    {decision === "accepted"
-                                      ? "Zaakceptuj"
-                                      : decision === "rejected"
-                                        ? "Odrzuć"
-                                        : "Ustaw oczekuje"}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          </CollapsibleContent>
-                        </article>
-                      </Collapsible>
+                          <EnrollmentRequestDecisionButtons
+                            disabled={updatingRequestId === request.id}
+                            onDecision={(decision) => void handleEnrollmentDecision(request, decision)}
+                          />
+                        </div>
+                      </EnrollmentRequestSlimRow>
                     );
                   })}
                 </div>
@@ -10729,116 +10935,79 @@ export function EventManagementPage() {
               <div key={section.key} className="space-y-4">
                 <SectionBlockHeading
                   title={section.title}
-                  description="Osoby deklarujące chęć udziału, ale nadal oczekujące na decyzję."
+                  description="Tu zostają zgłoszenia oczekujące oraz odrzucone."
                 />
-                {section.requests.map((request) => {
-                  const transferTargetEventId = transferSelections[request.id] ?? "";
+                <div className="-mx-6 mt-4 sm:mx-0 sm:mt-6">
+                  <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
+                    {section.requests.map((request, rowIndex) => {
+                      const transferTargetEventId = transferSelections[request.id] ?? "";
 
-                  return (
-                    <article
-                      key={request.id}
-                      className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-4">
-                        <div>
-                          <h3 className="text-2xl font-semibold text-brand-navy">
-                            {request.imieNazwisko}
-                          </h3>
-                          <div className="mt-3 flex flex-wrap gap-4 text-sm text-brand-muted">
-                            <span className="inline-flex items-center gap-2">
-                              <Phone size={14} />
-                              {request.telefon}
-                            </span>
-                            <span>{request.polecenieOdKogo || "Bez polecenia"}</span>
-                            <span>{formatDate(request.createdAt)}</span>
+                      return (
+                        <EnrollmentRequestSlimRow
+                          key={request.id}
+                          request={request}
+                          event={event}
+                          eventGroup={eventGroup}
+                          rowIndex={rowIndex}
+                          isExpanded={expandedRequestIds.includes(request.id)}
+                          onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                          isSaving={updatingRequestId === request.id}
+                        >
+                          <div className="space-y-4">
+                            <EnrollmentRequestMetaRow request={request} />
+                            <EnrollmentRequestStatusBadges request={request} />
+
+                            <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
+                              {request.wiadomosc || "Brak dodatkowej wiadomości."}
+                            </p>
+
+                            <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+                              <EnrollmentPhotoCard request={request} />
+                              <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
+                                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                                  Przenieś na inny termin
+                                </p>
+                                <select
+                                  value={transferTargetEventId}
+                                  onChange={(changeEvent) =>
+                                    setTransferSelections((previous) => ({
+                                      ...previous,
+                                      [request.id]: changeEvent.target.value,
+                                    }))
+                                  }
+                                  className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
+                                >
+                                  <option value="">Wybierz termin</option>
+                                  {manageableEvents.map((item) => (
+                                    <option key={item.id} value={item.id}>
+                                      {item.location} | {formatDate(item.startsAt)}
+                                    </option>
+                                  ))}
+                                </select>
+
+                                <button
+                                  type="button"
+                                  disabled={!transferTargetEventId || movingRequestId === request.id}
+                                  onClick={() => void handleTransferEnrollmentRequest(request)}
+                                  className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                                >
+                                  {movingRequestId === request.id
+                                    ? "Przenoszenie..."
+                                    : "Przenieś osobę"}
+                                </button>
+                              </div>
+                            </div>
+
+                            <EnrollmentRequestDecisionButtons
+                              disabled={updatingRequestId === request.id}
+                              onDecision={(decision) => void handleEnrollmentDecision(request, decision)}
+                            />
                           </div>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-                            {request.finalStatus}
-                          </span>
-                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            SMS:{" "}
-                            {resolveAttendanceConfirmationStatusLabel(
-                              request.attendanceConfirmationStatus,
-                            )}
-                          </span>
-                          <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                            trener: {request.trainerDecision}
-                          </span>
-                          {request.requiresOrganizerApproval !== false && (
-                            <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                              organizator: {request.organizerDecision}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                        {request.wiadomosc || "Brak dodatkowej wiadomości."}
-                      </p>
-
-                      <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
-                        <EnrollmentPhotoCard request={request} />
-                        <div className="rounded-3xl border border-brand-line bg-brand-shell p-4">
-                          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-brand-muted">
-                            Przenies na inny termin
-                          </p>
-                          <select
-                            value={transferTargetEventId}
-                            onChange={(changeEvent) =>
-                              setTransferSelections((previous) => ({
-                                ...previous,
-                                [request.id]: changeEvent.target.value,
-                              }))
-                            }
-                            className="mt-3 w-full rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                          >
-                            <option value="">Wybierz termin</option>
-                            {manageableEvents.map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.location} | {formatDate(item.startsAt)}
-                              </option>
-                            ))}
-                          </select>
-
-                          <button
-                            type="button"
-                            disabled={!transferTargetEventId || movingRequestId === request.id}
-                            onClick={() => void handleTransferEnrollmentRequest(request)}
-                            className="mt-3 inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                          >
-                            {movingRequestId === request.id ? "Przenoszenie..." : "Przenies osobe"}
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-5 flex flex-wrap gap-3">
-                        {(["accepted", "pending", "rejected"] as const).map((decision) => (
-                          <button
-                            key={decision}
-                            type="button"
-                            disabled={updatingRequestId === request.id}
-                            onClick={() => void handleEnrollmentDecision(request, decision)}
-                            className={
-                              decision === "accepted"
-                                ? "inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                                : decision === "rejected"
-                                  ? "inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                                  : "inline-flex items-center gap-2 rounded-full bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-                            }
-                          >
-                            {decision === "accepted"
-                              ? "Zaakceptuj"
-                              : decision === "rejected"
-                                ? "Odrzuc"
-                                : "Ustaw oczekuje"}
-                          </button>
-                        ))}
-                      </div>
-                    </article>
-                  );
-                })}
+                        </EnrollmentRequestSlimRow>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
             ))}
           </div>

@@ -1491,6 +1491,34 @@ function syncEventParticipantFromEnrollment(
   recomputeEventEnrolledCount(store, event.id);
 }
 
+function markEventParticipantFromEnrollmentAsDeclined(
+  store: DemoStore,
+  request: Pick<EnrollmentRequest, "eventId" | "eventParticipantId" | "participantProfileId">,
+) {
+  const eventParticipantId =
+    request.eventParticipantId ??
+    (request.participantProfileId
+      ? buildEventParticipantId(request.eventId, request.participantProfileId)
+      : null);
+  if (!eventParticipantId) {
+    return;
+  }
+
+  const existingIndex = store.eventParticipants.findIndex((item) => item.id === eventParticipantId);
+  if (existingIndex < 0) {
+    return;
+  }
+
+  store.eventParticipants[existingIndex] = {
+    ...store.eventParticipants[existingIndex],
+    status: "declined",
+    confirmedAt: undefined,
+    declinedAt: nowIso(),
+    removedAt: undefined,
+    updatedAt: nowIso(),
+  };
+}
+
 function transferEnrollmentRequestToEvent(
   store: DemoStore,
   request: EnrollmentRequest,
@@ -1592,6 +1620,7 @@ export async function manageEnrollmentRequest(
 
     if (request.finalStatus === "rejected") {
       request.participantStatus = "cancelled";
+      markEventParticipantFromEnrollmentAsDeclined(store, request);
     } else {
       request.participantStatus = "active";
     }

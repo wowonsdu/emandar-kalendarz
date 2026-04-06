@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { StaticRouter } from "react-router";
 import { describe, expect, it } from "vitest";
-import { EnrollmentRequestSlimRow } from "./pages/panel";
+import {
+  EnrollmentRequestDecisionButtons,
+  EnrollmentRequestSlimRow,
+  splitEnrollmentRequestsByIntent,
+} from "./pages/panel";
 import type { EnrollmentRequest, TrainingEvent } from "@/domain/types";
 
 function createEnrollmentRequest(
@@ -98,5 +102,82 @@ describe("EnrollmentRequestSlimRow", () => {
 
     expect(markup).toContain('href="/panel/szkolenia/event-official"');
     expect(markup).toContain("Grupa Poranna");
+  });
+});
+
+describe("splitEnrollmentRequestsByIntent", () => {
+  it("splits requests into active, confirmed, and rejected sections", () => {
+    const sections = splitEnrollmentRequestsByIntent([
+      createEnrollmentRequest({
+        id: "request-pending",
+        createdAt: "2026-04-01T09:00:00.000Z",
+        finalStatus: "pending",
+      }),
+      createEnrollmentRequest({
+        id: "request-accepted",
+        createdAt: "2026-04-01T10:00:00.000Z",
+        finalStatus: "accepted",
+      }),
+      createEnrollmentRequest({
+        id: "request-rejected",
+        createdAt: "2026-04-01T11:00:00.000Z",
+        finalStatus: "rejected",
+      }),
+    ]);
+
+    expect(sections.map((section) => section.key)).toEqual(["active", "confirmed", "rejected"]);
+    expect(sections.find((section) => section.key === "active")?.requests.map((item) => item.id)).toEqual([
+      "request-pending",
+    ]);
+    expect(
+      sections.find((section) => section.key === "confirmed")?.requests.map((item) => item.id),
+    ).toEqual(["request-accepted"]);
+    expect(
+      sections.find((section) => section.key === "rejected")?.requests.map((item) => item.id),
+    ).toEqual(["request-rejected"]);
+  });
+
+  it("omits the rejected section when there are no rejected requests", () => {
+    const sections = splitEnrollmentRequestsByIntent([
+      createEnrollmentRequest({
+        id: "request-pending",
+        finalStatus: "pending",
+      }),
+      createEnrollmentRequest({
+        id: "request-accepted",
+        finalStatus: "accepted",
+      }),
+    ]);
+
+    expect(sections.some((section) => section.key === "rejected")).toBe(false);
+  });
+});
+
+describe("EnrollmentRequestDecisionButtons", () => {
+  it("shows both actions for pending requests", () => {
+    const markup = renderToStaticMarkup(
+      <EnrollmentRequestDecisionButtons finalStatus="pending" onDecision={() => {}} />,
+    );
+
+    expect(markup).toContain("Odrzuć");
+    expect(markup).toContain("Potwierdź");
+  });
+
+  it("shows only reject for confirmed requests", () => {
+    const markup = renderToStaticMarkup(
+      <EnrollmentRequestDecisionButtons finalStatus="accepted" onDecision={() => {}} />,
+    );
+
+    expect(markup).toContain("Odrzuć");
+    expect(markup).not.toContain("Potwierdź");
+  });
+
+  it("shows only confirm for rejected requests", () => {
+    const markup = renderToStaticMarkup(
+      <EnrollmentRequestDecisionButtons finalStatus="rejected" onDecision={() => {}} />,
+    );
+
+    expect(markup).toContain("Potwierdź");
+    expect(markup).not.toContain("Odrzuć");
   });
 });

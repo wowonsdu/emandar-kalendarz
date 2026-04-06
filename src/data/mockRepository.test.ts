@@ -1079,6 +1079,244 @@ describe("manageEnrollmentRequest", () => {
       status: "invited",
     });
   });
+
+  it("moves a previously accepted grouped enrollment into rejected state and declines the roster entry", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor();
+    const store = createStore(
+      {
+        id: "event-group-reject",
+        title: "Szkolenie oddechowe",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+        enrolledCount: 1,
+      },
+      actor,
+    );
+    store.groups = [
+      {
+        id: "group-1",
+        name: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        status: "active",
+        defaultEventType: "training",
+        defaultConfirmationLeadTimeDays: 7,
+        defaultJoinAudience: "new-people",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.participantProfiles = [
+      {
+        id: "participant-1",
+        linkedUserId: null,
+        displayName: "Anna Nowak",
+        firstName: "Anna",
+        lastName: "Nowak",
+        phone: "+48 605 100 304",
+        phoneLookupKey: "48605100304",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-reject",
+        eventId: "event-group-reject",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-1",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        eventParticipantId: "event-group-reject__participant-1",
+        intent: "participating",
+        imieNazwisko: "Anna Nowak",
+        telefon: "+48 605 100 304",
+        polecenieOdKogo: "",
+        wiadomosc: "Byłam chętna.",
+        photoStatus: "pending",
+        finalStatus: "accepted",
+        participantStatus: "active",
+        createdAt: "2026-04-02T12:00:00.000Z",
+      },
+    ];
+    store.eventParticipants = [
+      {
+        id: "event-group-reject__participant-1",
+        eventId: "event-group-reject",
+        eventTitle: "Szkolenie oddechowe",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        participantProfileId: "participant-1",
+        participantDisplayName: "Anna Nowak",
+        participantPhone: "+48 605 100 304",
+        participantUserId: null,
+        priority: "regularni",
+        status: "confirmed",
+        source: "public-form",
+        invitedAt: "2026-04-02T12:00:00.000Z",
+        confirmedAt: "2026-04-02T12:10:00.000Z",
+        updatedAt: "2026-04-02T12:10:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-reject",
+          decision: "rejected",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+
+    expect(updatedStore.enrollmentRequests[0]).toMatchObject({
+      id: "enrollment-reject",
+      finalStatus: "rejected",
+      participantStatus: "cancelled",
+    });
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      id: "event-group-reject__participant-1",
+      status: "declined",
+    });
+    expect(updatedStore.eventParticipants[0]?.confirmedAt).toBeUndefined();
+    expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
+  });
+
+  it("allows a rejected grouped enrollment to be confirmed again", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor();
+    const store = createStore(
+      {
+        id: "event-group-restore",
+        title: "Szkolenie oddechowe",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+      },
+      actor,
+    );
+    store.groups = [
+      {
+        id: "group-1",
+        name: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        status: "active",
+        defaultEventType: "training",
+        defaultConfirmationLeadTimeDays: 7,
+        defaultJoinAudience: "new-people",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.participantProfiles = [
+      {
+        id: "participant-1",
+        linkedUserId: null,
+        displayName: "Anna Nowak",
+        firstName: "Anna",
+        lastName: "Nowak",
+        phone: "+48 605 100 304",
+        phoneLookupKey: "48605100304",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-restore",
+        eventId: "event-group-restore",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-1",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        eventParticipantId: "event-group-restore__participant-1",
+        intent: "participating",
+        imieNazwisko: "Anna Nowak",
+        telefon: "+48 605 100 304",
+        polecenieOdKogo: "",
+        wiadomosc: "Chcę wrócić.",
+        photoStatus: "pending",
+        finalStatus: "rejected",
+        participantStatus: "cancelled",
+        createdAt: "2026-04-02T12:00:00.000Z",
+      },
+    ];
+    store.eventParticipants = [
+      {
+        id: "event-group-restore__participant-1",
+        eventId: "event-group-restore",
+        eventTitle: "Szkolenie oddechowe",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        participantProfileId: "participant-1",
+        participantDisplayName: "Anna Nowak",
+        participantPhone: "+48 605 100 304",
+        participantUserId: null,
+        priority: "regularni",
+        status: "declined",
+        source: "public-form",
+        invitedAt: "2026-04-02T12:00:00.000Z",
+        declinedAt: "2026-04-02T12:10:00.000Z",
+        updatedAt: "2026-04-02T12:10:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-restore",
+          decision: "accepted",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+
+    expect(updatedStore.enrollmentRequests[0]).toMatchObject({
+      id: "enrollment-restore",
+      finalStatus: "accepted",
+      participantStatus: "active",
+      eventParticipantId: "event-group-restore__participant-1",
+    });
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      id: "event-group-restore__participant-1",
+      status: "invited",
+    });
+  });
 });
 
 describe("group event roster defaults", () => {

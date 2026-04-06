@@ -1931,7 +1931,9 @@ async function maybeAddAcceptedRequestToGroup({
   return true;
 }
 
-type EnrollmentRequestArchiveSectionKey = "active" | "confirmed";
+type EnrollmentRequestDisplayStatus = EnrollmentRequest["finalStatus"] | "partial";
+
+type EnrollmentRequestArchiveSectionKey = "active" | "confirmed" | "rejected";
 
 type EnrollmentRequestArchiveSection = {
   key: EnrollmentRequestArchiveSectionKey;
@@ -1940,20 +1942,28 @@ type EnrollmentRequestArchiveSection = {
   defaultOpen: boolean;
 };
 
-const ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER: Record<EnrollmentFinalStatus, number> = {
+const ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER: Record<EnrollmentRequestDisplayStatus, number> = {
   pending: 0,
   partial: 1,
-  rejected: 2,
-  accepted: 3,
+  accepted: 2,
+  rejected: 3,
 };
 
-function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
+function resolveEnrollmentRequestDisplayStatus(
+  request: Pick<EnrollmentRequest, "finalStatus">,
+): EnrollmentRequestDisplayStatus {
+  return request.finalStatus as EnrollmentRequestDisplayStatus;
+}
+
+export function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
   const participatingRequests = [...requests]
     .filter((request) => resolveEnrollmentIntent(request.intent) === "participating")
     .sort((left, right) => {
+      const leftStatus = resolveEnrollmentRequestDisplayStatus(left);
+      const rightStatus = resolveEnrollmentRequestDisplayStatus(right);
       const statusDelta =
-        ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER[left.finalStatus] -
-        ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER[right.finalStatus];
+        ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER[leftStatus] -
+        ENROLLMENT_REQUEST_ARCHIVE_SORT_ORDER[rightStatus];
 
       if (statusDelta !== 0) {
         return statusDelta;
@@ -1962,8 +1972,16 @@ function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
       return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
     });
 
-  const activeRequests = participatingRequests.filter((request) => request.finalStatus !== "accepted");
-  const confirmedRequests = participatingRequests.filter((request) => request.finalStatus === "accepted");
+  const activeRequests = participatingRequests.filter((request) => {
+    const status = resolveEnrollmentRequestDisplayStatus(request);
+    return status !== "accepted" && status !== "rejected";
+  });
+  const confirmedRequests = participatingRequests.filter(
+    (request) => resolveEnrollmentRequestDisplayStatus(request) === "accepted",
+  );
+  const rejectedRequests = participatingRequests.filter(
+    (request) => resolveEnrollmentRequestDisplayStatus(request) === "rejected",
+  );
 
   return [
     {
@@ -1976,6 +1994,12 @@ function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
       key: "confirmed",
       title: "Potwierdzone",
       requests: confirmedRequests,
+      defaultOpen: false,
+    },
+    {
+      key: "rejected",
+      title: "Odrzucone",
+      requests: rejectedRequests,
       defaultOpen: false,
     },
   ].filter((section): section is EnrollmentRequestArchiveSection => section.requests.length > 0);
@@ -2313,16 +2337,32 @@ function EnrollmentRequestMessageBlock({
   );
 }
 
-function EnrollmentRequestDecisionButtons({
+function getEnrollmentRequestDecisionOptions(
+  finalStatus: EnrollmentRequestDisplayStatus,
+) {
+  if (finalStatus === "accepted") {
+    return ["rejected"] as const;
+  }
+
+  if (finalStatus === "rejected") {
+    return ["accepted"] as const;
+  }
+
+  return ["rejected", "accepted"] as const;
+}
+
+export function EnrollmentRequestDecisionButtons({
+  finalStatus,
   disabled = false,
   onDecision,
 }: {
+  finalStatus: EnrollmentRequestDisplayStatus;
   disabled?: boolean;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
 }) {
   return (
     <div className="flex items-center gap-3">
-      {(["rejected", "accepted"] as const).map((decision) => (
+      {getEnrollmentRequestDecisionOptions(finalStatus).map((decision) => (
         <button
           key={decision}
           type="button"
@@ -5502,6 +5542,7 @@ export function RequestsPage() {
   >({
     active: true,
     confirmed: false,
+    rejected: false,
   });
   const [expandedRequestIds, setExpandedRequestIds] = useState<string[]>([]);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
@@ -5598,6 +5639,7 @@ export function RequestsPage() {
 
                     {canDecideRequest ? (
                       <EnrollmentRequestDecisionButtons
+                        finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
                         disabled={updatingRequestId === request.id}
                         onDecision={(decision) => {
                           void (async () => {
@@ -10262,6 +10304,7 @@ export function EventManagementPage() {
   >({
     active: true,
     confirmed: false,
+    rejected: false,
   });
   const [movingRequestId, setMovingRequestId] = useState<string | null>(null);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
@@ -11995,7 +12038,7 @@ export function EventManagementPage() {
           <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
               title="Chcą wziąć udział"
-              description="Domyślny roster jest prowadzony wyżej. Aktywne zgłoszenia są na górze, a potwierdzone osoby spadają niżej do osobnej zwiniętej sekcji."
+              description="Domyślny roster jest prowadzony wyżej. Aktywne zgłoszenia są na górze, a potwierdzone i odrzucone osoby spadają niżej do osobnych zwiniętych sekcji."
             />
 
             {requests.length === 0 ? (
@@ -12082,6 +12125,7 @@ export function EventManagementPage() {
                               </div>
 
                               <EnrollmentRequestDecisionButtons
+                                finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
                                 disabled={updatingRequestId === request.id}
                                 onDecision={(decision) => void handleEnrollmentDecision(request, decision)}
                               />
@@ -12099,7 +12143,7 @@ export function EventManagementPage() {
           <div className="space-y-4">
             <SectionBlockHeading
               title="Uczestnicy i osoby, które chcą wziąć udział"
-              description="Aktywne zgłoszenia są na górze, a potwierdzone osoby spadają niżej do osobnej, domyślnie zwiniętej sekcji."
+              description="Aktywne zgłoszenia są na górze, a potwierdzone i odrzucone osoby spadają niżej do osobnych, domyślnie zwiniętych sekcji."
             />
             {requests.length === 0 && (
               <EmptyPanelState
@@ -12183,6 +12227,7 @@ export function EventManagementPage() {
                             </div>
 
                             <EnrollmentRequestDecisionButtons
+                              finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
                               disabled={updatingRequestId === request.id}
                               onDecision={(decision) => void handleEnrollmentDecision(request, decision)}
                             />

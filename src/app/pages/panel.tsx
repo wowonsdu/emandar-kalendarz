@@ -2341,7 +2341,7 @@ function EnrollmentRequestDecisionButtons({
   );
 }
 
-function EnrollmentRequestSlimRow({
+export function EnrollmentRequestSlimRow({
   request,
   event,
   eventGroup,
@@ -2351,7 +2351,7 @@ function EnrollmentRequestSlimRow({
   children,
 }: {
   request: EnrollmentRequest;
-  event: Pick<TrainingEvent, "groupName" | "location" | "title">;
+  event: Pick<TrainingEvent, "id" | "brandStatus" | "groupName" | "location" | "title">;
   eventGroup?: Pick<Group, "name"> | null;
   isExpanded: boolean;
   onExpandedChange: (open: boolean) => void;
@@ -2359,6 +2359,7 @@ function EnrollmentRequestSlimRow({
   children: ReactNode;
 }) {
   const { groupLabel, locationLabel } = getEnrollmentRequestContextLabels(event, eventGroup);
+  const eventDetailPath = getPanelEventDetailPath(event);
 
   return (
     <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
@@ -2370,9 +2371,12 @@ function EnrollmentRequestSlimRow({
       >
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-[13px] sm:tracking-[0.22em]">
+            <Link
+              to={eventDetailPath}
+              className="inline-flex max-w-full truncate text-xs font-semibold uppercase tracking-[0.18em] text-brand-sky-deep underline-offset-4 transition hover:text-brand-navy hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky-deep/40 sm:text-[13px] sm:tracking-[0.22em]"
+            >
               {groupLabel}
-            </p>
+            </Link>
             <p className="mt-1 truncate text-sm text-brand-muted">{locationLabel}</p>
             <p className="mt-1.5 truncate text-[17px] font-semibold leading-tight text-brand-navy sm:text-lg">
               {request.imieNazwisko}

@@ -6113,7 +6113,6 @@ function GroupListSlimRow({
       <article
         className={cn(
           "bg-white px-6 py-3",
-          "border-b border-brand-line/70 last:border-b-0",
           "sm:rounded-3xl sm:border sm:bg-white sm:p-4 sm:shadow-soft",
         )}
       >
@@ -7220,7 +7219,7 @@ export function GroupsPage() {
               }
             />
           ) : (
-            <div className="border-y border-brand-line/70 bg-white sm:space-y-3 sm:border-y-0 sm:bg-transparent">
+            <div className="divide-y divide-brand-line/70 border-y border-brand-line/70 bg-white sm:space-y-3 sm:divide-y-0 sm:border-y-0 sm:bg-transparent">
               {visibleGroups.map((group) => {
                 const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
                 const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);

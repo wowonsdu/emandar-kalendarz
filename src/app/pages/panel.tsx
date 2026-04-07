@@ -71,6 +71,7 @@ import {
 } from "@/domain/notifications";
 import {
   aggregateEventCapacityStats,
+  buildPhoneHref,
   canApproveEnrollmentRequest,
   buildTrainerFreeDaySlices,
   canPublishTrainingEvent,
@@ -95,6 +96,7 @@ import {
   isCommunityBrandStatus,
   isOrganizerFunctionsBlocked,
   resolveEnrollmentIntent,
+  resolveCommunityEventOrganizerPhone,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainingJoinAudienceForEvent,
@@ -764,62 +766,6 @@ function getEventCardTitle(
   }
 
   return locationParts.primaryLocation;
-}
-
-function getAccountRequestRoleLabel(request: {
-  requestedRoles?: Array<"trainer" | "organizer" | "participant">;
-}) {
-  const normalizedRoles = Array.from(
-    new Set((request.requestedRoles ?? []).filter(Boolean)),
-  ) as Array<"trainer" | "organizer" | "participant">;
-
-  if (
-    normalizedRoles.includes("participant") &&
-    normalizedRoles.includes("organizer") &&
-    normalizedRoles.includes("trainer")
-  ) {
-    return "Uczestnik + organizator + wydarzenia dla społeczności";
-  }
-
-  if (normalizedRoles.includes("participant") && normalizedRoles.includes("organizer")) {
-    return "Uczestnik + organizator grup Emandar";
-  }
-
-  if (normalizedRoles.includes("participant") && normalizedRoles.includes("trainer")) {
-    return "Uczestnik + wydarzenia dla społeczności";
-  }
-
-  if (
-    normalizedRoles.includes("organizer") &&
-    normalizedRoles.includes("trainer")
-  ) {
-    return "Organizator grup Emandar + wydarzenia dla społeczności";
-  }
-
-  if (normalizedRoles.includes("organizer")) {
-    return "Organizator grup Emandar";
-  }
-
-  if (normalizedRoles.includes("trainer")) {
-    return "Wydarzenia dla społeczności";
-  }
-
-  if (normalizedRoles.includes("participant")) {
-    return "Uczestnik";
-  }
-
-  return "Brak wyboru";
-}
-
-function getAccountApprovalStatusLabel(status: "pending" | "accepted" | "rejected") {
-  switch (status) {
-    case "accepted":
-      return "Zaakceptowane";
-    case "rejected":
-      return "Odrzucone";
-    default:
-      return "Oczekujące";
-  }
 }
 
 function getEventCollaborationNotice(event: TrainingEvent) {
@@ -4040,16 +3986,6 @@ function ParticipantDashboardPerspectiveView({
       }),
     [currentUser.id, currentUser.participantProfileId, store],
   );
-  const ownAccountApprovals = store.trainerAccountApprovals.filter(
-    (approval) => approval.requesterUserId === currentUser.id,
-  );
-  const pendingElevatedRoles = (currentUser.pendingRoles ?? []).filter(
-    (role) => role === "trainer",
-  );
-  const shouldShowApprovalStatus =
-    pendingElevatedRoles.length > 0 ||
-    currentUser.accountApprovalStatus === "rejected" ||
-    ownAccountApprovals.length > 0;
   const [showPendingConfirmations, setShowPendingConfirmations] = useState(false);
   const [confirmingToken, setConfirmingToken] = useState<string | null>(null);
 
@@ -4061,70 +3997,6 @@ function ParticipantDashboardPerspectiveView({
 
   return (
     <div className="space-y-6">
-      {shouldShowApprovalStatus && (
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <SectionBlockHeading
-            title="Dodatkowe role"
-            description="Konto uczestnika działa od razu. Tutaj widać tylko status dodatkowych uprawnień, jeśli zostały zgłoszone."
-          />
-          <div className="mt-5 grid gap-4 lg:grid-cols-[0.85fr_1.15fr]">
-            <div className="rounded-3xl bg-brand-shell p-5">
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-muted">
-                Główny status
-              </p>
-              <p className="mt-3 text-2xl font-semibold text-brand-navy">
-                {currentUser.accountApprovalStatus === "rejected"
-                  ? "Wymaga nowej akceptacji"
-                  : pendingElevatedRoles.length > 0
-                    ? "Czeka na dodatkową akceptację"
-                    : "Konto uczestnika aktywne"}
-              </p>
-              <p className="mt-3 text-sm text-brand-muted">
-                Zakres do odblokowania:{" "}
-                {getAccountRequestRoleLabel({
-                  requestedRoles: ["participant", ...pendingElevatedRoles],
-                })}
-              </p>
-            </div>
-            <div className="space-y-3">
-              {ownAccountApprovals.length === 0 ? (
-                <p className="rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
-                  Brak przypisanych trenerów do akceptacji konta.
-                </p>
-              ) : (
-                ownAccountApprovals.map((approval) => {
-                  const trainer = store.trainers.find(
-                    (item) => item.id === approval.targetTrainerId,
-                  );
-
-                  return (
-                    <div
-                      key={approval.id}
-                      className="rounded-3xl border border-brand-line bg-brand-shell p-4"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-brand-navy">
-                            {trainer?.displayName ?? "Trener"}
-                          </p>
-                          <p className="mt-1 text-sm text-brand-muted">
-                            {getAccountApprovalStatusLabel(approval.status)} • wysłano{" "}
-                            {formatDate(approval.createdAt)}
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                          {getAccountApprovalStatusLabel(approval.status)}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </article>
-      )}
-
       <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
           <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
@@ -5578,7 +5450,6 @@ export function RequestsPage() {
   const {
     addGroupMember,
     currentUser,
-    decideTrainerAccountApproval,
     manageEnrollmentRequest,
     store,
   } = useAppState();
@@ -5596,29 +5467,11 @@ export function RequestsPage() {
   });
   const [expandedRequestIds, setExpandedRequestIds] = useState<string[]>([]);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
-
-  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
-  const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
   const manageableEventIds = new Set(
     store.trainingEvents
       .filter((event) => canManageTrainingEvent(event, currentUser))
       .map((event) => event.id),
   );
-
-  const accountApprovals = store.trainerAccountApprovals.filter((approval) => {
-    if (currentUser.role === "admin") {
-      return true;
-    }
-
-    if (currentUser.role === "trainer") {
-      return (
-        approval.requesterUserId === currentUser.id ||
-        approval.targetTrainerUserId === currentUser.id
-      );
-    }
-
-    return false;
-  });
 
   const requests = store.enrollmentRequests.filter((request) =>
     manageableEventIds.has(request.eventId),
@@ -5734,114 +5587,6 @@ export function RequestsPage() {
           </EnrollmentRequestArchiveSectionBlock>
         ))}
       </div>
-
-      {(currentUser.role === "trainer" || currentUser.role === "admin") && (
-        <div className="space-y-4">
-          <SectionBlockHeading
-            title={
-              isCommunityTrainer
-                ? "Status zatwierdzenia Twojego konta"
-                : "Konta oczekujące na akceptację"
-            }
-            description={
-              isCommunityTrainer
-                ? "Tu widzisz prośby o akceptację Twojego konta przez wybranych trenerów."
-                : "Oficjalny trener akceptuje tutaj osoby, które chodzą na jego grupę i chcą aktywować konto."
-            }
-          />
-
-          {accountApprovals.length === 0 && (
-            <EmptyPanelState
-              title="Brak approvali kont"
-              description="Nowe prośby o zatwierdzenie konta pojawią się tutaj po rejestracji."
-            />
-          )}
-
-          {accountApprovals.map((approval) => {
-            const targetTrainer = store.trainers.find(
-              (item) => item.id === approval.targetTrainerId,
-            );
-            const canDecideApproval =
-              approval.status === "pending" &&
-              (approval.targetTrainerUserId === currentUser.id || currentUser.role === "admin");
-
-            return (
-              <article
-                key={approval.id}
-                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-2xl font-semibold text-brand-navy">
-                      {approval.requesterDisplayName ?? "Nowe konto"} →{" "}
-                      {targetTrainer?.displayName ?? "Trener"}
-                    </p>
-                    <p className="mt-2 text-brand-muted">
-                      {getAccountRequestRoleLabel({ requestedRoles: approval.requestedRoles })} •
-                      utworzono {formatDate(approval.createdAt)}
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
-                    {getAccountApprovalStatusLabel(approval.status)}
-                  </span>
-                </div>
-
-                <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
-                  <p>
-                    Telefon: {approval.requesterPhone || "Brak numeru telefonu"}
-                  </p>
-                  <p className="mt-1">
-                    Status approvala: {getAccountApprovalStatusLabel(approval.status)}
-                  </p>
-                </div>
-
-                {canDecideApproval && (
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await decideTrainerAccountApproval(approval.id, "accepted");
-                          toast.success("Konto zostało zaakceptowane.");
-                        } catch (error) {
-                          toast.error(
-                            error instanceof Error
-                              ? error.message
-                              : "Nie udało się zapisać decyzji.",
-                          );
-                        }
-                      }}
-                      className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                    >
-                      <Check size={16} />
-                      Akceptuj
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await decideTrainerAccountApproval(approval.id, "rejected");
-                          toast.success("Konto zostało odrzucone.");
-                        } catch (error) {
-                          toast.error(
-                            error instanceof Error
-                              ? error.message
-                              : "Nie udało się zapisać decyzji.",
-                          );
-                        }
-                      }}
-                      className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-                    >
-                      <X size={16} />
-                      Odrzuć
-                    </button>
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      )}
     </PanelSection>
   );
 }
@@ -9930,6 +9675,28 @@ export function EventsPage() {
                             : getEventParticipantStatusLabel(record.eventParticipant.status),
                       },
                     ]}
+                    renderActionSlot={() => {
+                      const organizerPhone = resolveCommunityEventOrganizerPhone(record.event, store);
+                      const organizerPhoneHref = buildPhoneHref(organizerPhone);
+
+                      if (!organizerPhoneHref) {
+                        return (
+                          <span className="inline-flex items-center justify-center rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-muted">
+                            Numer organizatora niedostępny
+                          </span>
+                        );
+                      }
+
+                      return (
+                        <a
+                          href={organizerPhoneHref}
+                          className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                        >
+                          Kontakt z Organizatorem
+                          <Phone size={16} />
+                        </a>
+                      );
+                    }}
                   />
                 ))
               )}
@@ -9953,7 +9720,7 @@ export function EventsPage() {
                           to={getPanelEventDetailPath(event)}
                           className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
                         >
-                          Edytuj wydarzenie
+                          Szczegóły wydarzenia
                         </Link>
                         {event.isPublished ? (
                           <button
@@ -12883,115 +12650,6 @@ export function ProfileSettingsPage() {
             </button>
           </form>
         ) : null}
-      </div>
-    </PanelSection>
-  );
-}
-
-export function AccountRequestsPage() {
-  const { currentUser, store } = useAppState();
-
-  if (!currentUser || currentUser.role !== "admin") {
-    return (
-      <PanelSection
-        eyebrow="Rejestracje"
-        title="Historia rejestracji"
-        description="Ten ekran jest dostępny tylko dla admina."
-      >
-        <EmptyPanelState
-          title="Brak dostępu"
-        description="Tylko admin może przeglądać i zatwierdzać rejestracje."
-        />
-      </PanelSection>
-    );
-  }
-
-  return (
-    <PanelSection
-      eyebrow="Rejestracje"
-      title="Historia rejestracji SMS"
-      description="Publiczna rejestracja zapisuje tylko wniosek. Admin może go zaakceptować albo odrzucić bez nadawania roli w ciemno."
-    >
-      <div className="space-y-4">
-        {store.accountRequests.length === 0 && (
-          <EmptyPanelState
-            title="Brak wnioskow"
-            description="Nowe prosby o konto pojawia sie tutaj po wyslaniu formularza rejestracji."
-          />
-        )}
-
-        {store.accountRequests.map((request) => (
-          <article
-            key={request.id}
-            className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                  {getAccountRequestRoleLabel(request)}
-                </p>
-                <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
-                  {request.displayName}
-                </h3>
-                <div className="mt-3 space-y-1 text-sm text-brand-muted">
-                  <p>{request.email}</p>
-                  <p>{request.phone}</p>
-                  <p>{formatDate(request.createdAt)}</p>
-                </div>
-              </div>
-              <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
-                {request.status}
-              </span>
-            </div>
-
-            <p className="mt-4 rounded-3xl bg-brand-shell p-4 text-brand-muted">
-              {request.notes || "Brak dodatkowych informacji."}
-            </p>
-
-            {false && request.status === "pending" && (
-              <div className="mt-5 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await decideAccountRequest(request.id, "approved");
-                      toast.success("Wniosek został zaakceptowany.");
-                    } catch (error) {
-                      toast.error(
-                        error instanceof Error
-                          ? error.message
-                          : "Nie udało się zmienić statusu wniosku.",
-                      );
-                    }
-                  }}
-                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-                >
-                  <Check size={16} />
-                  Akceptuj
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await decideAccountRequest(request.id, "rejected");
-                      toast.success("Wniosek został odrzucony.");
-                    } catch (error) {
-                      toast.error(
-                        error instanceof Error
-                          ? error.message
-                          : "Nie udało się zmienić statusu wniosku.",
-                      );
-                    }
-                  }}
-                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-                >
-                  <X size={16} />
-                  Odrzuc
-                </button>
-              </div>
-            )}
-          </article>
-        ))}
       </div>
     </PanelSection>
   );

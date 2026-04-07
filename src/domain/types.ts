@@ -3,7 +3,6 @@ export type AppRole = "admin" | "trainer" | "organizer" | "participant" | "moder
 export type UserStatus = "active" | "invited";
 export type RelationStatus = "pending" | "approved" | "rejected" | "detached";
 export type DecisionStatus = "pending" | "accepted" | "rejected";
-export type AccountApprovalStatus = "pending" | "approved" | "rejected";
 export type EnrollmentFinalStatus =
   | "pending"
   | "accepted"
@@ -11,7 +10,6 @@ export type EnrollmentFinalStatus =
 export type EnrollmentIntent = "participating";
 export type ParticipantEnrollmentStatus = "active" | "cancelled";
 export type EnrollmentPhotoStatus = "pending" | "ready" | "error";
-export type AccountRequestStatus = "pending" | "approved" | "rejected";
 export type PublicationApprovalStatus = "pending" | "accepted" | "rejected";
 export type EmandarBrandStatus = "official" | "supported";
 export type TrainingEventStatus = "active" | "confirmed" | "cancelled";
@@ -72,10 +70,7 @@ export interface AppUser {
   role: AppRole;
   roles: AppRole[];
   primaryRole: AppRole;
-  pendingRoles?: Array<Exclude<AppRole, "admin" | "participant" | "moderator">>;
-  accountApprovalStatus?: AccountApprovalStatus;
   selectedTrainerIds?: string[];
-  approvedTrainerIds?: string[];
   participantOnboardingCompletedAt?: string;
   communityEventAutoApprove?: boolean;
   displayName: string;
@@ -510,37 +505,6 @@ export interface NotificationRecord {
     | "account-request";
 }
 
-export interface AccountRequest {
-  id: string;
-  displayName: string;
-  email?: string | null;
-  phone: string;
-  requestedRoles?: Array<Exclude<AppRole, "admin">>;
-  notes: string;
-  referralSource?: string;
-  status: AccountRequestStatus;
-  createdAt: string;
-  authProvider?: "phone" | "password";
-  organizerTrainingIntent?: string;
-  selectedTrainerIds?: string[];
-  avatarPath?: string;
-  avatarUrl?: string;
-}
-
-export interface TrainerAccountApproval {
-  id: string;
-  requesterUserId: string;
-  requesterDisplayName?: string;
-  requesterPhone?: string | null;
-  targetTrainerId: string;
-  targetTrainerUserId: string;
-  requestedRoles: Array<Exclude<AppRole, "admin">>;
-  status: DecisionStatus;
-  createdAt: string;
-  decidedAt?: string;
-  decidedByUserId?: string;
-}
-
 export interface AppSettings {
   signupPhotoMode: PhotoMode;
   enrollmentPhotoMode: PhotoMode;
@@ -567,8 +531,6 @@ export interface DemoStore {
   organizerExternalBusyMonths?: OrganizerExternalBusyMonth[];
   enrollmentRequests: EnrollmentRequest[];
   notifications: NotificationRecord[];
-  accountRequests: AccountRequest[];
-  trainerAccountApprovals: TrainerAccountApproval[];
   appSettings: AppSettings;
 }
 
@@ -584,14 +546,6 @@ export interface EnrollmentFormInput {
   polecenieOdKogo: string;
   wiadomosc: string;
   photoFile?: File | null;
-}
-
-export interface AccountRequestInput {
-  displayName: string;
-  phone: string;
-  trainerAuthorizationCode: string;
-  notes: string;
-  avatarFile?: File | null;
 }
 
 export interface ParticipantRegistrationInput {

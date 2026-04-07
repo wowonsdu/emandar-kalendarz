@@ -10,6 +10,17 @@ function mock_seed_path(): string
     return realpath(__DIR__ . '/../../mock-data/seed-store.json') ?: __DIR__ . '/../../mock-data/seed-store.json';
 }
 
+function mock_runtime_slug(): string
+{
+    $appRootName = basename(dirname(__DIR__, 2));
+    if ($appRootName === '' || $appRootName === 'public') {
+        return 'emandar';
+    }
+
+    $sanitized = preg_replace('/[^A-Za-z0-9._-]+/', '-', $appRootName);
+    return is_string($sanitized) && $sanitized !== '' ? $sanitized : 'emandar';
+}
+
 function mock_runtime_path(): string
 {
     $configured = getenv('EMANDAR_RUNTIME_STORE_PATH');
@@ -22,7 +33,7 @@ function mock_runtime_path(): string
         return $productionDirectory . '/runtime-store.json';
     }
 
-    return dirname(__DIR__, 3) . '/.local-state/emandar/runtime-store.json';
+    return dirname(__DIR__, 3) . '/.local-state/' . mock_runtime_slug() . '/runtime-store.json';
 }
 
 function mock_runtime_directory(): string
@@ -64,8 +75,6 @@ function mock_collection_keys(): array
         'organizerExternalBusyMonths',
         'enrollmentRequests',
         'notifications',
-        'accountRequests',
-        'trainerAccountApprovals',
         'appSettings',
     ];
 }
@@ -107,8 +116,6 @@ function mock_default_store(): array
         'organizerExternalBusyMonths' => [],
         'enrollmentRequests' => [],
         'notifications' => [],
-        'accountRequests' => [],
-        'trainerAccountApprovals' => [],
         'appSettings' => [
             'signupPhotoMode' => 'optional',
             'enrollmentPhotoMode' => 'optional',

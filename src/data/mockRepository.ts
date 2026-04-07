@@ -1,6 +1,4 @@
 import type {
-  AccountRequest,
-  AccountRequestInput,
   AppRole,
   AppSettings,
   AppUser,
@@ -36,7 +34,6 @@ import type {
   ParticipantProfile,
   ParticipantProfileUpdateInput,
   PhotoMode,
-  TrainerAccountApproval,
   TrainerCalendarFeedInput,
   TrainerOrganizerRelation,
   TrainerProfile,
@@ -92,8 +89,6 @@ type PersistedCollectionKey =
   | "organizerExternalBusyMonths"
   | "enrollmentRequests"
   | "notifications"
-  | "accountRequests"
-  | "trainerAccountApprovals"
   | "appSettings";
 type PersistedCollectionsPatch = Partial<Pick<DemoStore, PersistedCollectionKey>>;
 
@@ -119,8 +114,6 @@ const persistedCollectionKeys: PersistedCollectionKey[] = [
   "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
-  "accountRequests",
-  "trainerAccountApprovals",
   "appSettings",
 ];
 
@@ -325,32 +318,19 @@ function isFutureOpenGroupEvent(event: TrainingEvent) {
   );
 }
 
+function countConfirmedEventParticipants(store: DemoStore, eventId: string) {
+  return store.eventParticipants.filter(
+    (participant) => participant.eventId === eventId && participant.status === "confirmed",
+  ).length;
+}
+
 function recomputeEventEnrolledCount(store: DemoStore, eventId: string) {
   const event = store.trainingEvents.find((item) => item.id === eventId);
   if (!event) {
     return;
   }
 
-  if (event.groupId) {
-    event.enrolledCount = store.eventParticipants.filter(
-      (participant) => participant.eventId === eventId && participant.status === "confirmed",
-    ).length;
-    return;
-  }
-
-  const requestCount = store.enrollmentRequests.filter(
-    (request) =>
-      request.eventId === eventId &&
-      request.participantStatus !== "cancelled" &&
-      request.finalStatus !== "rejected",
-  ).length;
-  const participantCount = store.eventParticipants.filter(
-    (participant) =>
-      participant.eventId === eventId &&
-      (participant.status === "confirmed" || participant.status === "invited"),
-  ).length;
-
-  event.enrolledCount = Math.max(requestCount, participantCount);
+  event.enrolledCount = countConfirmedEventParticipants(store, eventId);
 }
 
 function syncParticipantProfileGroupMembership(
@@ -487,6 +467,12 @@ function splitDisplayName(value: string) {
   };
 }
 
+function isPhoneOnlyDisplayName(value: string | null | undefined, phone: string) {
+  const normalizedValue = normalizePhoneLookupKey(value ?? "");
+  const normalizedPhone = normalizePhoneLookupKey(phone);
+  return Boolean(normalizedValue) && normalizedValue === normalizedPhone;
+}
+
 function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoStore {
   const base = createEmptyStore();
 
@@ -518,10 +504,6 @@ function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoS
     ),
     enrollmentRequests: cloneValue(raw?.enrollmentRequests ?? base.enrollmentRequests),
     notifications: cloneValue(raw?.notifications ?? base.notifications),
-    accountRequests: cloneValue(raw?.accountRequests ?? base.accountRequests),
-    trainerAccountApprovals: cloneValue(
-      raw?.trainerAccountApprovals ?? base.trainerAccountApprovals,
-    ),
     appSettings: {
       ...base.appSettings,
       ...(raw?.appSettings ?? {}),
@@ -904,25 +886,10 @@ function rebuildParticipantDerivedFields(store: DemoStore) {
 }
 
 function rebuildEventDerivedFields(store: DemoStore) {
-  const activeRequests = store.enrollmentRequests.filter(
-    (item) => item.participantStatus !== "cancelled" && item.finalStatus !== "rejected",
-  );
-  const activeParticipants = store.eventParticipants.filter(
-    (item) => item.status === "confirmed" || item.status === "invited",
-  );
-
   store.trainingEvents = store.trainingEvents.map((event) => {
-    const requestCount = activeRequests.filter((item) => item.eventId === event.id).length;
-    const participantCount = activeParticipants.filter((item) => item.eventId === event.id).length;
-    const confirmedParticipantCount = store.eventParticipants.filter(
-      (item) => item.eventId === event.id && item.status === "confirmed",
-    ).length;
-
     return {
       ...event,
-      enrolledCount: event.groupId
-        ? confirmedParticipantCount
-        : Math.max(requestCount, participantCount),
+      enrolledCount: countConfirmedEventParticipants(store, event.id),
     };
   });
 
@@ -957,6 +924,47 @@ function createParticipantProfileFromUser(user: AppUser): ParticipantProfile {
     notes: user.notes,
     referralSource: user.referralSource,
   };
+}
+
+function upsertParticipantProfileFromUser(store: DemoStore, user: AppUser) {
+  const nextProfile = createParticipantProfileFromUser(user);
+  const existingIndex = store.participantProfiles.findIndex((item) => item.id === nextProfile.id);
+  if (existingIndex < 0) {
+    store.participantProfiles.push(nextProfile);
+    return nextProfile;
+  }
+
+  const existingProfile = store.participantProfiles[existingIndex];
+  const shouldPreserveExistingName =
+    !isPhoneOnlyDisplayName(existingProfile.displayName, existingProfile.phone) &&
+    isPhoneOnlyDisplayName(nextProfile.displayName, nextProfile.phone);
+
+  const updatedProfile: ParticipantProfile = {
+    ...existingProfile,
+    ...nextProfile,
+    displayName: shouldPreserveExistingName ? existingProfile.displayName : nextProfile.displayName,
+    firstName: shouldPreserveExistingName ? existingProfile.firstName : nextProfile.firstName,
+    lastName: shouldPreserveExistingName ? existingProfile.lastName : nextProfile.lastName,
+    email: nextProfile.email ?? existingProfile.email,
+    notes: nextProfile.notes ?? existingProfile.notes,
+    referralSource: nextProfile.referralSource ?? existingProfile.referralSource,
+    avatarUrl: nextProfile.avatarUrl ?? existingProfile.avatarUrl,
+    avatarPath: nextProfile.avatarPath ?? existingProfile.avatarPath,
+    avatarCrop: nextProfile.avatarCrop ?? existingProfile.avatarCrop,
+    createdAt: existingProfile.createdAt,
+    createdByOrganizerId: existingProfile.createdByOrganizerId ?? nextProfile.createdByOrganizerId,
+    createdByUserId: existingProfile.createdByUserId ?? nextProfile.createdByUserId,
+    confirmedAt: nextProfile.confirmedAt ?? existingProfile.confirmedAt,
+    managerOrganizerIds: existingProfile.managerOrganizerIds,
+    managerOrganizerUserIds: existingProfile.managerOrganizerUserIds,
+    managerTrainerIds: existingProfile.managerTrainerIds,
+    managerTrainerUserIds: existingProfile.managerTrainerUserIds,
+    groupIds: existingProfile.groupIds,
+    activeGroupIds: existingProfile.activeGroupIds,
+  };
+
+  store.participantProfiles[existingIndex] = updatedProfile;
+  return updatedProfile;
 }
 
 async function readFileAsDataUrl(file: File) {
@@ -1109,8 +1117,6 @@ export function createEmptyStore(): DemoStore {
     trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
-    accountRequests: [],
-    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",
@@ -1183,7 +1189,6 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
         authProvider: "phone",
       };
       store.users.push(user);
-      store.participantProfiles.push(createParticipantProfileFromUser(user));
     } else {
       user.phone = phone;
       user.phoneVerifiedAt = nowIso();
@@ -1191,12 +1196,13 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
       ensureRole(user, "participant");
       if (!user.participantProfileId) {
         user.participantProfileId = buildParticipantProfileId(phone);
-        store.participantProfiles.push(createParticipantProfileFromUser(user));
       }
       if (seedTrainerId) {
         user.selectedTrainerIds = Array.from(new Set([...(user.selectedTrainerIds ?? []), seedTrainerId]));
       }
     }
+
+    upsertParticipantProfileFromUser(store, user);
 
     return {
       userId: user.id,
@@ -1272,8 +1278,8 @@ export async function ensurePhoneParticipantProfile(input?: {
     ensureRole(currentUser, "participant");
     if (!currentUser.participantProfileId) {
       currentUser.participantProfileId = buildParticipantProfileId(currentUser.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(currentUser));
     }
+    upsertParticipantProfileFromUser(store, currentUser);
 
     if (input?.seedTrainerId) {
       currentUser.selectedTrainerIds = Array.from(
@@ -1355,8 +1361,8 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
     ensureRole(actor, "participant");
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone || input.telefon);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
     }
+    upsertParticipantProfileFromUser(store, actor);
 
     const existing = store.enrollmentRequests.find(
       (item) =>
@@ -1454,7 +1460,7 @@ function syncEventParticipantFromEnrollment(
     : null;
 
   if (!participantProfile) {
-    return;
+    throw new Error("Nie można zaakceptować zgłoszenia bez profilu uczestnika.");
   }
 
   const eventParticipantId = buildEventParticipantId(event.id, request.participantProfileId);
@@ -2651,43 +2657,6 @@ export async function uploadCommunityEventImages(files: File[]) {
   return images;
 }
 
-export async function submitAccountRequest(input: AccountRequestInput) {
-  const avatarUrl = await maybeReadFile(input.avatarFile);
-
-  await mutateStore((store) => {
-    const actor = getActorOrThrow(store);
-    const normalizedCode = input.trainerAuthorizationCode.trim().toUpperCase();
-    const trainer = store.trainers.find(
-      (item) => resolveTrainerAuthorizationCode(item as TrainerProfile & { authorizationCode?: string }) === normalizedCode,
-    );
-
-    store.accountRequests.unshift({
-      id: createId("account-request"),
-      displayName: input.displayName.trim(),
-      phone: input.phone.trim(),
-      requestedRoles: ["participant"],
-      notes: input.notes.trim(),
-      status: "pending",
-      createdAt: nowIso(),
-      authProvider: "phone",
-      avatarPath: avatarUrl ?? undefined,
-      avatarUrl: avatarUrl ?? undefined,
-      selectedTrainerIds: trainer ? [trainer.id] : [],
-    });
-
-    actor.displayName = input.displayName.trim();
-    actor.notes = input.notes.trim();
-    actor.phone = input.phone.trim();
-    actor.selectedTrainerIds = trainer ? [trainer.id] : actor.selectedTrainerIds ?? [];
-    actor.phoneVerifiedAt = nowIso();
-
-    if (!actor.participantProfileId) {
-      actor.participantProfileId = buildParticipantProfileId(actor.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
-    }
-  });
-}
-
 export async function registerParticipant(input: ParticipantRegistrationInput) {
   const avatarUrl = await maybeReadFile(input.avatarFile);
 
@@ -2715,8 +2684,8 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
     ensureRole(actor, "participant");
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
     }
+    upsertParticipantProfileFromUser(store, actor);
 
     const participantProfile = store.participantProfiles.find(
       (item) => item.id === actor.participantProfileId,
@@ -2820,8 +2789,8 @@ export async function completeParticipantOnboarding(input: ParticipantOnboarding
     ensureRole(actor, "participant");
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
     }
+    upsertParticipantProfileFromUser(store, actor);
 
     const participantProfile = store.participantProfiles.find(
       (item) => item.id === actor.participantProfileId,
@@ -3360,46 +3329,8 @@ export async function updateUserOrganizerFunctionsBlocked(
   });
 }
 
-export async function decideAccountRequest(
-  requestId: string,
-  currentUser: AppUser,
-  status: "approved" | "rejected",
-) {
-  if (currentUser.role !== "admin") {
-    throw new Error("Tylko admin może rozpatrywać zgłoszenia kont.");
-  }
-
-  await mutateStore((store) => {
-    const request = store.accountRequests.find((item) => item.id === requestId);
-    if (!request) {
-      throw new Error("Nie znaleziono zgłoszenia.");
-    }
-
-    request.status = status;
-  });
-}
-
 export async function resolveEnrollmentPhoto(path: string) {
   return path;
-}
-
-export async function decideTrainerAccountApproval(
-  approvalId: string,
-  status: "accepted" | "rejected",
-  currentUser: AppUser,
-) {
-  if (currentUser.role !== "trainer" && currentUser.role !== "admin") {
-    throw new Error("Nie możesz rozpatrywać tej akceptacji.");
-  }
-
-  await mutateStore((store) => {
-    const approval = store.trainerAccountApprovals.find((item) => item.id === approvalId);
-    if (!approval) {
-      throw new Error("Nie znaleziono zgłoszenia.");
-    }
-
-    approval.status = status;
-  });
 }
 
 export async function updateAppSettings(input: AppSettings) {

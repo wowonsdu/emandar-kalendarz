@@ -33,7 +33,11 @@ import {
   requestSmsCode,
 } from "@/data/mockRepository";
 import {
+  getParticipantEnrollmentViewRecords,
+} from "@/app/dashboard";
+import {
   canManageTrainingEvent,
+  buildPhoneHref,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   isPhotoModeEnabled,
@@ -44,6 +48,7 @@ import {
   isCommunityBrandStatus,
   isTrainingEventPubliclyVisible,
   getTrainingJoinAudienceLabel,
+  resolveCommunityEventOrganizerPhone,
   resolveEnrollmentPhotoModeForEvent,
   resolveBrandStatus,
   resolveTrainingJoinAudienceForEvent,
@@ -1058,6 +1063,15 @@ export function EventDetailsPage() {
         item.id === currentUser?.participantProfileId ||
         item.linkedUserId === currentUser?.id,
     ) ?? null;
+  const participantEnrollmentRecords = useMemo(
+    () =>
+      getParticipantEnrollmentViewRecords({
+        userId: currentUser?.id,
+        participantProfileId: participantProfile?.id ?? currentUser?.participantProfileId,
+        store,
+      }),
+    [currentUser?.id, currentUser?.participantProfileId, participantProfile?.id, store],
+  );
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
@@ -1089,6 +1103,8 @@ export function EventDetailsPage() {
     return <Navigate to="/kalendarz" replace />;
   }
 
+  const organizerContactPhone = resolveCommunityEventOrganizerPhone(event, store);
+  const organizerContactHref = buildPhoneHref(organizerContactPhone);
   const scheduleRows = getScheduleRows(event);
   const shouldCollapseSchedule = scheduleRows.length > 4;
   const middleScheduleRows = shouldCollapseSchedule ? scheduleRows.slice(1, -1) : [];
@@ -1118,6 +1134,10 @@ export function EventDetailsPage() {
     : `/panel/szkolenia/${event.id}`;
   const returnPath = "/panel/dashboard";
   const isLoggedInEnrollmentFlow = Boolean(currentUser);
+  const alreadyJoinedCommunityEvent =
+    isCommunityEvent &&
+    participantEnrollmentRecords.some((record) => record.event.id === event.id);
+  const shouldShowJoinedCommunityState = isCommunityEvent && alreadyJoinedCommunityEvent;
   const loggedInEnrollmentName =
     participantProfile?.displayName?.trim() ||
     currentUser?.displayName?.trim() ||
@@ -1529,148 +1549,192 @@ export function EventDetailsPage() {
           </div>
         </div>
 
-        <form
-          onSubmit={handleSubmit}
-          className="min-w-0 overflow-hidden rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:rounded-[2.25rem] sm:p-6 lg:rounded-[2.5rem] lg:p-7"
-        >
-          <PublicDetailEyebrow className="tracking-[0.3em]">
-            Formularz dołączenia
-          </PublicDetailEyebrow>
-          {!isLoggedInEnrollmentFlow ? (
+        {shouldShowJoinedCommunityState ? (
+          <article className="min-w-0 overflow-hidden rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:rounded-[2.25rem] sm:p-6 lg:rounded-[2.5rem] lg:p-7">
+            <PublicDetailEyebrow className="tracking-[0.3em]">
+              Kontakt
+            </PublicDetailEyebrow>
+            <p className="mt-3 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+              Już dołączono
+            </p>
             <p className="mt-3 text-sm leading-6 text-brand-muted sm:text-base">
-              {`${recipientMessage} ${
-                !isCommunityEvent ? `${joinAudienceMessage} ` : ""
-              }${
-                enrollmentPhotoMode === "required"
-                  ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
-                  : enrollmentPhotoMode === "optional"
-                    ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
-                    : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."
-              }`}
+              Masz już zapisane zgłoszenie albo udział w tym wydarzeniu. Zamiast wysyłać kolejny
+              formularz, skontaktuj się bezpośrednio z organizatorem.
             </p>
-          ) : null}
-          {isCancelled && (
-            <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
-              Zapisy sa wstrzymane, bo to wydarzenie ma status anulowane.
+            <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell px-5 py-4 text-sm text-brand-navy">
+              {organizerContactPhone ? (
+                <>
+                  Telefon organizatora:{" "}
+                  <span className="font-semibold">{organizerContactPhone}</span>
+                </>
+              ) : (
+                "Numer organizatora nie jest dostępny."
+              )}
             </p>
-          )}
-
-          <div className="mt-6 grid gap-4 sm:mt-7">
-            {isLoggedInEnrollmentFlow ? (
-              <div className="rounded-3xl border border-brand-navy bg-white px-5 py-5 text-left text-brand-navy shadow-soft">
-                <p className="text-sm font-semibold uppercase tracking-[0.2em]">
-                  Chcę wziąć udział
-                </p>
-                <p className="mt-2 text-sm">
-                  Organizator skontaktuje się z Tobą, żeby potwierdzić Twój udział w wydarzeniu.
-                </p>
-              </div>
-            ) : (
-              <>
-                <input
-                  required
-                  value={form.imieNazwisko}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      imieNazwisko: event.target.value,
-                    }))
-                  }
-                  placeholder="Imię i nazwisko"
-                  className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <input
-                  required
-                  value={form.telefon}
-                  disabled={smsVerified}
-                  onChange={(event) => {
-                    setSmsDialogStage("verify");
-                    setConfirmationResult(null);
-                    setVerificationCode("");
-                    setForm((current) => ({
-                      ...current,
-                      telefon: event.target.value,
-                    }));
-                  }}
-                  placeholder="Numer telefonu"
-                  className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
-                />
-                <div id="enrollment-phone-recaptcha" className="sr-only" />
-                <input
-                  value={form.polecenieOdKogo}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      polecenieOdKogo: event.target.value,
-                    }))
-                  }
-                  placeholder="Czy jesteś z polecenia od kogoś?"
-                  className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                {enrollmentPhotoEnabled && (
-                  <label className="grid min-w-0 gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
-                    <span className="inline-flex items-center gap-2 text-sm font-semibold">
-                      <ImagePlus size={16} />
-                      Zdjęcie twarzy
-                    </span>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      onChange={handleFileChange}
-                      className="block w-full min-w-0 max-w-full text-sm"
-                    />
-                    <span className="text-sm text-brand-muted">
-                      {form.photoFile
-                        ? `Wybrany plik: ${form.photoFile.name}`
-                        : enrollmentPhotoRequired
-                          ? "Wymagane: JPG, PNG albo WEBP"
-                          : "Opcjonalne: JPG, PNG albo WEBP"}
-                    </span>
-                  </label>
-                )}
-              </>
+            <div className="mt-5 flex flex-col gap-3 sm:mt-6 sm:flex-row sm:flex-wrap sm:items-center">
+              {canManage && (
+                <Link
+                  to={managementPath}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy shadow-soft sm:w-auto"
+                >
+                  Edytuj wydarzenie
+                </Link>
+              )}
+              {organizerContactHref ? (
+                <a
+                  href={organizerContactHref}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft sm:w-auto"
+                >
+                  Kontakt z Organizatorem
+                  <Phone size={16} />
+                </a>
+              ) : null}
+            </div>
+          </article>
+        ) : (
+          <form
+            onSubmit={handleSubmit}
+            className="min-w-0 overflow-hidden rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:rounded-[2.25rem] sm:p-6 lg:rounded-[2.5rem] lg:p-7"
+          >
+            <PublicDetailEyebrow className="tracking-[0.3em]">
+              Formularz dołączenia
+            </PublicDetailEyebrow>
+            {!isLoggedInEnrollmentFlow ? (
+              <p className="mt-3 text-sm leading-6 text-brand-muted sm:text-base">
+                {`${recipientMessage} ${
+                  !isCommunityEvent ? `${joinAudienceMessage} ` : ""
+                }${
+                  enrollmentPhotoMode === "required"
+                    ? "Zdjęcie jest wymagane i trafia do prototypowego store tylko dla uprawnionych osób."
+                    : enrollmentPhotoMode === "optional"
+                      ? "Zdjęcie jest opcjonalne. Jeśli je dodasz, będzie widoczne tylko dla uprawnionych osób."
+                      : "W tym formularzu zdjęcie uczestnika jest globalnie wyłączone i nie będzie zbierane."
+                }`}
+              </p>
+            ) : null}
+            {isCancelled && (
+              <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
+                Zapisy sa wstrzymane, bo to wydarzenie ma status anulowane.
+              </p>
             )}
-            <textarea
-              rows={5}
-              value={form.wiadomosc}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  wiadomosc: event.target.value,
-                }))
-              }
-              placeholder={
-                isLoggedInEnrollmentFlow
-                  ? "Opcjonalna notatka do organizatora"
-                  : organizer
-                    ? "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
-                    : "Napisz wiadomość do osoby prowadzącej"
-              }
-              className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-            />
-          </div>
 
-          <div className="mt-5 flex flex-col gap-3 sm:mt-6 sm:flex-row sm:flex-wrap sm:items-center">
-            {canManage && (
-              <Link
-                to={managementPath}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy shadow-soft sm:w-auto"
+            <div className="mt-6 grid gap-4 sm:mt-7">
+              {isLoggedInEnrollmentFlow ? (
+                <div className="rounded-3xl border border-brand-navy bg-white px-5 py-5 text-left text-brand-navy shadow-soft">
+                  <p className="text-sm font-semibold uppercase tracking-[0.2em]">
+                    Chcę wziąć udział
+                  </p>
+                  <p className="mt-2 text-sm">
+                    Organizator skontaktuje się z Tobą, żeby potwierdzić Twój udział w wydarzeniu.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <input
+                    required
+                    value={form.imieNazwisko}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        imieNazwisko: event.target.value,
+                      }))
+                    }
+                    placeholder="Imię i nazwisko"
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                  <input
+                    required
+                    value={form.telefon}
+                    disabled={smsVerified}
+                    onChange={(event) => {
+                      setSmsDialogStage("verify");
+                      setConfirmationResult(null);
+                      setVerificationCode("");
+                      setForm((current) => ({
+                        ...current,
+                        telefon: event.target.value,
+                      }));
+                    }}
+                    placeholder="Numer telefonu"
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+                  />
+                  <div id="enrollment-phone-recaptcha" className="sr-only" />
+                  <input
+                    value={form.polecenieOdKogo}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        polecenieOdKogo: event.target.value,
+                      }))
+                    }
+                    placeholder="Czy jesteś z polecenia od kogoś?"
+                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                  {enrollmentPhotoEnabled && (
+                    <label className="grid min-w-0 gap-3 rounded-3xl border border-dashed border-brand-line bg-brand-shell px-4 py-4 text-brand-navy">
+                      <span className="inline-flex items-center gap-2 text-sm font-semibold">
+                        <ImagePlus size={16} />
+                        Zdjęcie twarzy
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={handleFileChange}
+                        className="block w-full min-w-0 max-w-full text-sm"
+                      />
+                      <span className="text-sm text-brand-muted">
+                        {form.photoFile
+                          ? `Wybrany plik: ${form.photoFile.name}`
+                          : enrollmentPhotoRequired
+                            ? "Wymagane: JPG, PNG albo WEBP"
+                            : "Opcjonalne: JPG, PNG albo WEBP"}
+                      </span>
+                    </label>
+                  )}
+                </>
+              )}
+              <textarea
+                rows={5}
+                value={form.wiadomosc}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    wiadomosc: event.target.value,
+                  }))
+                }
+                placeholder={
+                  isLoggedInEnrollmentFlow
+                    ? "Opcjonalna notatka do organizatora"
+                    : organizer
+                      ? "Napisz wiadomość do Przekazującego Wiedzę i organizatora"
+                      : "Napisz wiadomość do osoby prowadzącej"
+                }
+                className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+              />
+            </div>
+
+            <div className="mt-5 flex flex-col gap-3 sm:mt-6 sm:flex-row sm:flex-wrap sm:items-center">
+              {canManage && (
+                <Link
+                  to={managementPath}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy shadow-soft sm:w-auto"
+                >
+                  {isCommunityEvent ? "Edytuj wydarzenie" : "Edytuj szkolenie"}
+                </Link>
+              )}
+              <button
+                type="submit"
+                disabled={loading || isCancelled}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60 sm:w-auto"
               >
-                {isCommunityEvent ? "Edytuj wydarzenie" : "Edytuj szkolenie"}
-              </Link>
-            )}
-            <button
-              type="submit"
-              disabled={loading || isCancelled}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60 sm:w-auto"
-            >
-              {loading
-                ? "Wysyłanie..."
-                : "Chcę wziąć udział"}
-              <ArrowRight size={16} />
-            </button>
-          </div>
-        </form>
+                {loading
+                  ? "Wysyłanie..."
+                  : "Chcę wziąć udział"}
+                <ArrowRight size={16} />
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {isCommunityEvent && eventImages.length > 0 && (

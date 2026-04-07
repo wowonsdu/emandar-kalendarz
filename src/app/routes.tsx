@@ -14,7 +14,6 @@ import {
   TrainersPage,
 } from "./pages/public";
 import {
-  AccountRequestsPage,
   AvailabilityPage,
   DashboardPage,
   EventManagementPage,
@@ -83,7 +82,6 @@ export const router = createBrowserRouter(
             { path: "grupy", Component: GroupsPage },
             { path: "grupy/utworz", Component: GroupsPage },
             { path: "grupy/:groupId", Component: GroupsPage },
-            { path: "rejestracje", Component: AccountRequestsPage },
             { path: "zgloszenia", Component: RequestsPage },
             { path: "relacje", Component: RelationsPage },
             { path: "terminy", Component: AvailabilityPage },

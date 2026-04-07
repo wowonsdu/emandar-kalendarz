@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateEventCapacityStats,
   buildGoogleCalendarSubscribeUrl,
+  buildPhoneHref,
   buildSharedAvailabilityWindows,
   buildTrainerFreeDaySlices,
   canPublishTrainingEvent,
@@ -28,6 +29,7 @@ import {
   isTrainingEventCollaborationAccepted,
   isTrainingEventPubliclyVisible,
   getTrainingJoinAudienceLabel,
+  resolveCommunityEventOrganizerPhone,
   resolveEnrollmentPhotoModeForEvent,
   resolveEnrollmentIntent,
   resolvePhotoMode,
@@ -40,6 +42,7 @@ import {
   sortEventsByFillRate,
   sortEventsByDate,
 } from "./utils";
+import type { DemoStore } from "./types";
 
 describe("deriveEnrollmentFinalStatus", () => {
   it("returns accepted for a confirmed request", () => {
@@ -58,6 +61,84 @@ describe("deriveEnrollmentFinalStatus", () => {
 describe("participant enrollment status", () => {
   it("defaults missing participant status to active", () => {
     expect(resolveParticipantEnrollmentStatus(undefined)).toBe("active");
+  });
+});
+
+describe("community organizer phone helpers", () => {
+  function createStore(overrides: Partial<DemoStore> = {}): DemoStore {
+    return {
+      users: [],
+      trainers: [],
+      organizers: [],
+      participantProfiles: [],
+      groups: [],
+      groupMembers: [],
+      eventParticipants: [],
+      relations: [],
+      trainingEvents: [],
+      publicTrainingEvents: [],
+      availabilitySlots: [],
+      trainerSharedSlots: [],
+      trainerCalendarFeeds: [],
+      organizerCalendarFeeds: [],
+      trainerOrganizerCalendarFeeds: [],
+      trainerExternalBusyMonths: [],
+      organizerExternalBusyMonths: [],
+      enrollmentRequests: [],
+      notifications: [],
+      appSettings: {
+        signupPhotoMode: "optional",
+        enrollmentPhotoMode: "optional",
+        defaultNotificationSettings: {
+          reminderLeadDays: 7,
+          sendToTrainer: true,
+          sendToOrganizer: true,
+          sendToParticipants: true,
+          requireParticipantSmsConfirmation: false,
+          reminderSmsTemplate: "",
+          confirmationSmsTemplate: "",
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  it("prefers the creator phone for community events", () => {
+    const phone = resolveCommunityEventOrganizerPhone(
+      {
+        brandStatus: "supported",
+        creatorPhone: "+48 601 100 200",
+        organizerId: "organizer-1",
+        organizerUserId: "organizer-user-1",
+      },
+      createStore({
+        users: [{ id: "organizer-user-1", phone: "+48 602 100 300" } as DemoStore["users"][number]],
+      }),
+    );
+
+    expect(phone).toBe("+48 601 100 200");
+  });
+
+  it("falls back to organizer user phone when the event has no creator phone", () => {
+    const phone = resolveCommunityEventOrganizerPhone(
+      {
+        brandStatus: "supported",
+        creatorPhone: null,
+        organizerId: "organizer-1",
+        organizerUserId: "organizer-user-1",
+      },
+      createStore({
+        users: [{ id: "organizer-user-1", phone: "+48 602 100 300" } as DemoStore["users"][number]],
+      }),
+    );
+
+    expect(phone).toBe("+48 602 100 300");
+  });
+
+  it("builds a tel href from formatted phone input", () => {
+    expect(buildPhoneHref("+48 602-100-300")).toBe("tel:+48602100300");
+    expect(buildPhoneHref("602 100 300")).toBe("tel:602100300");
+    expect(buildPhoneHref("")).toBeNull();
   });
 });
 

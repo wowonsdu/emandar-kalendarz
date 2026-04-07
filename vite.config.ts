@@ -4,6 +4,17 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+function normalizeBasePath(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "/") {
+    return "/";
+  }
+
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withLeadingSlash.endsWith("/") ? withLeadingSlash : `${withLeadingSlash}/`;
+}
+
+const configuredBasePath = normalizeBasePath(process.env.EMANDAR_BASE_PATH?.trim() || "/emandar/");
 const mockDataDir = path.resolve(__dirname, "public/mock-data");
 const mockSeedStorePath = path.join(mockDataDir, "seed-store.json");
 const mockRuntimeStorePath =
@@ -32,8 +43,6 @@ const persistedCollectionKeys = [
   "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
-  "accountRequests",
-  "trainerAccountApprovals",
   "appSettings",
 ] as const;
 
@@ -95,8 +104,6 @@ function createDefaultMockStore() {
     organizerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
-    accountRequests: [],
-    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",
@@ -294,22 +301,23 @@ async function applyMockPatch(baseVersion: number, collections: Partial<Record<P
 }
 
 function mockStoreApiPlugin() {
+  const configuredApiBase = `${configuredBasePath.replace(/\/$/, "")}/api/mock`;
   const stateRoutes = new Set([
-    "/emandar/api/mock/state",
+    `${configuredApiBase}/state`,
     "/api/mock/state",
-    "/emandar/api/mock/state.php",
+    `${configuredApiBase}/state.php`,
     "/api/mock/state.php",
   ]);
   const versionRoutes = new Set([
-    "/emandar/api/mock/version",
+    `${configuredApiBase}/version`,
     "/api/mock/version",
-    "/emandar/api/mock/version.php",
+    `${configuredApiBase}/version.php`,
     "/api/mock/version.php",
   ]);
   const patchRoutes = new Set([
-    "/emandar/api/mock/patch",
+    `${configuredApiBase}/patch`,
     "/api/mock/patch",
-    "/emandar/api/mock/patch.php",
+    `${configuredApiBase}/patch.php`,
     "/api/mock/patch.php",
   ]);
 
@@ -382,7 +390,7 @@ function mockStoreApiPlugin() {
 }
 
 export default defineConfig({
-  base: "/emandar/",
+  base: configuredBasePath,
   server: {
     watch: {
       ignored: ["**/.local-state/**"],

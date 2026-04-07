@@ -2152,7 +2152,7 @@ function StatCard({
     return (
       <article
         className={cn(
-          "flex min-h-0 flex-col items-start justify-center gap-3 rounded-[1.5rem] border border-brand-line bg-white px-5 py-4 shadow-soft sm:rounded-[2rem] sm:px-6 sm:py-5",
+          "flex min-h-0 flex-col items-start justify-center gap-2.5 rounded-[1.125rem] border border-brand-line bg-white px-4 py-3 shadow-soft sm:gap-3 sm:rounded-[1.5rem] sm:px-5 sm:py-4",
           className,
         )}
       >
@@ -2164,14 +2164,14 @@ function StatCard({
         >
           {label}
         </p>
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[1rem] bg-brand-sky/15 text-brand-navy sm:h-10 sm:w-10 sm:rounded-2xl">
             <Icon size={18} />
           </div>
           <div className="min-w-0">
             <p
               className={cn(
-                "text-3xl font-semibold leading-none text-brand-navy sm:text-4xl",
+                "text-2xl font-semibold leading-none text-brand-navy sm:text-3xl",
                 valueClassName,
               )}
             >
@@ -4711,13 +4711,13 @@ function OperationalDashboardPerspectiveView({
 
     return (
       <div className="space-y-6">
-        <div className="flex flex-wrap gap-3 sm:gap-4">
+        <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 sm:gap-4">
           <StatCard
             label="Nowe"
             value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
             icon={Bell}
             layout="stacked"
-            className="min-h-[136px] w-auto self-start"
+            className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
@@ -4727,7 +4727,7 @@ function OperationalDashboardPerspectiveView({
             valueClassName="text-lg leading-tight sm:text-2xl"
             icon={CalendarDays}
             layout="stacked"
-            className="min-h-[136px] w-auto self-start"
+            className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
             detailClassName="mt-1"
           />
@@ -4738,7 +4738,7 @@ function OperationalDashboardPerspectiveView({
             valueClassName="text-lg leading-tight sm:text-2xl"
             icon={CalendarDays}
             layout="stacked"
-            className="min-h-[136px] w-auto self-start"
+            className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
             detailClassName="mt-1"
           />
@@ -4747,7 +4747,7 @@ function OperationalDashboardPerspectiveView({
             value={organizerOfficialDashboard?.groups.length ?? 0}
             icon={Users}
             layout="stacked"
-            className="min-h-[136px] w-auto self-start"
+            className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
@@ -4755,7 +4755,7 @@ function OperationalDashboardPerspectiveView({
             value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
             icon={CalendarDays}
             layout="stacked"
-            className="min-h-[136px] w-auto self-start"
+            className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
@@ -4763,7 +4763,7 @@ function OperationalDashboardPerspectiveView({
             value={organizerOfficialDashboard?.activeMemberCount ?? 0}
             icon={ShieldCheck}
             layout="stacked"
-            className="min-h-[136px] w-auto self-start"
+            className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
           />
         </div>

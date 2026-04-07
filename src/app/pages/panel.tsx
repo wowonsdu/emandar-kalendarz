@@ -4689,6 +4689,7 @@ function OperationalDashboardPerspectiveView({
 
   if (!isTrainerPerspective) {
     const nextPipelineEvent = organizerOfficialDashboard?.pipelineEvents[0] ?? null;
+    const followingPipelineEvent = organizerOfficialDashboard?.pipelineEvents[1] ?? null;
     const nextPipelineEventDate = nextPipelineEvent
       ? getDaysUntilLabel(nextPipelineEvent.startsAt, dashboardNow)
       : "Brak";
@@ -4698,6 +4699,15 @@ function OperationalDashboardPerspectiveView({
         ? store.groups.find((item) => item.id === nextPipelineEvent.groupId)?.name ?? null
         : null) ??
       "Brak najbliższego terminu";
+    const followingPipelineEventDate = followingPipelineEvent
+      ? getDaysUntilLabel(followingPipelineEvent.startsAt, dashboardNow)
+      : "Brak";
+    const followingPipelineEventGroup =
+      followingPipelineEvent?.groupName ??
+      (followingPipelineEvent?.groupId
+        ? store.groups.find((item) => item.id === followingPipelineEvent.groupId)?.name ?? null
+        : null) ??
+      "Brak następnego terminu";
 
     return (
       <div className="space-y-6">
@@ -4714,6 +4724,17 @@ function OperationalDashboardPerspectiveView({
             label="Najbliższe"
             value={nextPipelineEventDate}
             detail={nextPipelineEventGroup}
+            valueClassName="text-lg leading-tight sm:text-2xl"
+            icon={CalendarDays}
+            layout="stacked"
+            className="min-h-[136px] w-auto self-start"
+            labelClassName="whitespace-nowrap"
+            detailClassName="mt-1"
+          />
+          <StatCard
+            label="Następne"
+            value={followingPipelineEventDate}
+            detail={followingPipelineEventGroup}
             valueClassName="text-lg leading-tight sm:text-2xl"
             icon={CalendarDays}
             layout="stacked"

@@ -5507,6 +5507,8 @@ function RoleAwareDashboardView({
       description={
         activePerspective === "participant"
           ? "Twoje zapisy, dwa najbliższe szkolenia i terminy, które nadal wymagają potwierdzenia udziału."
+          : activePerspective === "organizer"
+            ? "Twoje grupy, szkolenia, powiadomienia i nadchodzące akcje."
           : undefined
       }
       showLeadText

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "node ./node_modules/vite/bin/vite.js build",
+    "build:raw": "node ./scripts/build-raw-dist.mjs",
     "dev": "node ./node_modules/vite/bin/vite.js",
     "mock:reset": "node ./scripts/mock-reset.mjs",
     "mock:seed:from-runtime": "node ./scripts/mock-seed-from-runtime.mjs",

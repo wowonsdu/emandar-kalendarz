@@ -694,6 +694,66 @@ describe("submitEnrollment", () => {
   });
 });
 
+describe("ensurePhoneParticipantProfile", () => {
+  it("updates an existing participant profile instead of duplicating it", async () => {
+    const actorId = "user-participant-ensure";
+    const actorPhone = "+48 700 200 300";
+    const participantProfileId = "participant-48700200300";
+    mockSession(actorId);
+    const store = createStore(
+      {},
+      {
+        id: actorId,
+        role: "participant",
+        roles: ["participant"],
+        primaryRole: "participant",
+        displayName: actorPhone,
+        phone: actorPhone,
+        status: "active",
+      },
+    );
+    store.participantProfiles = [
+      {
+        id: participantProfileId,
+        linkedUserId: null,
+        displayName: "Anna Nowak",
+        firstName: "Anna",
+        lastName: "Nowak",
+        phone: actorPhone,
+        phoneLookupKey: "48700200300",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+    const { ensurePhoneParticipantProfile } = await import("./mockRepository");
+
+    await expect(ensurePhoneParticipantProfile()).resolves.toMatchObject({
+      ok: true,
+      userId: actorId,
+      accountCreated: true,
+    });
+
+    const updatedStore = mockedApi.getStore();
+    const matchingProfiles = updatedStore.participantProfiles.filter(
+      (item) => item.id === participantProfileId,
+    );
+
+    expect(matchingProfiles).toHaveLength(1);
+    expect(matchingProfiles[0]).toMatchObject({
+      id: participantProfileId,
+      linkedUserId: actorId,
+      displayName: "Anna Nowak",
+      phone: actorPhone,
+    });
+    expect(updatedStore.users[0]).toMatchObject({
+      id: actorId,
+      participantProfileId,
+    });
+  });
+});
+
 describe("manageEnrollmentRequest", () => {
   it("links accepted grouped enrollments to an invited event participant", async () => {
     const { manageEnrollmentRequest } = await import("./mockRepository");
@@ -1019,6 +1079,10 @@ describe("manageEnrollmentRequest", () => {
       status: "confirmed",
       source: "public-form",
     });
+    expect(updatedStore.trainingEvents[0]).toMatchObject({
+      id: "event-community-accept",
+      enrolledCount: 1,
+    });
   });
 
   it("creates a transferred pending request on the target event", async () => {
@@ -1273,6 +1337,112 @@ describe("manageEnrollmentRequest", () => {
     });
     expect(updatedStore.eventParticipants[0]).toMatchObject({
       id: "event-group-reject__participant-1",
+      status: "declined",
+    });
+    expect(updatedStore.eventParticipants[0]?.confirmedAt).toBeUndefined();
+    expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
+  });
+
+  it("moves a previously accepted community enrollment into rejected state and removes it from the count", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor();
+    const store = createStore(
+      {
+        id: "event-community-reject",
+        title: "Spotkanie oddechowe",
+        type: "Wydarzenie społeczności",
+        eventTypeSystem: "post",
+        brandStatus: "supported",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: null,
+        groupName: null,
+        enrolledCount: 1,
+      },
+      actor,
+    );
+    store.participantProfiles = [
+      {
+        id: "participant-community-2",
+        linkedUserId: "user-participant-2",
+        displayName: "Dawid Wasyl",
+        firstName: "Dawid",
+        lastName: "Wasyl",
+        phone: "+48 605 100 305",
+        phoneLookupKey: "48605100305",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-community-reject",
+        eventId: "event-community-reject",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-community-2",
+        submitterUid: "user-participant-2",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        eventParticipantId: "event-community-reject__participant-community-2",
+        intent: "participating",
+        imieNazwisko: "Dawid Wasyl",
+        telefon: "+48 605 100 305",
+        polecenieOdKogo: "",
+        wiadomosc: "Już byłem zapisany.",
+        photoStatus: "pending",
+        finalStatus: "accepted",
+        participantStatus: "active",
+        createdAt: "2026-04-02T12:00:00.000Z",
+      },
+    ];
+    store.eventParticipants = [
+      {
+        id: "event-community-reject__participant-community-2",
+        eventId: "event-community-reject",
+        eventTitle: "Spotkanie oddechowe",
+        groupId: null,
+        groupName: null,
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        participantProfileId: "participant-community-2",
+        participantDisplayName: "Dawid Wasyl",
+        participantPhone: "+48 605 100 305",
+        participantUserId: "user-participant-2",
+        priority: "regularni",
+        status: "confirmed",
+        source: "public-form",
+        invitedAt: "2026-04-02T12:00:00.000Z",
+        confirmedAt: "2026-04-02T12:10:00.000Z",
+        updatedAt: "2026-04-02T12:10:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-community-reject",
+          decision: "rejected",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+
+    expect(updatedStore.enrollmentRequests[0]).toMatchObject({
+      id: "enrollment-community-reject",
+      finalStatus: "rejected",
+      participantStatus: "cancelled",
+    });
+    expect(updatedStore.eventParticipants[0]).toMatchObject({
+      id: "event-community-reject__participant-community-2",
       status: "declined",
     });
     expect(updatedStore.eventParticipants[0]?.confirmedAt).toBeUndefined();

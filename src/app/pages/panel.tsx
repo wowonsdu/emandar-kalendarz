@@ -2135,6 +2135,7 @@ function StatCard({
   valueClassName = "",
   className = "",
   labelClassName = "",
+  layout = "default",
 }: {
   label: string;
   value: string | number;
@@ -2143,7 +2144,44 @@ function StatCard({
   valueClassName?: string;
   className?: string;
   labelClassName?: string;
+  layout?: "default" | "stacked";
 }) {
+  if (layout === "stacked") {
+    return (
+      <article
+        className={cn(
+          "flex min-h-0 flex-col items-start gap-3 rounded-[1.5rem] border border-brand-line bg-white px-5 py-4 shadow-soft sm:rounded-[2rem] sm:px-6 sm:py-5",
+          className,
+        )}
+      >
+        <p
+          className={cn(
+            "text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:text-sm sm:tracking-[0.2em]",
+            labelClassName,
+          )}
+        >
+          {label}
+        </p>
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
+            <Icon size={18} />
+          </div>
+          <p
+            className={cn(
+              "text-3xl font-semibold leading-none text-brand-navy sm:text-4xl",
+              valueClassName,
+            )}
+          >
+            {value}
+          </p>
+        </div>
+        {detail ? (
+          <p className="break-words text-sm leading-snug text-brand-muted">{detail}</p>
+        ) : null}
+      </article>
+    );
+  }
+
   return (
     <article
       className={cn(
@@ -4662,21 +4700,24 @@ function OperationalDashboardPerspectiveView({
             label="Grupy"
             value={organizerOfficialDashboard?.groups.length ?? 0}
             icon={Users}
-            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            layout="stacked"
+            className="w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
             label="Szkolenia"
             value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
             icon={CalendarDays}
-            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            layout="stacked"
+            className="w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
             label="Uczestnicy"
             value={organizerOfficialDashboard?.activeMemberCount ?? 0}
             icon={ShieldCheck}
-            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            layout="stacked"
+            className="w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
@@ -4685,14 +4726,16 @@ function OperationalDashboardPerspectiveView({
             detail={nextPipelineEventGroup}
             valueClassName="text-lg leading-tight sm:text-2xl"
             icon={CalendarDays}
-            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            layout="stacked"
+            className="w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
             label="Czeka na decyzję"
             value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
             icon={Bell}
-            className="min-h-0 w-auto items-start self-start px-5 py-4 sm:min-h-0 sm:px-6 sm:py-5"
+            layout="stacked"
+            className="w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
         </div>

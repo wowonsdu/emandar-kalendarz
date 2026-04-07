@@ -25,8 +25,6 @@ const rawArrayCollections = [
   "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
-  "accountRequests",
-  "trainerAccountApprovals",
 ];
 
 function rewriteBasePathStrings(value) {

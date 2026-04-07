@@ -75,8 +75,6 @@ function mock_collection_keys(): array
         'organizerExternalBusyMonths',
         'enrollmentRequests',
         'notifications',
-        'accountRequests',
-        'trainerAccountApprovals',
         'appSettings',
     ];
 }
@@ -118,8 +116,6 @@ function mock_default_store(): array
         'organizerExternalBusyMonths' => [],
         'enrollmentRequests' => [],
         'notifications' => [],
-        'accountRequests' => [],
-        'trainerAccountApprovals' => [],
         'appSettings' => [
             'signupPhotoMode' => 'optional',
             'enrollmentPhotoMode' => 'optional',

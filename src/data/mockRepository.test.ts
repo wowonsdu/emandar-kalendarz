@@ -83,8 +83,6 @@ function createStore(
     trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
-    accountRequests: [],
-    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",

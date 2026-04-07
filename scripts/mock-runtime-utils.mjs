@@ -20,8 +20,6 @@ export const persistedCollectionKeys = [
   "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
-  "accountRequests",
-  "trainerAccountApprovals",
   "appSettings",
 ];
 
@@ -60,8 +58,6 @@ export function createDefaultStore() {
     organizerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
-    accountRequests: [],
-    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",

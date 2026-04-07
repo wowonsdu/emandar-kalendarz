@@ -1,6 +1,4 @@
 import type {
-  AccountRequest,
-  AccountRequestInput,
   AppRole,
   AppSettings,
   AppUser,
@@ -36,7 +34,6 @@ import type {
   ParticipantProfile,
   ParticipantProfileUpdateInput,
   PhotoMode,
-  TrainerAccountApproval,
   TrainerCalendarFeedInput,
   TrainerOrganizerRelation,
   TrainerProfile,
@@ -92,8 +89,6 @@ type PersistedCollectionKey =
   | "organizerExternalBusyMonths"
   | "enrollmentRequests"
   | "notifications"
-  | "accountRequests"
-  | "trainerAccountApprovals"
   | "appSettings";
 type PersistedCollectionsPatch = Partial<Pick<DemoStore, PersistedCollectionKey>>;
 
@@ -119,8 +114,6 @@ const persistedCollectionKeys: PersistedCollectionKey[] = [
   "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
-  "accountRequests",
-  "trainerAccountApprovals",
   "appSettings",
 ];
 
@@ -511,10 +504,6 @@ function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoS
     ),
     enrollmentRequests: cloneValue(raw?.enrollmentRequests ?? base.enrollmentRequests),
     notifications: cloneValue(raw?.notifications ?? base.notifications),
-    accountRequests: cloneValue(raw?.accountRequests ?? base.accountRequests),
-    trainerAccountApprovals: cloneValue(
-      raw?.trainerAccountApprovals ?? base.trainerAccountApprovals,
-    ),
     appSettings: {
       ...base.appSettings,
       ...(raw?.appSettings ?? {}),
@@ -1128,8 +1117,6 @@ export function createEmptyStore(): DemoStore {
     trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
-    accountRequests: [],
-    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",
@@ -2670,43 +2657,6 @@ export async function uploadCommunityEventImages(files: File[]) {
   return images;
 }
 
-export async function submitAccountRequest(input: AccountRequestInput) {
-  const avatarUrl = await maybeReadFile(input.avatarFile);
-
-  await mutateStore((store) => {
-    const actor = getActorOrThrow(store);
-    const normalizedCode = input.trainerAuthorizationCode.trim().toUpperCase();
-    const trainer = store.trainers.find(
-      (item) => resolveTrainerAuthorizationCode(item as TrainerProfile & { authorizationCode?: string }) === normalizedCode,
-    );
-
-    store.accountRequests.unshift({
-      id: createId("account-request"),
-      displayName: input.displayName.trim(),
-      phone: input.phone.trim(),
-      requestedRoles: ["participant"],
-      notes: input.notes.trim(),
-      status: "pending",
-      createdAt: nowIso(),
-      authProvider: "phone",
-      avatarPath: avatarUrl ?? undefined,
-      avatarUrl: avatarUrl ?? undefined,
-      selectedTrainerIds: trainer ? [trainer.id] : [],
-    });
-
-    actor.displayName = input.displayName.trim();
-    actor.notes = input.notes.trim();
-    actor.phone = input.phone.trim();
-    actor.selectedTrainerIds = trainer ? [trainer.id] : actor.selectedTrainerIds ?? [];
-    actor.phoneVerifiedAt = nowIso();
-
-    if (!actor.participantProfileId) {
-      actor.participantProfileId = buildParticipantProfileId(actor.phone);
-    }
-    upsertParticipantProfileFromUser(store, actor);
-  });
-}
-
 export async function registerParticipant(input: ParticipantRegistrationInput) {
   const avatarUrl = await maybeReadFile(input.avatarFile);
 
@@ -3379,46 +3329,8 @@ export async function updateUserOrganizerFunctionsBlocked(
   });
 }
 
-export async function decideAccountRequest(
-  requestId: string,
-  currentUser: AppUser,
-  status: "approved" | "rejected",
-) {
-  if (currentUser.role !== "admin") {
-    throw new Error("Tylko admin może rozpatrywać zgłoszenia kont.");
-  }
-
-  await mutateStore((store) => {
-    const request = store.accountRequests.find((item) => item.id === requestId);
-    if (!request) {
-      throw new Error("Nie znaleziono zgłoszenia.");
-    }
-
-    request.status = status;
-  });
-}
-
 export async function resolveEnrollmentPhoto(path: string) {
   return path;
-}
-
-export async function decideTrainerAccountApproval(
-  approvalId: string,
-  status: "accepted" | "rejected",
-  currentUser: AppUser,
-) {
-  if (currentUser.role !== "trainer" && currentUser.role !== "admin") {
-    throw new Error("Nie możesz rozpatrywać tej akceptacji.");
-  }
-
-  await mutateStore((store) => {
-    const approval = store.trainerAccountApprovals.find((item) => item.id === approvalId);
-    if (!approval) {
-      throw new Error("Nie znaleziono zgłoszenia.");
-    }
-
-    approval.status = status;
-  });
 }
 
 export async function updateAppSettings(input: AppSettings) {

@@ -43,8 +43,6 @@ const persistedCollectionKeys = [
   "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
-  "accountRequests",
-  "trainerAccountApprovals",
   "appSettings",
 ] as const;
 
@@ -106,8 +104,6 @@ function createDefaultMockStore() {
     organizerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
-    accountRequests: [],
-    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",

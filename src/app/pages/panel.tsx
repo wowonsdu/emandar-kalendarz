@@ -4736,7 +4736,7 @@ function OperationalDashboardPerspectiveView({
             layout="stacked"
             className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
-            detailClassName="mt-0"
+            detailClassName="mt-0 w-full truncate whitespace-nowrap"
             detailPlacement="below"
           />
           <StatCard
@@ -4748,7 +4748,7 @@ function OperationalDashboardPerspectiveView({
             layout="stacked"
             className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
-            detailClassName="mt-0"
+            detailClassName="mt-0 w-full truncate whitespace-nowrap"
             detailPlacement="below"
           />
           <StatCard

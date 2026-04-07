@@ -71,6 +71,7 @@ import {
 } from "@/domain/notifications";
 import {
   aggregateEventCapacityStats,
+  buildPhoneHref,
   canApproveEnrollmentRequest,
   buildTrainerFreeDaySlices,
   canPublishTrainingEvent,
@@ -95,6 +96,7 @@ import {
   isCommunityBrandStatus,
   isOrganizerFunctionsBlocked,
   resolveEnrollmentIntent,
+  resolveCommunityEventOrganizerPhone,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainingJoinAudienceForEvent,
@@ -9930,6 +9932,28 @@ export function EventsPage() {
                             : getEventParticipantStatusLabel(record.eventParticipant.status),
                       },
                     ]}
+                    renderActionSlot={() => {
+                      const organizerPhone = resolveCommunityEventOrganizerPhone(record.event, store);
+                      const organizerPhoneHref = buildPhoneHref(organizerPhone);
+
+                      if (!organizerPhoneHref) {
+                        return (
+                          <span className="inline-flex items-center justify-center rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-muted">
+                            Numer organizatora niedostępny
+                          </span>
+                        );
+                      }
+
+                      return (
+                        <a
+                          href={organizerPhoneHref}
+                          className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                        >
+                          Kontakt z Organizatorem
+                          <Phone size={16} />
+                        </a>
+                      );
+                    }}
                   />
                 ))
               )}
@@ -9953,7 +9977,7 @@ export function EventsPage() {
                           to={getPanelEventDetailPath(event)}
                           className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
                         >
-                          Edytuj wydarzenie
+                          Szczegóły wydarzenia
                         </Link>
                         {event.isPublished ? (
                           <button

@@ -3,6 +3,7 @@ import {
   getDashboardPerspectives,
   getOrganizerOfficialDashboardModel,
   getParticipantDashboardModel,
+  getParticipantEnrollmentViewRecords,
   getParticipantPendingEnrollmentRequestRecords,
 } from "./dashboard";
 import type {
@@ -379,6 +380,61 @@ describe("dashboard helpers", () => {
 
     expect(records.map((record) => record.request.id)).toEqual(["request-community"]);
     expect(records[0]?.kind).toBe("request");
+  });
+
+  it("returns community enrollment view records for both request and roster participation", () => {
+    const communityRequestEvent = createEvent({
+      id: "event-community-request",
+      brandStatus: "supported",
+      title: "Wieczor community",
+      groupId: null,
+      groupName: null,
+    });
+    const communityRosterEvent = createEvent({
+      id: "event-community-roster",
+      brandStatus: "supported",
+      title: "Poranek community",
+      groupId: null,
+      groupName: null,
+    });
+    const store = createStore({
+      trainingEvents: [communityRequestEvent, communityRosterEvent],
+      enrollmentRequests: [
+        createEnrollmentRequest({
+          id: "request-community-active",
+          eventId: "event-community-request",
+        }),
+        createEnrollmentRequest({
+          id: "request-community-synced",
+          eventId: "event-community-roster",
+          eventParticipantId: "participant-event-community",
+          finalStatus: "accepted",
+        }),
+      ],
+      eventParticipants: [
+        createEventParticipant({
+          id: "participant-event-community",
+          eventId: "event-community-roster",
+        }),
+      ],
+    });
+
+    const records = getParticipantEnrollmentViewRecords({
+      userId: "user-1",
+      participantProfileId: "participant-1",
+      store,
+      now: new Date("2026-04-06T08:00:00.000Z"),
+    });
+
+    expect(
+      records.filter((record) => record.event.brandStatus === "supported").map((record) => ({
+        eventId: record.event.id,
+        kind: record.kind,
+      })),
+    ).toEqual([
+      { eventId: "event-community-request", kind: "request" },
+      { eventId: "event-community-roster", kind: "roster" },
+    ]);
   });
 
   it("builds organizer official dashboard from active groups and grouped official requests", () => {

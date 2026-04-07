@@ -110,6 +110,51 @@ export function getEnrollmentIntentLabel(
   return "Chcę wziąć udział";
 }
 
+export function buildPhoneHref(phone: string | null | undefined) {
+  const trimmedPhone = phone?.trim();
+  if (!trimmedPhone) {
+    return null;
+  }
+
+  const digitsOnly = trimmedPhone.replace(/\D/g, "");
+  if (!digitsOnly) {
+    return null;
+  }
+
+  return trimmedPhone.startsWith("+") ? `tel:+${digitsOnly}` : `tel:${digitsOnly}`;
+}
+
+export function resolveCommunityEventOrganizerPhone(
+  event: Pick<TrainingEvent, "brandStatus" | "creatorPhone" | "organizerId" | "organizerUserId">,
+  store: Pick<DemoStore, "organizers" | "users">,
+) {
+  if (!isCommunityBrandStatus(event.brandStatus)) {
+    return null;
+  }
+
+  const creatorPhone = event.creatorPhone?.trim();
+  if (creatorPhone) {
+    return creatorPhone;
+  }
+
+  const organizerUser = event.organizerUserId
+    ? store.users.find((item) => item.id === event.organizerUserId)
+    : null;
+  const organizerUserPhone = organizerUser?.phone?.trim();
+  if (organizerUserPhone) {
+    return organizerUserPhone;
+  }
+
+  const organizer = event.organizerId
+    ? store.organizers.find((item) => item.id === event.organizerId)
+    : null;
+  const organizerOwner = organizer?.userId
+    ? store.users.find((item) => item.id === organizer.userId)
+    : null;
+
+  return organizerOwner?.phone?.trim() || null;
+}
+
 export function canOrganizerAccessTrainer(
   organizerId: string,
   trainerId: string,

@@ -325,32 +325,19 @@ function isFutureOpenGroupEvent(event: TrainingEvent) {
   );
 }
 
+function countConfirmedEventParticipants(store: DemoStore, eventId: string) {
+  return store.eventParticipants.filter(
+    (participant) => participant.eventId === eventId && participant.status === "confirmed",
+  ).length;
+}
+
 function recomputeEventEnrolledCount(store: DemoStore, eventId: string) {
   const event = store.trainingEvents.find((item) => item.id === eventId);
   if (!event) {
     return;
   }
 
-  if (event.groupId) {
-    event.enrolledCount = store.eventParticipants.filter(
-      (participant) => participant.eventId === eventId && participant.status === "confirmed",
-    ).length;
-    return;
-  }
-
-  const requestCount = store.enrollmentRequests.filter(
-    (request) =>
-      request.eventId === eventId &&
-      request.participantStatus !== "cancelled" &&
-      request.finalStatus !== "rejected",
-  ).length;
-  const participantCount = store.eventParticipants.filter(
-    (participant) =>
-      participant.eventId === eventId &&
-      (participant.status === "confirmed" || participant.status === "invited"),
-  ).length;
-
-  event.enrolledCount = Math.max(requestCount, participantCount);
+  event.enrolledCount = countConfirmedEventParticipants(store, eventId);
 }
 
 function syncParticipantProfileGroupMembership(
@@ -485,6 +472,12 @@ function splitDisplayName(value: string) {
     firstName,
     lastName: lastNameParts.join(" ") || undefined,
   };
+}
+
+function isPhoneOnlyDisplayName(value: string | null | undefined, phone: string) {
+  const normalizedValue = normalizePhoneLookupKey(value ?? "");
+  const normalizedPhone = normalizePhoneLookupKey(phone);
+  return Boolean(normalizedValue) && normalizedValue === normalizedPhone;
 }
 
 function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoStore {
@@ -904,25 +897,10 @@ function rebuildParticipantDerivedFields(store: DemoStore) {
 }
 
 function rebuildEventDerivedFields(store: DemoStore) {
-  const activeRequests = store.enrollmentRequests.filter(
-    (item) => item.participantStatus !== "cancelled" && item.finalStatus !== "rejected",
-  );
-  const activeParticipants = store.eventParticipants.filter(
-    (item) => item.status === "confirmed" || item.status === "invited",
-  );
-
   store.trainingEvents = store.trainingEvents.map((event) => {
-    const requestCount = activeRequests.filter((item) => item.eventId === event.id).length;
-    const participantCount = activeParticipants.filter((item) => item.eventId === event.id).length;
-    const confirmedParticipantCount = store.eventParticipants.filter(
-      (item) => item.eventId === event.id && item.status === "confirmed",
-    ).length;
-
     return {
       ...event,
-      enrolledCount: event.groupId
-        ? confirmedParticipantCount
-        : Math.max(requestCount, participantCount),
+      enrolledCount: countConfirmedEventParticipants(store, event.id),
     };
   });
 
@@ -957,6 +935,47 @@ function createParticipantProfileFromUser(user: AppUser): ParticipantProfile {
     notes: user.notes,
     referralSource: user.referralSource,
   };
+}
+
+function upsertParticipantProfileFromUser(store: DemoStore, user: AppUser) {
+  const nextProfile = createParticipantProfileFromUser(user);
+  const existingIndex = store.participantProfiles.findIndex((item) => item.id === nextProfile.id);
+  if (existingIndex < 0) {
+    store.participantProfiles.push(nextProfile);
+    return nextProfile;
+  }
+
+  const existingProfile = store.participantProfiles[existingIndex];
+  const shouldPreserveExistingName =
+    !isPhoneOnlyDisplayName(existingProfile.displayName, existingProfile.phone) &&
+    isPhoneOnlyDisplayName(nextProfile.displayName, nextProfile.phone);
+
+  const updatedProfile: ParticipantProfile = {
+    ...existingProfile,
+    ...nextProfile,
+    displayName: shouldPreserveExistingName ? existingProfile.displayName : nextProfile.displayName,
+    firstName: shouldPreserveExistingName ? existingProfile.firstName : nextProfile.firstName,
+    lastName: shouldPreserveExistingName ? existingProfile.lastName : nextProfile.lastName,
+    email: nextProfile.email ?? existingProfile.email,
+    notes: nextProfile.notes ?? existingProfile.notes,
+    referralSource: nextProfile.referralSource ?? existingProfile.referralSource,
+    avatarUrl: nextProfile.avatarUrl ?? existingProfile.avatarUrl,
+    avatarPath: nextProfile.avatarPath ?? existingProfile.avatarPath,
+    avatarCrop: nextProfile.avatarCrop ?? existingProfile.avatarCrop,
+    createdAt: existingProfile.createdAt,
+    createdByOrganizerId: existingProfile.createdByOrganizerId ?? nextProfile.createdByOrganizerId,
+    createdByUserId: existingProfile.createdByUserId ?? nextProfile.createdByUserId,
+    confirmedAt: nextProfile.confirmedAt ?? existingProfile.confirmedAt,
+    managerOrganizerIds: existingProfile.managerOrganizerIds,
+    managerOrganizerUserIds: existingProfile.managerOrganizerUserIds,
+    managerTrainerIds: existingProfile.managerTrainerIds,
+    managerTrainerUserIds: existingProfile.managerTrainerUserIds,
+    groupIds: existingProfile.groupIds,
+    activeGroupIds: existingProfile.activeGroupIds,
+  };
+
+  store.participantProfiles[existingIndex] = updatedProfile;
+  return updatedProfile;
 }
 
 async function readFileAsDataUrl(file: File) {
@@ -1183,7 +1202,6 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
         authProvider: "phone",
       };
       store.users.push(user);
-      store.participantProfiles.push(createParticipantProfileFromUser(user));
     } else {
       user.phone = phone;
       user.phoneVerifiedAt = nowIso();
@@ -1191,12 +1209,13 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
       ensureRole(user, "participant");
       if (!user.participantProfileId) {
         user.participantProfileId = buildParticipantProfileId(phone);
-        store.participantProfiles.push(createParticipantProfileFromUser(user));
       }
       if (seedTrainerId) {
         user.selectedTrainerIds = Array.from(new Set([...(user.selectedTrainerIds ?? []), seedTrainerId]));
       }
     }
+
+    upsertParticipantProfileFromUser(store, user);
 
     return {
       userId: user.id,
@@ -1272,8 +1291,8 @@ export async function ensurePhoneParticipantProfile(input?: {
     ensureRole(currentUser, "participant");
     if (!currentUser.participantProfileId) {
       currentUser.participantProfileId = buildParticipantProfileId(currentUser.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(currentUser));
     }
+    upsertParticipantProfileFromUser(store, currentUser);
 
     if (input?.seedTrainerId) {
       currentUser.selectedTrainerIds = Array.from(
@@ -1355,8 +1374,8 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
     ensureRole(actor, "participant");
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone || input.telefon);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
     }
+    upsertParticipantProfileFromUser(store, actor);
 
     const existing = store.enrollmentRequests.find(
       (item) =>
@@ -1454,7 +1473,7 @@ function syncEventParticipantFromEnrollment(
     : null;
 
   if (!participantProfile) {
-    return;
+    throw new Error("Nie można zaakceptować zgłoszenia bez profilu uczestnika.");
   }
 
   const eventParticipantId = buildEventParticipantId(event.id, request.participantProfileId);
@@ -2683,8 +2702,8 @@ export async function submitAccountRequest(input: AccountRequestInput) {
 
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
     }
+    upsertParticipantProfileFromUser(store, actor);
   });
 }
 
@@ -2715,8 +2734,8 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
     ensureRole(actor, "participant");
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
     }
+    upsertParticipantProfileFromUser(store, actor);
 
     const participantProfile = store.participantProfiles.find(
       (item) => item.id === actor.participantProfileId,
@@ -2820,8 +2839,8 @@ export async function completeParticipantOnboarding(input: ParticipantOnboarding
     ensureRole(actor, "participant");
     if (!actor.participantProfileId) {
       actor.participantProfileId = buildParticipantProfileId(actor.phone);
-      store.participantProfiles.push(createParticipantProfileFromUser(actor));
     }
+    upsertParticipantProfileFromUser(store, actor);
 
     const participantProfile = store.participantProfiles.find(
       (item) => item.id === actor.participantProfileId,

@@ -4703,6 +4703,25 @@ function OperationalDashboardPerspectiveView({
       <div className="space-y-6">
         <div className="flex flex-wrap gap-3 sm:gap-4">
           <StatCard
+            label="Nowe"
+            value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
+            icon={Bell}
+            layout="stacked"
+            className="min-h-[136px] w-auto self-start"
+            labelClassName="whitespace-nowrap"
+          />
+          <StatCard
+            label="Najbliższe"
+            value={nextPipelineEventDate}
+            detail={nextPipelineEventGroup}
+            valueClassName="text-lg leading-tight sm:text-2xl"
+            icon={CalendarDays}
+            layout="stacked"
+            className="min-h-[136px] w-auto self-start"
+            labelClassName="whitespace-nowrap"
+            detailClassName="mt-1"
+          />
+          <StatCard
             label="Grupy"
             value={organizerOfficialDashboard?.groups.length ?? 0}
             icon={Users}
@@ -4722,25 +4741,6 @@ function OperationalDashboardPerspectiveView({
             label="Uczestnicy"
             value={organizerOfficialDashboard?.activeMemberCount ?? 0}
             icon={ShieldCheck}
-            layout="stacked"
-            className="min-h-[136px] w-auto self-start"
-            labelClassName="whitespace-nowrap"
-          />
-          <StatCard
-            label="Najbliższe"
-            value={nextPipelineEventDate}
-            detail={nextPipelineEventGroup}
-            valueClassName="text-lg leading-tight sm:text-2xl"
-            icon={CalendarDays}
-            layout="stacked"
-            className="min-h-[136px] w-auto self-start"
-            labelClassName="whitespace-nowrap"
-            detailClassName="mt-1"
-          />
-          <StatCard
-            label="Nowe"
-            value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
-            icon={Bell}
             layout="stacked"
             className="min-h-[136px] w-auto self-start"
             labelClassName="whitespace-nowrap"

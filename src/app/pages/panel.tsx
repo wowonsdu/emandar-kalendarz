@@ -71,6 +71,7 @@ import {
 } from "@/domain/notifications";
 import {
   aggregateEventCapacityStats,
+  canApproveEnrollmentRequest,
   buildTrainerFreeDaySlices,
   canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
@@ -4707,7 +4708,22 @@ function OperationalDashboardPerspectiveView({
   }, [isTrainerPerspective, organizerProfile, store.relations, trainerProfile]);
 
   if (!isTrainerPerspective) {
-    const newRequestsCount = organizerOfficialDashboard?.actionablePendingRequests.length ?? 0;
+    const newRequestsCount = store.enrollmentRequests.filter((request) => {
+      if (request.finalStatus !== "pending") {
+        return false;
+      }
+
+      if (!isOperationalEnrollmentRequest(request, store)) {
+        return false;
+      }
+
+      const event = store.trainingEvents.find((item) => item.id === request.eventId);
+      if (!event) {
+        return false;
+      }
+
+      return canApproveEnrollmentRequest(event, currentUser);
+    }).length;
     const nextPipelineEvent = organizerOfficialDashboard?.pipelineEvents[0] ?? null;
     const followingPipelineEvent = organizerOfficialDashboard?.pipelineEvents[1] ?? null;
     const nextPipelineEventDate = nextPipelineEvent

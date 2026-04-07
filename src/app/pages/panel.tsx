@@ -2136,6 +2136,7 @@ function StatCard({
   className = "",
   labelClassName = "",
   layout = "default",
+  detailClassName = "",
 }: {
   label: string;
   value: string | number;
@@ -2145,6 +2146,7 @@ function StatCard({
   className?: string;
   labelClassName?: string;
   layout?: "default" | "stacked";
+  detailClassName?: string;
 }) {
   if (layout === "stacked") {
     return (
@@ -2166,18 +2168,22 @@ function StatCard({
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
             <Icon size={18} />
           </div>
-          <p
-            className={cn(
-              "text-3xl font-semibold leading-none text-brand-navy sm:text-4xl",
-              valueClassName,
-            )}
-          >
-            {value}
-          </p>
+          <div className="min-w-0">
+            <p
+              className={cn(
+                "text-3xl font-semibold leading-none text-brand-navy sm:text-4xl",
+                valueClassName,
+              )}
+            >
+              {value}
+            </p>
+            {detail ? (
+              <p className={cn("mt-2 break-words text-sm leading-snug text-brand-muted", detailClassName)}>
+                {detail}
+              </p>
+            ) : null}
+          </div>
         </div>
-        {detail ? (
-          <p className="break-words text-sm leading-snug text-brand-muted">{detail}</p>
-        ) : null}
       </article>
     );
   }
@@ -4701,7 +4707,7 @@ function OperationalDashboardPerspectiveView({
             value={organizerOfficialDashboard?.groups.length ?? 0}
             icon={Users}
             layout="stacked"
-            className="w-auto self-start"
+            className="min-h-[136px] w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
@@ -4709,7 +4715,7 @@ function OperationalDashboardPerspectiveView({
             value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
             icon={CalendarDays}
             layout="stacked"
-            className="w-auto self-start"
+            className="min-h-[136px] w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
@@ -4717,7 +4723,7 @@ function OperationalDashboardPerspectiveView({
             value={organizerOfficialDashboard?.activeMemberCount ?? 0}
             icon={ShieldCheck}
             layout="stacked"
-            className="w-auto self-start"
+            className="min-h-[136px] w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
           <StatCard
@@ -4727,15 +4733,16 @@ function OperationalDashboardPerspectiveView({
             valueClassName="text-lg leading-tight sm:text-2xl"
             icon={CalendarDays}
             layout="stacked"
-            className="w-auto self-start"
+            className="min-h-[136px] w-auto self-start"
             labelClassName="whitespace-nowrap"
+            detailClassName="mt-1"
           />
           <StatCard
-            label="Czeka na decyzję"
+            label="Nowe"
             value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
             icon={Bell}
             layout="stacked"
-            className="w-auto self-start"
+            className="min-h-[136px] w-auto self-start"
             labelClassName="whitespace-nowrap"
           />
         </div>

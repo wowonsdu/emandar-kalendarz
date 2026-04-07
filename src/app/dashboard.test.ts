@@ -188,8 +188,6 @@ function createStore(overrides: Partial<DemoStore> = {}): DemoStore {
     organizerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
-    accountRequests: [],
-    trainerAccountApprovals: [],
     appSettings: {
       signupPhotoMode: "optional",
       enrollmentPhotoMode: "optional",

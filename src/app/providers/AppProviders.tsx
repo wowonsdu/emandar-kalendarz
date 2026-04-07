@@ -27,10 +27,8 @@ import {
   createOrganizerTrainingDraft as createOrganizerTrainingDraftAction,
   createUnifiedTrainingEvent as createTrainingEventAction,
   deleteTrainingEvent as deleteTrainingEventAction,
-  decideAccountRequest as decideAccountRequestAction,
   decideEnrollment as decideEnrollmentAction,
   decideOrganizerTrainingDraft as decideOrganizerTrainingDraftAction,
-  decideTrainerAccountApproval as decideTrainerAccountApprovalAction,
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   detachRelation as detachRelationAction,
   ensurePhoneParticipantProfileForFlow as ensurePhoneParticipantProfileForFlowAction,
@@ -48,7 +46,6 @@ import {
   reviewCommunityEvent as reviewCommunityEventAction,
   signIn as signInAction,
   signOut as signOutAction,
-  submitAccountRequest as submitAccountRequestAction,
   submitEnrollment as submitEnrollmentAction,
   subscribeAuthState,
   subscribePrivateStore,
@@ -81,7 +78,6 @@ import {
   withdrawOrganizerTrainingDraft as withdrawOrganizerTrainingDraftAction,
 } from "@/data/mockRepository";
 import type {
-  AccountRequestInput,
   AppSettings,
   AppRole,
   AppUser,
@@ -131,19 +127,10 @@ interface AppStateContextValue {
     seedTrainerId?: string,
   ) => Promise<{ ok: true; userId: string; accountCreated?: boolean }>;
   registerParticipant: (input: ParticipantRegistrationInput) => Promise<void>;
-  submitAccountRequest: (input: AccountRequestInput) => Promise<void>;
   connectOrganizerToTrainerWithCode: (
     trainerAuthorizationCode: string,
   ) => Promise<{ ok: true; trainerId: string; organizerProfileCreated: boolean }>;
   completeParticipantOnboarding: (input: ParticipantOnboardingInput) => Promise<void>;
-  decideAccountRequest: (
-    requestId: string,
-    status: "approved" | "rejected",
-  ) => Promise<void>;
-  decideTrainerAccountApproval: (
-    approvalId: string,
-    status: "accepted" | "rejected",
-  ) => Promise<void>;
   decideEnrollment: (
     requestId: string,
     decision: "accepted" | "rejected",
@@ -324,9 +311,6 @@ function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStor
     enrollmentRequests:
       privateStore.enrollmentRequests ?? publicStore.enrollmentRequests,
     notifications: privateStore.notifications ?? publicStore.notifications,
-    accountRequests: privateStore.accountRequests ?? publicStore.accountRequests,
-    trainerAccountApprovals:
-      privateStore.trainerAccountApprovals ?? publicStore.trainerAccountApprovals,
     appSettings: privateStore.appSettings ?? publicStore.appSettings,
   };
 }
@@ -458,9 +442,6 @@ export function AppProviders({ children }: { children: ReactNode }) {
       async registerParticipant(input) {
         await withFriendlyErrors(() => registerParticipantAction(input));
       },
-      async submitAccountRequest(input) {
-        await withFriendlyErrors(() => submitAccountRequestAction(input));
-      },
       async connectOrganizerToTrainerWithCode(trainerAuthorizationCode) {
         return withFriendlyErrors(() =>
           connectOrganizerToTrainerWithCodeAction(trainerAuthorizationCode),
@@ -468,24 +449,6 @@ export function AppProviders({ children }: { children: ReactNode }) {
       },
       async completeParticipantOnboarding(input) {
         await withFriendlyErrors(() => completeParticipantOnboardingAction(input));
-      },
-      async decideAccountRequest(requestId, status) {
-        if (!currentUser) {
-          throw new Error("Musisz być zalogowany.");
-        }
-
-        await withFriendlyErrors(() =>
-          decideAccountRequestAction(requestId, currentUser, status),
-        );
-      },
-      async decideTrainerAccountApproval(approvalId, status) {
-        if (!currentUser) {
-          throw new Error("Musisz byÄ‡ zalogowany.");
-        }
-
-        await withFriendlyErrors(() =>
-          decideTrainerAccountApprovalAction(approvalId, status, currentUser),
-        );
       },
       async decideEnrollment(requestId, decision) {
         if (!currentUser) {

@@ -1641,38 +1641,6 @@
       "entityType": "event"
     }
   ],
-  "accountRequests": [
-    {
-      "id": "account-request-anna",
-      "displayName": "Anna Nowak",
-      "phone": "+48 605 100 304",
-      "requestedRoles": [
-        "participant"
-      ],
-      "notes": "Chcę dołączyć do grupy warszawskiej.",
-      "status": "pending",
-      "createdAt": "2026-03-20T09:00:00.000Z",
-      "authProvider": "phone",
-      "selectedTrainerIds": [
-        "trainer-1"
-      ]
-    }
-  ],
-  "trainerAccountApprovals": [
-    {
-      "id": "approval-anna-jacek",
-      "requesterUserId": "user-organizer-karolina",
-      "requesterDisplayName": "Karolina",
-      "requesterPhone": "+48 602 100 201",
-      "targetTrainerId": "trainer-1",
-      "targetTrainerUserId": "user-trainer-jacek",
-      "requestedRoles": [
-        "organizer"
-      ],
-      "status": "pending",
-      "createdAt": "2026-03-25T08:00:00.000Z"
-    }
-  ],
   "appSettings": {
     "signupPhotoMode": "optional",
     "enrollmentPhotoMode": "optional"

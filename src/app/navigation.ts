@@ -143,10 +143,7 @@ export function buildAuthenticatedNavigationSections(
   if (highestRole === "admin") {
     sections.push({
       title: "Admin",
-      items: [
-        { to: "/panel/trenerzy", label: "Przekazujący Wiedzę", icon: Users },
-        { to: "/panel/rejestracje", label: "Rejestracje", icon: ShieldCheck },
-      ],
+      items: [{ to: "/panel/trenerzy", label: "Przekazujący Wiedzę", icon: Users }],
     });
   }
 

@@ -4817,8 +4817,8 @@ function OperationalDashboardPerspectiveView({
           </div>
           <div className="grid gap-4 xl:grid-cols-3">
             <DashboardChartCard
-              title="Brakuje osób do domknięcia"
-              description="Najbliższe terminy uporządkowane według liczby brakujących miejsc."
+              title="Może dołączyć"
+              description="Najbliższe terminy wg ilości osób, które mogą dołączyć."
             >
               {organizerMissingPeopleData.length === 0 ? (
                 <DashboardChartEmptyState message="Brak aktywnych grupowych szkoleń Emandar w najbliższych 3 miesiącach." />

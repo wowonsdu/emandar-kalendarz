@@ -4718,7 +4718,7 @@ function OperationalDashboardPerspectiveView({
 
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 sm:gap-4">
+        <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 md:grid-cols-6 sm:gap-4">
           <StatCard
             label="Nowe"
             value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}

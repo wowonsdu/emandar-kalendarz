@@ -2138,6 +2138,7 @@ function StatCard({
   layout = "default",
   detailClassName = "",
   detailPlacement = "inline",
+  iconWrapperClassName = "",
 }: {
   label: string;
   value: string | number;
@@ -2149,6 +2150,7 @@ function StatCard({
   layout?: "default" | "stacked";
   detailClassName?: string;
   detailPlacement?: "inline" | "below";
+  iconWrapperClassName?: string;
 }) {
   if (layout === "stacked") {
     return (
@@ -2167,7 +2169,12 @@ function StatCard({
           {label}
         </p>
         <div className="flex w-full items-center gap-2.5 sm:gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[1rem] bg-brand-sky/15 text-brand-navy sm:h-10 sm:w-10 sm:rounded-2xl">
+          <div
+            className={cn(
+              "flex h-9 w-9 shrink-0 items-center justify-center rounded-[1rem] bg-brand-sky/15 text-brand-navy sm:h-10 sm:w-10 sm:rounded-2xl",
+              iconWrapperClassName,
+            )}
+          >
             <Icon size={18} />
           </div>
           <div className="min-w-0">
@@ -2202,7 +2209,12 @@ function StatCard({
         className,
       )}
     >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11">
+      <div
+        className={cn(
+          "flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy sm:h-11 sm:w-11",
+          iconWrapperClassName,
+        )}
+      >
         <Icon size={18} />
       </div>
       <div className="min-w-0">
@@ -4695,6 +4707,7 @@ function OperationalDashboardPerspectiveView({
   }, [isTrainerPerspective, organizerProfile, store.relations, trainerProfile]);
 
   if (!isTrainerPerspective) {
+    const newRequestsCount = organizerOfficialDashboard?.actionablePendingRequests.length ?? 0;
     const nextPipelineEvent = organizerOfficialDashboard?.pipelineEvents[0] ?? null;
     const followingPipelineEvent = organizerOfficialDashboard?.pipelineEvents[1] ?? null;
     const nextPipelineEventDate = nextPipelineEvent
@@ -4721,11 +4734,14 @@ function OperationalDashboardPerspectiveView({
         <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 md:grid-cols-6 sm:gap-4">
           <StatCard
             label="Nowe"
-            value={organizerOfficialDashboard?.actionablePendingRequests.length ?? 0}
+            value={newRequestsCount}
             icon={Bell}
             layout="stacked"
             className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
+            iconWrapperClassName={
+              newRequestsCount > 0 ? "bg-red-500 text-white" : ""
+            }
           />
           <StatCard
             label="Najbliższe"

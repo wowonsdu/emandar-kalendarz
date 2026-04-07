@@ -2137,6 +2137,7 @@ function StatCard({
   labelClassName = "",
   layout = "default",
   detailClassName = "",
+  detailPlacement = "inline",
 }: {
   label: string;
   value: string | number;
@@ -2147,24 +2148,25 @@ function StatCard({
   labelClassName?: string;
   layout?: "default" | "stacked";
   detailClassName?: string;
+  detailPlacement?: "inline" | "below";
 }) {
   if (layout === "stacked") {
     return (
       <article
         className={cn(
-          "flex min-h-0 flex-col items-start justify-center gap-2.5 rounded-[1.125rem] border border-brand-line bg-white px-4 py-3 shadow-soft sm:gap-3 sm:rounded-[1.5rem] sm:px-5 sm:py-4",
+          "flex min-h-0 flex-col items-start justify-start gap-2.5 rounded-[1.125rem] border border-brand-line bg-white px-4 py-3 shadow-soft sm:gap-3 sm:rounded-[1.5rem] sm:px-5 sm:py-4",
           className,
         )}
       >
         <p
           className={cn(
-            "text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-muted sm:text-sm sm:tracking-[0.2em]",
+            "text-[11px] font-semibold uppercase leading-none tracking-[0.14em] text-brand-muted sm:text-sm sm:tracking-[0.2em]",
             labelClassName,
           )}
         >
           {label}
         </p>
-        <div className="flex items-center gap-2.5 sm:gap-3">
+        <div className="flex w-full items-center gap-2.5 sm:gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[1rem] bg-brand-sky/15 text-brand-navy sm:h-10 sm:w-10 sm:rounded-2xl">
             <Icon size={18} />
           </div>
@@ -2177,13 +2179,18 @@ function StatCard({
             >
               {value}
             </p>
-            {detail ? (
+            {detail && detailPlacement === "inline" ? (
               <p className={cn("mt-2 break-words text-sm leading-snug text-brand-muted", detailClassName)}>
                 {detail}
               </p>
             ) : null}
           </div>
         </div>
+        {detail && detailPlacement === "below" ? (
+          <p className={cn("break-words text-sm leading-snug text-brand-muted", detailClassName)}>
+            {detail}
+          </p>
+        ) : null}
       </article>
     );
   }
@@ -4729,7 +4736,8 @@ function OperationalDashboardPerspectiveView({
             layout="stacked"
             className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
-            detailClassName="mt-1"
+            detailClassName="mt-0"
+            detailPlacement="below"
           />
           <StatCard
             label="Następne"
@@ -4740,7 +4748,8 @@ function OperationalDashboardPerspectiveView({
             layout="stacked"
             className="min-h-[108px] w-full min-w-0"
             labelClassName="whitespace-nowrap"
-            detailClassName="mt-1"
+            detailClassName="mt-0"
+            detailPlacement="below"
           />
           <StatCard
             label="Grupy"

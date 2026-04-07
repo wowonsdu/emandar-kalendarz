@@ -2152,7 +2152,7 @@ function StatCard({
     return (
       <article
         className={cn(
-          "flex min-h-0 flex-col items-start gap-3 rounded-[1.5rem] border border-brand-line bg-white px-5 py-4 shadow-soft sm:rounded-[2rem] sm:px-6 sm:py-5",
+          "flex min-h-0 flex-col items-start justify-center gap-3 rounded-[1.5rem] border border-brand-line bg-white px-5 py-4 shadow-soft sm:rounded-[2rem] sm:px-6 sm:py-5",
           className,
         )}
       >

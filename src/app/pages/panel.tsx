@@ -97,6 +97,8 @@ import {
   isOrganizerFunctionsBlocked,
   resolveEnrollmentIntent,
   resolveCommunityEventOrganizerPhone,
+  resolveEventOwnerDisplayLabels,
+  resolveOrganizerProfileVariant,
   resolveOrganizerCollaborationStatus,
   resolveMinimumParticipants,
   resolveTrainingJoinAudienceForEvent,
@@ -713,18 +715,7 @@ function getEventOwnerLabel(
   event: TrainingEvent,
   store: ReturnType<typeof useAppState>["store"],
 ) {
-  const trainer = store.trainers.find((item) => item.id === event.trainerId);
-  const organizer = event.organizerId
-    ? store.organizers.find((item) => item.id === event.organizerId)
-    : null;
-
-  return {
-    trainerName:
-      trainer?.displayName ?? event.creatorDisplayName ?? "Gospodarz wydarzenia",
-    organizerName: isSelfManagedTrainingEvent(event)
-      ? trainer?.displayName ?? event.creatorDisplayName ?? "Gospodarz wydarzenia"
-      : organizer?.displayName ?? "Organizator",
-  };
+  return resolveEventOwnerDisplayLabels(event, store);
 }
 
 function getEventLocationParts(location: string) {
@@ -5674,17 +5665,15 @@ function RelationsHubContent() {
     (item) => item.userId === currentUser.id,
   );
   const organizerFunctionsAreBlocked = isOrganizerFunctionsBlocked(currentUser);
-  const canUseOrganizerHub = currentUser.role === "participant" || Boolean(organizerProfile);
+  const canUseOrganizerHub = currentUser.role !== "admin" || Boolean(organizerProfile);
   const canUseTrainerHub = hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile);
+  const shouldShowOrganizerRelationsList = Boolean(organizerProfile);
   const organizerRelations = organizerProfile
     ? store.relations.filter((relation) => relation.organizerId === organizerProfile.id)
     : [];
   const trainerRelations = trainerProfile
     ? store.relations.filter((relation) => relation.trainerId === trainerProfile.id)
     : [];
-  const organizerActiveRelations = organizerRelations.filter(
-    (relation) => relation.status === "approved",
-  );
   const allRelations = currentUser.role === "admin"
     ? store.relations
     : Array.from(
@@ -5693,181 +5682,144 @@ function RelationsHubContent() {
         ).values(),
       );
 
+  function renderRelationCard(
+    relation: (typeof allRelations)[number],
+    scope: "trainer" | "organizer" | "admin",
+  ) {
+    const trainer = store.trainers.find((item) => item.id === relation.trainerId);
+    const organizer = store.organizers.find((item) => item.id === relation.organizerId);
+    const allowArchiveOption = scope === "trainer";
+    const canDetach =
+      relation.status === "approved" &&
+      (scope !== "organizer" || !organizerFunctionsAreBlocked);
+
+    return (
+      <article
+        key={`${scope}-${relation.id}`}
+        className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-2xl font-semibold text-brand-navy">
+              {trainer?.displayName ?? "Trener"} ↔ {organizer?.displayName ?? "Organizator"}
+            </p>
+            <p className="mt-2 text-brand-muted">
+              Połączenie utworzone {formatDate(relation.createdAt)}.
+            </p>
+          </div>
+          <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
+            {relation.status}
+          </span>
+        </div>
+
+        {canDetach ? (
+          <DetachRelationControls
+            relationId={relation.id}
+            allowArchiveOption={allowArchiveOption}
+          />
+        ) : null}
+      </article>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      {canUseOrganizerHub && (
-        <form
-          onSubmit={async (event) => {
-            event.preventDefault();
-            setConnectingTrainer(true);
-            try {
-              await connectOrganizerToTrainerWithCode(trainerAuthorizationCode);
-              setTrainerAuthorizationCode("");
-              toast.success("Relacja z trenerem została aktywowana.");
-            } catch (error) {
-              toast.error(
-                error instanceof Error ? error.message : "Nie udało się aktywować relacji.",
-              );
-            } finally {
-              setConnectingTrainer(false);
-            }
-          }}
-          className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-        >
+      {currentUser.role !== "admin" ? (
+        <div className="space-y-6">
           <SectionBlockHeading
-            title="Połącz się z trenerem"
-            description="To jedyne wejście do aktywacji organizatora. Po wpisaniu poprawnego kodu trener od razu pojawi się na Twojej liście."
+            title="Relacje"
+            description="Tutaj zarządzasz połączeniami między organizatorami i Przekazującymi Wiedzę."
           />
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
-            <label className="grid flex-1 gap-2">
-              <span className="text-sm font-semibold text-brand-navy">
-                Kod trenera
-              </span>
-              <input
-                required
-                value={trainerAuthorizationCode}
-                onChange={(event) => setTrainerAuthorizationCode(event.target.value)}
-                placeholder="Wpisz kod od trenera"
-                disabled={organizerFunctionsAreBlocked}
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+
+          {canUseTrainerHub ? (
+            <section className="space-y-4">
+              <SectionBlockHeading
+                title="Moi organizatorzy"
+                description="To organizatorzy przypięci do Ciebie jako Przekazującego Wiedzę."
               />
-            </label>
-            <button
-              type="submit"
-              disabled={connectingTrainer || organizerFunctionsAreBlocked}
-              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
-            >
-              <Users size={16} />
-              {connectingTrainer ? "Aktywowanie..." : "Aktywuj relację"}
-            </button>
-          </div>
-          {organizerFunctionsAreBlocked ? (
-            <p className="mt-4 rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">
-              Funkcje organizatora są chwilowo zablokowane przez moderatora lub admina. Nadal
-              zachowujesz konto uczestnika i podgląd historycznych danych, ale nie aktywujesz tu
-              nowych relacji ani nie uruchamiasz nowych działań organizerowych.
-            </p>
+              {trainerRelations.length === 0 ? (
+                <EmptyPanelState
+                  title="Brak organizatorów"
+                  description="Aktywne relacje z organizatorami pojawią się tutaj automatycznie."
+                />
+              ) : (
+                trainerRelations.map((relation) => renderRelationCard(relation, "trainer"))
+              )}
+            </section>
           ) : null}
-        </form>
-      )}
 
-      {organizerProfile ? (
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <SectionBlockHeading
-            title="Twój dostęp organizatora"
-            description="Dostęp do tworzenia nowych grup i szkoleń zależy od liczby aktywnych połączeń z trenerami."
-          />
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <StatCard
-              label="Aktywni trenerzy"
-              value={organizerActiveRelations.length}
-              icon={Users}
-            />
-            <StatCard
-              label="Łączne relacje"
-              value={organizerRelations.length}
-              icon={ShieldCheck}
-            />
-          </div>
-          <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell/70 p-4 text-sm text-brand-muted">
-            {organizerFunctionsAreBlocked
-              ? "Masz przypiętych trenerów, ale moderator lub admin zablokował teraz funkcje organizatora. Relacje zostają w systemie, jednak nowe grupy, szkolenia i działania organizerowe są wstrzymane."
-              : organizerActiveRelations.length > 0
-              ? "Masz aktywny dostęp organizatora. Możesz od razu tworzyć nowe grupy i szkolenia w odpowiednich ekranach panelu."
-              : "Nie masz teraz aktywnego trenera. Zachowujesz wgląd do wcześniej utworzonych grup, ale nowe grupy i szkolenia pozostają zablokowane."}
-          </div>
-        </article>
-      ) : null}
+          {shouldShowOrganizerRelationsList ? (
+            <section className="space-y-4">
+              <SectionBlockHeading
+                title="Moi przekazujący wiedzę"
+                description="To aktywne i historyczne połączenia z Przekazującymi Wiedzę, z których wynika Twój dostęp organizatora."
+              />
+              {organizerRelations.length === 0 ? (
+                <EmptyPanelState
+                  title="Brak Przekazujących Wiedzę"
+                  description="Nie masz jeszcze aktywnego połączenia. Użyj formularza poniżej, aby podłączyć się z Przekazującym."
+                />
+              ) : (
+                organizerRelations.map((relation) => renderRelationCard(relation, "organizer"))
+              )}
+            </section>
+          ) : null}
 
-      {canUseOrganizerHub ? (
-        <div className="space-y-4">
-          <SectionBlockHeading
-            title="Relacje organizatora"
-            description="To aktywne i historyczne połączenia z trenerami, z których wynika dostęp organizatora."
-          />
-          {organizerRelations.length === 0 && (
-            <EmptyPanelState
-              title="Brak relacji organizatora"
-              description="Nie masz jeszcze aktywnego połączenia z trenerem. Wpisz kod w tej sekcji, aby odblokować dostęp organizatora."
-            />
-          )}
-          {organizerRelations.map((relation) => {
-            const trainer = store.trainers.find((item) => item.id === relation.trainerId);
-            const organizer = store.organizers.find(
-              (item) => item.id === relation.organizerId,
-            );
-
-            return (
-              <article
-                key={`organizer-${relation.id}`}
-                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-2xl font-semibold text-brand-navy">
-                      {trainer?.displayName ?? "Trener"} ↔ {organizer?.displayName ?? "Organizator"}
-                    </p>
-                    <p className="mt-2 text-brand-muted">
-                      Połączenie utworzone {formatDate(relation.createdAt)}.
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
-                    {relation.status}
+          {canUseOrganizerHub ? (
+            <form
+              onSubmit={async (event) => {
+                event.preventDefault();
+                setConnectingTrainer(true);
+                try {
+                  await connectOrganizerToTrainerWithCode(trainerAuthorizationCode);
+                  setTrainerAuthorizationCode("");
+                  toast.success("Relacja z Przekazującym została aktywowana.");
+                } catch (error) {
+                  toast.error(
+                    error instanceof Error ? error.message : "Nie udało się aktywować relacji.",
+                  );
+                } finally {
+                  setConnectingTrainer(false);
+                }
+              }}
+              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+            >
+              <SectionBlockHeading
+                title="Połącz z Przekazującym"
+                description="Wpisz kod od Przekazującego Wiedzę, aby aktywować nowe połączenie."
+              />
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+                <label className="grid flex-1 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">
+                    Kod Przekazującego
                   </span>
-                </div>
-
-                {relation.status === "approved" && !organizerFunctionsAreBlocked ? (
-                  <DetachRelationControls relationId={relation.id} allowArchiveOption={false} />
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-      ) : null}
-
-      {canUseTrainerHub ? (
-        <div className="space-y-4">
-          <SectionBlockHeading
-            title="Relacje trenera"
-            description="Tutaj widzisz organizatorów przypiętych do Ciebie jako Przekazującego Wiedzę."
-          />
-          {trainerRelations.length === 0 && (
-            <EmptyPanelState
-              title="Brak relacji trenera"
-              description="Aktywne relacje z organizatorami pojawią się tutaj automatycznie."
-            />
-          )}
-          {trainerRelations.map((relation) => {
-            const trainer = store.trainers.find((item) => item.id === relation.trainerId);
-            const organizer = store.organizers.find(
-              (item) => item.id === relation.organizerId,
-            );
-
-            return (
-              <article
-                key={`trainer-${relation.id}`}
-                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-2xl font-semibold text-brand-navy">
-                      {trainer?.displayName ?? "Trener"} ↔ {organizer?.displayName ?? "Organizator"}
-                    </p>
-                    <p className="mt-2 text-brand-muted">
-                      Połączenie utworzone {formatDate(relation.createdAt)}.
-                    </p>
-                  </div>
-                  <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
-                    {relation.status}
-                  </span>
-                </div>
-
-                {relation.status === "approved" ? (
-                  <DetachRelationControls relationId={relation.id} allowArchiveOption />
-                ) : null}
-              </article>
-            );
-          })}
+                  <input
+                    required
+                    value={trainerAuthorizationCode}
+                    onChange={(event) => setTrainerAuthorizationCode(event.target.value)}
+                    placeholder="Wpisz kod od Przekazującego"
+                    disabled={organizerFunctionsAreBlocked}
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={connectingTrainer || organizerFunctionsAreBlocked}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                >
+                  <Users size={16} />
+                  {connectingTrainer ? "Łączenie..." : "Połącz"}
+                </button>
+              </div>
+              {organizerFunctionsAreBlocked ? (
+                <p className="mt-4 rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-900">
+                  Funkcje organizatora są chwilowo zablokowane przez moderatora lub admina. Nadal
+                  zachowujesz konto uczestnika i podgląd historycznych danych, ale nie aktywujesz tu
+                  nowych relacji ani nie uruchamiasz nowych działań organizerowych.
+                </p>
+              ) : null}
+            </form>
+          ) : null}
         </div>
       ) : null}
 
@@ -5883,37 +5835,7 @@ function RelationsHubContent() {
             description="Aktywne relacje trener-organizator pojawią się tutaj automatycznie."
           />
           )}
-          {allRelations.map((relation) => {
-          const trainer = store.trainers.find((item) => item.id === relation.trainerId);
-          const organizer = store.organizers.find(
-            (item) => item.id === relation.organizerId,
-          );
-
-          return (
-            <article
-              key={`admin-${relation.id}`}
-              className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-2xl font-semibold text-brand-navy">
-                    {trainer?.displayName ?? "Trener"} ↔ {organizer?.displayName ?? "Organizator"}
-                  </p>
-                  <p className="mt-2 text-brand-muted">
-                    Połączenie utworzone {formatDate(relation.createdAt)}.
-                  </p>
-                </div>
-                <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-brand-navy">
-                  {relation.status}
-                </span>
-              </div>
-
-              {relation.status === "approved" ? (
-                <DetachRelationControls relationId={relation.id} allowArchiveOption={false} />
-              ) : null}
-            </article>
-          );
-        })}
+          {allRelations.map((relation) => renderRelationCard(relation, "admin"))}
         </div>
       ) : null}
     </div>
@@ -11628,10 +11550,170 @@ export function OrganizerDirectoryPage() {
   return <PeoplePage kind="organizer" />;
 }
 
+type SettingsRoleView = "base" | "trainer" | "organizer";
+
+function SettingsRoleViewSwitch({
+  views,
+  activeView,
+  onChange,
+}: {
+  views: Array<{ value: SettingsRoleView; label: string }>;
+  activeView: SettingsRoleView;
+  onChange: (view: SettingsRoleView) => void;
+}) {
+  return (
+    <div className="w-full max-w-[40rem]">
+      <div
+        className="grid gap-1 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft"
+        style={{ gridTemplateColumns: `repeat(${views.length}, minmax(0, 1fr))` }}
+      >
+        {views.map((view) => (
+          <button
+            key={view.value}
+            type="button"
+            onClick={() => onChange(view.value)}
+            className={`min-w-0 rounded-[1.35rem] px-3 py-2.5 text-center text-sm font-semibold transition ${
+              activeView === view.value
+                ? "bg-brand-navy text-white"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+          >
+            {view.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OrganizerProfileEditorCard({
+  eyebrow,
+  title,
+  description,
+  form,
+  onChange,
+  onSubmit,
+  saving,
+  submitLabel,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  form: {
+    displayName: string;
+    contactName: string;
+    location: string;
+    description: string;
+  };
+  onChange: (
+    updater: (previous: {
+      displayName: string;
+      contactName: string;
+      location: string;
+      description: string;
+    }) => {
+      displayName: string;
+      contactName: string;
+      location: string;
+      description: string;
+    },
+  ) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  saving: boolean;
+  submitLabel: string;
+}) {
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
+    >
+      <div className="mb-5">
+        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+          {eyebrow}
+        </p>
+        <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">{title}</h3>
+        <p className="mt-2 text-sm text-brand-muted">{description}</p>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <label className="grid gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Nazwa organizatora</span>
+          <input
+            required
+            value={form.displayName}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                displayName: event.target.value,
+              }))
+            }
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+
+        <label className="grid gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Imię kontaktowe</span>
+          <input
+            required
+            value={form.contactName}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                contactName: event.target.value,
+              }))
+            }
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+
+        <label className="grid gap-2 xl:col-span-2">
+          <span className="text-sm font-semibold text-brand-navy">Lokalizacja</span>
+          <input
+            required
+            value={form.location}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                location: event.target.value,
+              }))
+            }
+            className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+
+        <label className="grid gap-2 xl:col-span-2">
+          <span className="text-sm font-semibold text-brand-navy">Opis</span>
+          <textarea
+            required
+            rows={8}
+            value={form.description}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                description: event.target.value,
+              }))
+            }
+            className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+      </div>
+
+      <button
+        type="submit"
+        disabled={saving}
+        className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+      >
+        {saving ? "Zapisywanie..." : submitLabel}
+      </button>
+    </form>
+  );
+}
+
 export function ProfileSettingsPage() {
   const {
     currentUser,
     store,
+    updateCommunityOrganizerProfile,
     updateOrganizerProfile,
     updateParticipantProfile,
     updateAppSettings,
@@ -11654,11 +11736,18 @@ export function ProfileSettingsPage() {
     location: "",
     description: "",
   });
+  const [communityOrganizerForm, setCommunityOrganizerForm] = useState({
+    displayName: "",
+    contactName: "",
+    location: "",
+    description: "",
+  });
   const [participantForm, setParticipantForm] = useState({
     displayName: "",
     referralSource: "",
     notes: "",
   });
+  const [activeSettingsView, setActiveSettingsView] = useState<SettingsRoleView>("base");
   const [participantAvatarDraft, setParticipantAvatarDraft] = useState<AvatarCropDraft>(
     createEmptyAvatarCropDraft(),
   );
@@ -11688,17 +11777,26 @@ export function ProfileSettingsPage() {
   }, [trainerProfile?.id]);
 
   useEffect(() => {
-    if (!organizerProfile) {
+    if (!currentUser) {
       return;
     }
 
+    const officialOrganizerProfile = resolveOrganizerProfileVariant(organizerProfile, "official");
+    const communityProfile = resolveOrganizerProfileVariant(organizerProfile, "community");
+
     setOrganizerForm({
-      displayName: organizerProfile.displayName ?? "",
-      contactName: organizerProfile.contactName ?? "",
-      location: organizerProfile.location ?? "",
-      description: organizerProfile.description ?? "",
+      displayName: officialOrganizerProfile.displayName || currentUser.displayName || "",
+      contactName: officialOrganizerProfile.contactName || "",
+      location: officialOrganizerProfile.location || "",
+      description: officialOrganizerProfile.description || currentUser.notes || "",
     });
-  }, [organizerProfile?.id]);
+    setCommunityOrganizerForm({
+      displayName: communityProfile.displayName || currentUser.displayName || "",
+      contactName: communityProfile.contactName || "",
+      location: communityProfile.location || "",
+      description: communityProfile.description || currentUser.notes || "",
+    });
+  }, [currentUser, organizerProfile]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -11739,6 +11837,26 @@ export function ProfileSettingsPage() {
     store.appSettings.enrollmentPhotoMode,
     store.appSettings.signupPhotoMode,
   ]);
+
+  const canShowOrganizerSettingsView = currentUser
+    ? currentUser.role !== "admin" || Boolean(organizerProfile)
+    : false;
+  const availableSettingsViews = useMemo<Array<{ value: SettingsRoleView; label: string }>>(
+    () => [
+      { value: "base", label: "Profil bazowy" },
+      ...(trainerProfile ? [{ value: "trainer" as const, label: "Przekazujący" }] : []),
+      ...(canShowOrganizerSettingsView
+        ? [{ value: "organizer" as const, label: "Organizator" }]
+        : []),
+    ],
+    [canShowOrganizerSettingsView, trainerProfile],
+  );
+
+  useEffect(() => {
+    if (!availableSettingsViews.some((view) => view.value === activeSettingsView)) {
+      setActiveSettingsView(availableSettingsViews[0]?.value ?? "base");
+    }
+  }, [activeSettingsView, availableSettingsViews]);
 
   if (!currentUser) {
     return null;
@@ -11956,25 +12074,7 @@ export function ProfileSettingsPage() {
         avatarCrop,
       });
 
-      if (trainerProfile) {
-        await updateTrainerProfile({
-          heroNote: trainerForm.heroNote,
-          bio: trainerForm.bio,
-          specialties: trainerForm.specialties
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
-          locations: trainerForm.locations
-            .split(",")
-            .map((item) => item.trim())
-            .filter(Boolean),
-          authorizationCode: trainerForm.authorizationCode,
-          avatarFile: participantAvatarDraft.file,
-          avatarCrop,
-        });
-      }
-
-      toast.success(trainerProfile ? "Profil został zapisany." : "Profil uczestnika został zapisany.");
+      toast.success("Profil bazowy został zapisany.");
       participantAvatarDragStateRef.current = null;
       participantAvatarPinchStateRef.current = null;
       participantAvatarPointersRef.current.clear();
@@ -11986,13 +12086,45 @@ export function ProfileSettingsPage() {
 
         return createEmptyAvatarCropDraft();
       });
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleTrainerSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!trainerProfile) {
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await updateTrainerProfile({
+        heroNote: trainerForm.heroNote,
+        bio: trainerForm.bio,
+        specialties: trainerForm.specialties
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+        locations: trainerForm.locations
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean),
+        authorizationCode: trainerForm.authorizationCode,
+      });
+      toast.success("Profil Przekazującego został zapisany.");
       setTrainerForm((previous) => ({
         ...previous,
         authorizationCode: "",
       }));
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
+        error instanceof Error ? error.message : "Nie udało się zapisać profilu trenera.",
       );
     } finally {
       setSaving(false);
@@ -12230,127 +12362,136 @@ export function ProfileSettingsPage() {
             />
           </label>
 
-          {trainerProfile ? (
-            <div className="mt-2 rounded-[1.75rem] border border-brand-line bg-brand-shell/40 p-4 sm:rounded-[2rem] sm:p-5">
-              <div className="mb-4">
-                <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                  Przekazujący Wiedzę
-                </p>
-                <h4 className="mt-2 text-lg font-semibold text-brand-navy sm:text-xl">
-                  Dodatkowe ustawienia profilu trenera
-                </h4>
-                <p className="mt-2 text-sm text-brand-muted">
-                  Te pola rozszerzają Twój bazowy profil i sterują kartą publiczną, filtrowaniem
-                  szkoleń oraz kodem do łączenia organizatorów.
-                </p>
-              </div>
-
-              <div className="grid min-w-0 gap-4">
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Krótkie motto</span>
-                  <input
-                    required
-                    value={trainerForm.heroNote}
-                    onChange={(event) =>
-                      setTrainerForm((previous) => ({
-                        ...previous,
-                        heroNote: event.target.value,
-                      }))
-                    }
-                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                </label>
-
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Dłuższy opis o sobie</span>
-                  <textarea
-                    required
-                    rows={8}
-                    value={trainerForm.bio}
-                    onChange={(event) =>
-                      setTrainerForm((previous) => ({
-                        ...previous,
-                        bio: event.target.value,
-                      }))
-                    }
-                    className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                </label>
-
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Tagi szkoleń</span>
-                  <input
-                    required
-                    value={trainerForm.specialties}
-                    onChange={(event) =>
-                      setTrainerForm((previous) => ({
-                        ...previous,
-                        specialties: event.target.value,
-                      }))
-                    }
-                    placeholder="np. Oddech, Regeneracja, Praca z grupą"
-                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                  <span className="text-sm text-brand-muted">Oddziel tagi przecinkami.</span>
-                </label>
-
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Lokalizacje szkoleń</span>
-                  <input
-                    required
-                    value={trainerForm.locations}
-                    onChange={(event) =>
-                      setTrainerForm((previous) => ({
-                        ...previous,
-                        locations: event.target.value,
-                      }))
-                    }
-                    placeholder="np. Warszawa, Łódź, Online"
-                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                  <span className="text-sm text-brand-muted">Oddziel lokalizacje przecinkami.</span>
-                </label>
-
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">
-                    Kod autoryzacyjny trenera
-                  </span>
-                  <input
-                    value={trainerForm.authorizationCode}
-                    onChange={(event) =>
-                      setTrainerForm((previous) => ({
-                        ...previous,
-                        authorizationCode: event.target.value,
-                      }))
-                    }
-                    placeholder={
-                      trainerProfile.authorizationCodeConfigured
-                        ? "Wpisz nowy kod, aby nadpisać obecny"
-                        : "Ustaw kod dla uczestników i organizatorów"
-                    }
-                    className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                  <span className="text-sm text-brand-muted">
-                    {trainerProfile.authorizationCodeConfigured
-                      ? "Aktualny kod jest ukryty. Wpisz nowy tylko wtedy, gdy chcesz go zmienić."
-                      : "Bez ustawionego kodu nowe konta i nowe relacje organizatorów nie zostaną aktywowane."}
-                  </span>
-                </label>
-              </div>
-            </div>
-          ) : null}
-
           <button
             type="submit"
             disabled={saving}
             className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
           >
-            {saving ? "Zapisywanie..." : trainerProfile ? "Zapisz profil" : "Zapisz profil uczestnika"}
+            {saving ? "Zapisywanie..." : "Zapisz profil bazowy"}
           </button>
         </div>
       </div>
     </form>
   );
+
+  const trainerProfileFormContent = trainerProfile ? (
+    <form
+      onSubmit={handleTrainerSubmit}
+      className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
+    >
+      <div className="mb-5">
+        <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+          Przekazujący wiedzę
+        </p>
+        <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+          Profil Przekazującego
+        </h3>
+        <p className="mt-2 text-sm text-brand-muted">
+          Te pola rozszerzają bazowy profil i sterują kartą publiczną, filtrowaniem szkoleń oraz
+          kodem do łączenia organizatorów.
+        </p>
+      </div>
+
+      <div className="grid min-w-0 gap-4">
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Krótkie motto</span>
+          <input
+            required
+            value={trainerForm.heroNote}
+            onChange={(event) =>
+              setTrainerForm((previous) => ({
+                ...previous,
+                heroNote: event.target.value,
+              }))
+            }
+            className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Dłuższy opis o sobie</span>
+          <textarea
+            required
+            rows={8}
+            value={trainerForm.bio}
+            onChange={(event) =>
+              setTrainerForm((previous) => ({
+                ...previous,
+                bio: event.target.value,
+              }))
+            }
+            className="w-full min-w-0 max-w-full rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Tagi szkoleń</span>
+          <input
+            required
+            value={trainerForm.specialties}
+            onChange={(event) =>
+              setTrainerForm((previous) => ({
+                ...previous,
+                specialties: event.target.value,
+              }))
+            }
+            placeholder="np. Oddech, Regeneracja, Praca z grupą"
+            className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+          <span className="text-sm text-brand-muted">Oddziel tagi przecinkami.</span>
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Lokalizacje szkoleń</span>
+          <input
+            required
+            value={trainerForm.locations}
+            onChange={(event) =>
+              setTrainerForm((previous) => ({
+                ...previous,
+                locations: event.target.value,
+              }))
+            }
+            placeholder="np. Warszawa, Łódź, Online"
+            className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+          <span className="text-sm text-brand-muted">Oddziel lokalizacje przecinkami.</span>
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Kod autoryzacyjny trenera</span>
+          <input
+            value={trainerForm.authorizationCode}
+            onChange={(event) =>
+              setTrainerForm((previous) => ({
+                ...previous,
+                authorizationCode: event.target.value,
+              }))
+            }
+            placeholder={
+              trainerProfile.authorizationCodeConfigured
+                ? "Wpisz nowy kod, aby nadpisać obecny"
+                : "Ustaw kod dla uczestników i organizatorów"
+            }
+            className="w-full min-w-0 max-w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+          />
+          <span className="text-sm text-brand-muted">
+            {trainerProfile.authorizationCodeConfigured
+              ? "Aktualny kod jest ukryty. Wpisz nowy tylko wtedy, gdy chcesz go zmienić."
+              : "Bez ustawionego kodu nowe konta i nowe relacje organizatorów nie zostaną aktywowane."}
+          </span>
+        </label>
+      </div>
+
+      <button
+        type="submit"
+        disabled={saving}
+        className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+      >
+        {saving ? "Zapisywanie..." : "Zapisz profil Przekazującego"}
+      </button>
+    </form>
+  ) : null;
 
   async function handleSettingsSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -12396,7 +12537,7 @@ export function ProfileSettingsPage() {
 
     try {
       await updateOrganizerProfile(organizerForm);
-      toast.success("Profil organizatora został zapisany.");
+      toast.success("Profil organizatora Emandar został zapisany.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zapisać profilu.",
@@ -12406,115 +12547,80 @@ export function ProfileSettingsPage() {
     }
   }
 
+  async function handleCommunityOrganizerSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+
+    try {
+      await updateCommunityOrganizerProfile(communityOrganizerForm);
+      toast.success("Profil organizatora wydarzeń społeczności został zapisany.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zapisać profilu społeczności.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const organizerSettingsContent = canShowOrganizerSettingsView ? (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <div className="mb-5">
+          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+            Organizator
+          </p>
+          <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
+            Organizator Emandar i relacje
+          </h3>
+          <p className="mt-2 text-sm text-brand-muted">
+            Tutaj zarządzasz połączeniami z organizatorami i Przekazującymi Wiedzę oraz podłączasz
+            nowe relacje kodem.
+          </p>
+        </div>
+        <RelationsHubContent />
+      </div>
+
+      <OrganizerProfileEditorCard
+        eyebrow="Organizator Emandar"
+        title="Profil organizatora Emandar"
+        description="Ten profil pojawia się w oficjalnych szkoleniach Emandar i w workflowach organizer-trener."
+        form={organizerForm}
+        onChange={setOrganizerForm}
+        onSubmit={handleOrganizerSubmit}
+        saving={saving}
+        submitLabel="Zapisz profil organizatora Emandar"
+      />
+
+      <OrganizerProfileEditorCard
+        eyebrow="Organizator wydarzeń społeczności"
+        title="Profil organizatora wydarzeń społeczności"
+        description="Ta wersja danych jest używana do wyświetlania Twojej roli przy wydarzeniach społeczności."
+        form={communityOrganizerForm}
+        onChange={setCommunityOrganizerForm}
+        onSubmit={handleCommunityOrganizerSubmit}
+        saving={saving}
+        submitLabel="Zapisz profil wydarzeń społeczności"
+      />
+    </div>
+  ) : null;
+
   return (
     <PanelSection
       eyebrow="Ustawienia"
       title="Ustawienia"
-      description="To jedno miejsce zbiera profil, dostęp organizatora Emandar i rzadkie konfiguracje systemowe."
+      description="To jedno miejsce zbiera profil bazowy, ustawienia ról i rzadkie konfiguracje systemowe."
     >
       <div className="space-y-6">
-        {participantProfileFormContent}
+        <SettingsRoleViewSwitch
+          views={availableSettingsViews}
+          activeView={activeSettingsView}
+          onChange={setActiveSettingsView}
+        />
 
-        <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
-          <div className="mb-5">
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-              Dostęp organizatora
-            </p>
-            <h3 className="mt-2 text-xl font-semibold text-brand-navy sm:text-2xl">
-              Organizator Emandar i relacje
-            </h3>
-            <p className="mt-2 text-sm text-brand-muted">
-              To rzadziej używana konfiguracja dostępu. Tutaj połączysz się z trenerem kodem,
-              sprawdzisz aktywne relacje i zobaczysz, czy masz odblokowane funkcje organizatora.
-            </p>
-          </div>
-          <RelationsHubContent />
-        </article>
-
-        {organizerProfile ? (
-          <form
-            onSubmit={handleOrganizerSubmit}
-            className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6"
-          >
-            <div className="mb-5">
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-                Organizator
-              </p>
-            </div>
-            <div className="grid gap-4 xl:grid-cols-2">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">
-                Nazwa organizatora
-              </span>
-              <input
-                required
-                value={organizerForm.displayName}
-                onChange={(event) =>
-                  setOrganizerForm((previous) => ({
-                    ...previous,
-                    displayName: event.target.value,
-                  }))
-                }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Imię kontaktowe</span>
-              <input
-                required
-                value={organizerForm.contactName}
-                onChange={(event) =>
-                  setOrganizerForm((previous) => ({
-                    ...previous,
-                    contactName: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
-
-            <label className="grid gap-2 xl:col-span-2">
-              <span className="text-sm font-semibold text-brand-navy">Lokalizacja</span>
-              <input
-                required
-                value={organizerForm.location}
-                onChange={(event) =>
-                  setOrganizerForm((previous) => ({
-                    ...previous,
-                    location: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
-
-            <label className="grid gap-2 xl:col-span-2">
-              <span className="text-sm font-semibold text-brand-navy">Opis</span>
-              <textarea
-                required
-                rows={8}
-                value={organizerForm.description}
-                onChange={(event) =>
-                  setOrganizerForm((previous) => ({
-                    ...previous,
-                    description: event.target.value,
-                  }))
-                }
-                className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-              />
-            </label>
-            </div>
-
-            <button
-              type="submit"
-              disabled={saving}
-              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-            >
-              {saving ? "Zapisywanie..." : "Zapisz profil organizatora"}
-            </button>
-          </form>
-        ) : null}
+        {activeSettingsView === "base" ? participantProfileFormContent : null}
+        {activeSettingsView === "trainer" ? trainerProfileFormContent : null}
+        {activeSettingsView === "organizer" ? organizerSettingsContent : null}
 
         {hasModeratorAccess(currentUser) ? (
           <form

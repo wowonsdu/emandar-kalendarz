@@ -48,6 +48,7 @@ import {
   isCommunityBrandStatus,
   isTrainingEventPubliclyVisible,
   getTrainingJoinAudienceLabel,
+  resolveEventOwnerDisplayLabels,
   resolveCommunityEventOrganizerPhone,
   resolveEnrollmentPhotoModeForEvent,
   resolveBrandStatus,
@@ -213,16 +214,19 @@ const demoLoginSections = [
   },
 ] as const;
 
-function getPublicOrganizerName(event: TrainingEvent, organizerName?: string, trainerName?: string) {
+function getPublicOrganizerName(
+  event: TrainingEvent,
+  ownerLabels: ReturnType<typeof resolveEventOwnerDisplayLabels>,
+) {
   if (isSelfManagedTrainingEvent(event)) {
-    return firstName(trainerName || event.creatorDisplayName);
+    return firstName(ownerLabels.trainerName);
   }
 
-  return firstName(organizerName) || "Zespół Emandar";
+  return firstName(ownerLabels.organizerName) || "Zespół Emandar";
 }
 
-function getPublicLeadName(event: TrainingEvent, trainerName?: string) {
-  return trainerName || event.creatorDisplayName || "Gospodarz wydarzenia";
+function getPublicLeadName(ownerLabels: ReturnType<typeof resolveEventOwnerDisplayLabels>) {
+  return ownerLabels.trainerName;
 }
 
 function getEventTags(event: TrainingEvent) {
@@ -559,9 +563,10 @@ function EventCard({
   const scheduleRangeLabel = getScheduleRangeLabel(event);
   const scheduleStartLabel = formatDate(getTrainingEventScheduleBounds(event).startsAt);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const ownerLabels = resolveEventOwnerDisplayLabels(event, store);
   const eventImages = event.eventImages ?? [];
   const canManage = canManagePublicEvent(event, currentUser);
-  const leadName = getPublicLeadName(event, trainer?.displayName);
+  const leadName = getPublicLeadName(ownerLabels);
   const leadAvatarUrl = isCommunityEvent
     ? event.useEventImageAsCover === true
       ? eventImages[0]?.url || event.creatorAvatarUrl
@@ -712,7 +717,7 @@ function EventCard({
             <p className="mt-4 text-sm text-brand-muted">
               Organizator:{" "}
               <span className="font-semibold text-brand-navy">
-                {getPublicOrganizerName(event, organizer?.displayName, trainer?.displayName)}
+                {getPublicOrganizerName(event, ownerLabels)}
               </span>
             </p>
           )}
@@ -893,7 +898,7 @@ function EventCard({
                 <div>
                   Organizator:{" "}
                   <span className="font-semibold text-brand-navy">
-                    {getPublicOrganizerName(event, organizer?.displayName, trainer?.displayName)}
+                    {getPublicOrganizerName(event, ownerLabels)}
                   </span>
                 </div>
               </div>
@@ -1119,7 +1124,8 @@ export function EventDetailsPage() {
   const enrollmentPhotoMode = resolveEnrollmentPhotoModeForEvent(event, store.appSettings);
   const enrollmentPhotoRequired = isPhotoModeRequired(enrollmentPhotoMode);
   const enrollmentPhotoEnabled = isPhotoModeEnabled(enrollmentPhotoMode);
-  const leadName = getPublicLeadName(event, trainer?.displayName);
+  const ownerLabels = resolveEventOwnerDisplayLabels(event, store);
+  const leadName = getPublicLeadName(ownerLabels);
   const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
   const eventGroup = event.groupId
     ? store.groups.find((item) => item.id === event.groupId) ?? null
@@ -1493,7 +1499,7 @@ export function EventDetailsPage() {
                     </p>
                   </div>
                   <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
-                    {getPublicOrganizerName(event, organizer?.displayName, leadName)}
+                    {getPublicOrganizerName(event, ownerLabels)}
                   </p>
                 </div>
               </div>
@@ -1525,7 +1531,7 @@ export function EventDetailsPage() {
                     </p>
                   </div>
                   <p className="mt-3 break-words text-[1.42rem] font-semibold leading-[1.08] text-brand-navy sm:text-[1.65rem]">
-                    {getPublicOrganizerName(event, organizer?.displayName, leadName)}
+                    {getPublicOrganizerName(event, ownerLabels)}
                   </p>
                 </div>
               </div>

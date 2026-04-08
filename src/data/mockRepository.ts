@@ -3,6 +3,7 @@ import type {
   AppSettings,
   AppUser,
   AvailabilityInput,
+  CommunityOrganizerProfileUpdateInput,
   AvailabilitySlot,
   DecisionStatus,
   DemoStore,
@@ -65,6 +66,7 @@ import {
   isOrganizerFunctionsBlocked,
   resolveEnrollmentIntent,
   resolveOrganizerCollaborationStatus,
+  resolveOrganizerProfileVariant,
   resolveTrainerCollaborationStatus,
 } from "@/domain/utils";
 
@@ -840,6 +842,48 @@ function findOrganizer(store: DemoStore, organizerId?: string | null) {
 
 function findUser(store: DemoStore, userId?: string | null) {
   return store.users.find((item) => item.id === userId) ?? null;
+}
+
+function ensureOrganizerProfileRecord(store: DemoStore, user: AppUser) {
+  if (user.organizerProfileId) {
+    const organizer = findOrganizer(store, user.organizerProfileId);
+    if (organizer) {
+      return organizer;
+    }
+  }
+
+  const organizerId = user.organizerProfileId ?? createId("organizer");
+  user.organizerProfileId = organizerId;
+
+  const organizer: OrganizerProfile = {
+    id: organizerId,
+    userId: user.id,
+    displayName: user.displayName,
+    description: user.notes ?? "Nowy organizer utworzony z profilu użytkownika.",
+    isVisible: true,
+  };
+  store.organizers.unshift(organizer);
+  return organizer;
+}
+
+function resolveEventCreatorDisplayName(
+  actor: AppUser,
+  input: { brandStatus?: EmandarBrandStatus | null },
+  organizer: OrganizerProfile | null,
+  trainer: TrainerProfile | null,
+) {
+  if (isCommunityBrandStatus(input.brandStatus)) {
+    return (
+      resolveOrganizerProfileVariant(organizer, "community").displayName ||
+      actor.displayName
+    );
+  }
+
+  return (
+    resolveOrganizerProfileVariant(organizer, "official").displayName ||
+    trainer?.displayName?.trim() ||
+    actor.displayName
+  );
 }
 
 function getActorOrThrow(store: DemoStore) {
@@ -2352,7 +2396,7 @@ function createEventBase(
     trainerUserId: trainer?.userId ?? null,
     organizerUserId: organizer?.userId ?? null,
     creatorUserId: actor.id,
-    creatorDisplayName: actor.displayName,
+    creatorDisplayName: resolveEventCreatorDisplayName(actor, input, organizer, trainer),
     title: input.title?.trim() || input.location.trim(),
     summary: input.summary.trim(),
     description: input.description.trim(),
@@ -2730,16 +2774,8 @@ export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode
     let organizerProfileCreated = false;
 
     if (!organizerId) {
-      organizerId = createId("organizer");
-      actor.organizerProfileId = organizerId;
+      organizerId = ensureOrganizerProfileRecord(store, actor).id;
       organizerProfileCreated = true;
-      store.organizers.unshift({
-        id: organizerId,
-        userId: actor.id,
-        displayName: actor.displayName,
-        description: actor.notes ?? "Nowy organizator utworzony z kodu trenera.",
-        isVisible: true,
-      });
     }
 
     const relationId = buildRelationId(trainer.id, organizerId);
@@ -2948,15 +2984,37 @@ export async function updateOrganizerProfile(
   currentUser: AppUser,
 ) {
   await mutateStore((store) => {
-    const organizer = findOrganizer(store, requireOrganizerProfileId(currentUser));
-    if (!organizer) {
-      throw new Error("Nie znaleziono profilu organizatora.");
+    const user = findUser(store, currentUser.id);
+    if (!user) {
+      throw new Error("Nie znaleziono użytkownika.");
     }
+
+    const organizer = ensureOrganizerProfileRecord(store, user);
 
     organizer.displayName = input.displayName.trim();
     organizer.contactName = input.contactName.trim();
     organizer.location = input.location.trim();
     organizer.description = input.description.trim();
+  });
+}
+
+export async function updateCommunityOrganizerProfile(
+  input: CommunityOrganizerProfileUpdateInput,
+  currentUser: AppUser,
+) {
+  await mutateStore((store) => {
+    const user = findUser(store, currentUser.id);
+    if (!user) {
+      throw new Error("Nie znaleziono użytkownika.");
+    }
+
+    const organizer = ensureOrganizerProfileRecord(store, user);
+    organizer.communityProfile = {
+      displayName: input.displayName.trim(),
+      contactName: input.contactName.trim(),
+      location: input.location.trim(),
+      description: input.description.trim(),
+    };
   });
 }
 

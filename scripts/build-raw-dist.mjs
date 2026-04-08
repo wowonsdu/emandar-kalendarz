@@ -131,5 +131,16 @@ async function writeRawSeedFiles() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
+async function rewriteRawHtaccess() {
+  const htaccessPath = path.join(outputDir, ".htaccess");
+  const content = await readFile(htaccessPath, "utf8");
+  const nextContent = content.replaceAll("RewriteBase /emandar/", `RewriteBase ${rawBasePath}`);
+
+  if (nextContent !== content) {
+    await writeFile(htaccessPath, nextContent, "utf8");
+  }
+}
+
 await runBuild();
+await rewriteRawHtaccess();
 await writeRawSeedFiles();

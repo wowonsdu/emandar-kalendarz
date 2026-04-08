@@ -175,7 +175,7 @@ function CommunityEventGalleryLightbox({
     <Dialog open={openIndex !== null} onOpenChange={(open) => onOpenIndexChange(open ? currentIndex : null)}>
       <DialogPortal>
         <DialogOverlay className="fixed inset-0 z-50 bg-brand-navy/80 backdrop-blur-sm" />
-        <DialogContent className="fixed left-1/2 top-1/2 z-50 flex max-h-[88vh] w-[min(94vw,1100px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[2rem] border border-white/20 bg-brand-navy p-0 text-white shadow-soft">
+        <DialogContent className="fixed left-1/2 top-1/2 z-50 flex max-h-[88vh] w-[min(calc(100vw-3rem),1100px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[2rem] border border-white/20 bg-brand-navy p-0 text-white shadow-soft">
           <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
             <DialogHeader className="text-left">
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-white/75">

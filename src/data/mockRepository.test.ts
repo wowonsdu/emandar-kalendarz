@@ -1567,6 +1567,105 @@ describe("manageEnrollmentRequest", () => {
 });
 
 describe("organizer profile updates", () => {
+  it("connects an organizer to the selected trainer when the code matches that trainer", async () => {
+    const { connectOrganizerToTrainerWithCode } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-participant-connect",
+      role: "participant",
+      roles: ["participant"],
+      primaryRole: "participant",
+      displayName: "Ola Chotnicka",
+    });
+    const store = createStore({}, actor);
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: "user-trainer-1",
+        slug: "jacek",
+        displayName: "Jacek",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Warszawa"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+        authorizationCode: "JACEK123",
+        authorizationCodeConfigured: true,
+      },
+    ];
+    mockSession(actor.id);
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      connectOrganizerToTrainerWithCode("JACEK123", "trainer-1"),
+    ).resolves.toMatchObject({
+      ok: true,
+      trainerId: "trainer-1",
+      organizerProfileCreated: true,
+    });
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.users[0].organizerProfileId).toBeTruthy();
+    expect(updatedStore.relations[0]).toMatchObject({
+      trainerId: "trainer-1",
+      organizerUserId: actor.id,
+      status: "approved",
+      requestedBy: "organizer",
+    });
+  });
+
+  it("rejects a code that belongs to a different trainer than the selected card", async () => {
+    const { connectOrganizerToTrainerWithCode } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-participant-mismatch",
+      role: "participant",
+      roles: ["participant"],
+      primaryRole: "participant",
+      displayName: "Ola Chotnicka",
+    });
+    const store = createStore({}, actor);
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: "user-trainer-1",
+        slug: "jacek",
+        displayName: "Jacek",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Warszawa"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+        authorizationCode: "JACEK123",
+        authorizationCodeConfigured: true,
+      },
+      {
+        id: "trainer-2",
+        userId: "user-trainer-2",
+        slug: "marcin",
+        displayName: "Marcin",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Łódź"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+        authorizationCode: "MARCIN123",
+        authorizationCodeConfigured: true,
+      },
+    ];
+    mockSession(actor.id);
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      connectOrganizerToTrainerWithCode("MARCIN123", "trainer-1"),
+    ).rejects.toThrow("Ten kod należy do innego Przekazującego Wiedzę.");
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.relations).toHaveLength(0);
+    expect(updatedStore.users[0].organizerProfileId).toBeUndefined();
+  });
+
   it("upserts an official organizer profile when the user does not have one yet", async () => {
     const { updateOrganizerProfile } = await import("./mockRepository");
     const actor = createActor({
@@ -1912,5 +2011,46 @@ describe("group event roster defaults", () => {
 
     updatedStore = mockedApi.getStore();
     expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
+  });
+
+  it("does not restore the previous user profile after sign-out", async () => {
+    mockSession("user-organizer");
+    mockStoreFetch(
+      createStore(
+        {},
+        {
+          id: "user-organizer",
+          role: "organizer",
+          roles: ["participant", "organizer"],
+          primaryRole: "organizer",
+          email: "anita@emandar.test",
+        },
+      ),
+    );
+
+    const { signOut, subscribeAuthState, subscribeUserProfile } = await import("./mockRepository");
+    let currentAuthUserId: string | null = "user-organizer";
+    let currentUser: AppUser | null = null;
+
+    const stopAuth = subscribeAuthState((userId) => {
+      currentAuthUserId = userId;
+      if (!userId) {
+        currentUser = null;
+      }
+    });
+    const stopUserProfile = subscribeUserProfile("user-organizer", (user) => {
+      currentUser = user;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(currentUser?.id).toBe("user-organizer");
+
+    await signOut();
+
+    expect(currentAuthUserId).toBeNull();
+    expect(currentUser).toBeNull();
+
+    stopUserProfile();
+    stopAuth();
   });
 });

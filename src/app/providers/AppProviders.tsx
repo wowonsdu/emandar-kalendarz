@@ -131,6 +131,7 @@ interface AppStateContextValue {
   registerParticipant: (input: ParticipantRegistrationInput) => Promise<void>;
   connectOrganizerToTrainerWithCode: (
     trainerAuthorizationCode: string,
+    expectedTrainerId?: string,
   ) => Promise<{ ok: true; trainerId: string; organizerProfileCreated: boolean }>;
   completeParticipantOnboarding: (input: ParticipantOnboardingInput) => Promise<void>;
   decideEnrollment: (
@@ -447,9 +448,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
       async registerParticipant(input) {
         await withFriendlyErrors(() => registerParticipantAction(input));
       },
-      async connectOrganizerToTrainerWithCode(trainerAuthorizationCode) {
+      async connectOrganizerToTrainerWithCode(trainerAuthorizationCode, expectedTrainerId) {
         return withFriendlyErrors(() =>
-          connectOrganizerToTrainerWithCodeAction(trainerAuthorizationCode),
+          connectOrganizerToTrainerWithCodeAction(trainerAuthorizationCode, expectedTrainerId),
         );
       },
       async completeParticipantOnboarding(input) {

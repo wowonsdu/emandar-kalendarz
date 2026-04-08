@@ -43,11 +43,15 @@ function rewriteBasePathStrings(value) {
 }
 
 function createRawSeed(seedStore) {
+  const nextStore = rewriteBasePathStrings(structuredClone(seedStore));
+
   return {
-    users: [],
-    trainers: [],
-    organizers: [],
-    participantProfiles: [],
+    users: nextStore.users ?? [],
+    trainers: nextStore.trainers ?? [],
+    organizers: nextStore.organizers ?? [],
+    participantProfiles: (nextStore.participantProfiles ?? []).filter((profile) =>
+      Boolean(profile.linkedUserId),
+    ),
     groups: [],
     groupMembers: [],
     eventParticipants: [],

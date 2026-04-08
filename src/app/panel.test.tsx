@@ -6,10 +6,19 @@ import {
   EnrollmentRequestManagementActions,
   EnrollmentRequestDecisionButtons,
   EnrollmentRequestSlimRow,
+  OrganizerRelationsHubSection,
   splitGroupsByArchivedStatus,
   splitEnrollmentRequestsByIntent,
 } from "./pages/panel";
-import type { AppUser, DemoStore, EnrollmentRequest, Group, TrainingEvent } from "@/domain/types";
+import type {
+  AppUser,
+  DemoStore,
+  EnrollmentRequest,
+  Group,
+  TrainerOrganizerRelation,
+  TrainerProfile,
+  TrainingEvent,
+} from "@/domain/types";
 
 function createEnrollmentRequest(
   overrides: Partial<EnrollmentRequest> = {},
@@ -70,6 +79,38 @@ function createGroup(overrides: Partial<Group> = {}): Group {
     defaultEventType: "training",
     defaultConfirmationLeadTimeDays: 7,
     defaultJoinAudience: "new-people",
+    createdAt: "2026-04-01T09:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function createTrainer(overrides: Partial<TrainerProfile> = {}): TrainerProfile {
+  return {
+    id: "trainer-1",
+    userId: "user-trainer-1",
+    slug: "jacek",
+    displayName: "Jacek",
+    bio: "Bio",
+    specialties: [],
+    locations: ["Warszawa"],
+    isVisible: true,
+    heroNote: "Hero",
+    brandStatus: "official",
+    ...overrides,
+  };
+}
+
+function createRelation(
+  overrides: Partial<TrainerOrganizerRelation> = {},
+): TrainerOrganizerRelation {
+  return {
+    id: "relation-1",
+    trainerId: "trainer-1",
+    organizerId: "organizer-1",
+    trainerUserId: "user-trainer-1",
+    organizerUserId: "user-organizer-1",
+    status: "approved",
+    requestedBy: "organizer",
     createdAt: "2026-04-01T09:00:00.000Z",
     ...overrides,
   };
@@ -415,5 +456,45 @@ describe("splitGroupsByArchivedStatus", () => {
 
     expect(result.active.map((group) => group.id)).toEqual(["group-active"]);
     expect(result.archived.map((group) => group.id)).toEqual(["group-archived"]);
+  });
+});
+
+describe("OrganizerRelationsHubSection", () => {
+  it("renders one trainer section with connected and unconnected cards", () => {
+    const activeRelation = createRelation({
+      id: "relation-jacek",
+      trainerId: "trainer-1",
+      createdAt: "2026-04-01T09:00:00.000Z",
+    });
+    const markup = renderToStaticMarkup(
+      <OrganizerRelationsHubSection
+        activeRelations={[activeRelation]}
+        availableTrainers={[
+          createTrainer({ id: "trainer-1", displayName: "Jacek" }),
+          createTrainer({
+            id: "trainer-2",
+            userId: "user-trainer-2",
+            slug: "marcin",
+            displayName: "Marcin",
+          }),
+        ]}
+        organizerFunctionsAreBlocked={false}
+        onConnectTrainer={async () => undefined}
+        onDetachRelation={async () => undefined}
+        trainerNamesById={
+          new Map([
+            ["trainer-1", "Jacek"],
+            ["trainer-2", "Marcin"],
+          ])
+        }
+      />,
+    );
+
+    expect(markup).toContain("Przekazujący wiedzę");
+    expect(markup).toContain("od 1 kwietnia 2026");
+    expect(markup).toContain("Kliknij, by połączyć");
+    expect(markup).not.toContain(">Połącz<");
+    expect(markup).not.toContain("Moi przekazujący wiedzę");
+    expect(markup).not.toContain("Wybierz przekazującego wiedzę");
   });
 });

@@ -1384,8 +1384,8 @@ export async function signIn(email: string, password: string) {
 
 export async function signOut() {
   setCurrentSessionUserId(null);
-  emitAuthListeners();
   emitStoreListeners();
+  emitAuthListeners();
 }
 
 export async function submitEnrollment(input: EnrollmentFormInput) {
@@ -2754,7 +2754,10 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
   });
 }
 
-export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode: string) {
+export async function connectOrganizerToTrainerWithCode(
+  trainerAuthorizationCode: string,
+  expectedTrainerId?: string,
+) {
   return mutateStore((store) => {
     const actor = getActorOrThrow(store);
     if (isOrganizerFunctionsBlocked(actor)) {
@@ -2767,6 +2770,10 @@ export async function connectOrganizerToTrainerWithCode(trainerAuthorizationCode
 
     if (!trainer) {
       throw new Error("Nie znaleziono trenera dla tego kodu.");
+    }
+
+    if (expectedTrainerId && trainer.id !== expectedTrainerId) {
+      throw new Error("Ten kod należy do innego Przekazującego Wiedzę.");
     }
 
     ensureRole(actor, "participant");

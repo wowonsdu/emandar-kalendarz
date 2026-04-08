@@ -2,7 +2,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { StaticRouter } from "react-router";
 import { describe, expect, it } from "vitest";
 import {
+  AcceptedRequestGroupDialogBody,
   buildEnrollmentRequestTransferOptions,
+  createAcceptedRequestGroupDialogDraft,
   EnrollmentRequestManagementActions,
   EnrollmentRequestDecisionButtons,
   EnrollmentRequestSlimRow,
@@ -213,6 +215,106 @@ describe("EnrollmentRequestSlimRow", () => {
 
     expect(markup).toContain('href="/panel/szkolenia/event-official"');
     expect(markup).toContain("Grupa Poranna");
+  });
+
+  it("renders participant name on a full-width row", () => {
+    const markup = renderToStaticMarkup(
+      <StaticRouter location="/panel/zgloszenia">
+        <EnrollmentRequestSlimRow
+          request={createEnrollmentRequest({
+            imieNazwisko: "Grzegorz Emanowicz Testowy",
+          })}
+          event={createTrainingEvent()}
+          eventGroup={null}
+          isExpanded={false}
+          onExpandedChange={() => {}}
+        >
+          <div>Details</div>
+        </EnrollmentRequestSlimRow>
+      </StaticRouter>,
+    );
+
+    expect(markup).toContain("col-span-2");
+    expect(markup).toContain("Grzegorz Emanowicz Testowy");
+  });
+
+  it("uses stacked edge rounding for the first item", () => {
+    const markup = renderToStaticMarkup(
+      <StaticRouter location="/panel/zgloszenia">
+        <EnrollmentRequestSlimRow
+          request={createEnrollmentRequest()}
+          event={createTrainingEvent()}
+          eventGroup={null}
+          isExpanded={false}
+          onExpandedChange={() => {}}
+          itemPosition="first"
+        >
+          <div>Details</div>
+        </EnrollmentRequestSlimRow>
+      </StaticRouter>,
+    );
+
+    expect(markup).toContain("rounded-t-[1.75rem]");
+  });
+
+  it("uses full rounding for a single stacked item", () => {
+    const markup = renderToStaticMarkup(
+      <StaticRouter location="/panel/zgloszenia">
+        <EnrollmentRequestSlimRow
+          request={createEnrollmentRequest()}
+          event={createTrainingEvent()}
+          eventGroup={null}
+          isExpanded={false}
+          onExpandedChange={() => {}}
+          itemPosition="single"
+        >
+          <div>Details</div>
+        </EnrollmentRequestSlimRow>
+      </StaticRouter>,
+    );
+
+    expect(markup).toContain("rounded-[1.75rem]");
+  });
+});
+
+describe("accepted request group dialog", () => {
+  it("starts with regular priority, empty notes and sync disabled", () => {
+    expect(createAcceptedRequestGroupDialogDraft()).toEqual({
+      priority: "regularni",
+      notes: "",
+      syncFutureEvents: false,
+    });
+  });
+
+  it("renders rank dropdown, notes field and sync option when future events exist", () => {
+    const markup = renderToStaticMarkup(
+      <AcceptedRequestGroupDialogBody
+        draft={createAcceptedRequestGroupDialogDraft()}
+        futureOpenGroupEventsCount={3}
+        onCancel={() => {}}
+        onDraftChange={() => {}}
+        onSubmit={(event) => event.preventDefault()}
+      />,
+    );
+
+    expect(markup).toContain("Ranga w grupie");
+    expect(markup).toContain("Notatki");
+    expect(markup).toContain("Dodaj też automatycznie do 3 przyszłych otwartych");
+    expect(markup).toContain('option value="regularni" selected');
+  });
+
+  it("hides sync option when there are no future group events", () => {
+    const markup = renderToStaticMarkup(
+      <AcceptedRequestGroupDialogBody
+        draft={createAcceptedRequestGroupDialogDraft()}
+        futureOpenGroupEventsCount={0}
+        onCancel={() => {}}
+        onDraftChange={() => {}}
+        onSubmit={(event) => event.preventDefault()}
+      />,
+    );
+
+    expect(markup).not.toContain("Dodaj też automatycznie");
   });
 });
 

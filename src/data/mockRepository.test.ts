@@ -1566,6 +1566,115 @@ describe("manageEnrollmentRequest", () => {
   });
 });
 
+describe("organizer profile updates", () => {
+  it("upserts an official organizer profile when the user does not have one yet", async () => {
+    const { updateOrganizerProfile } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-participant-1",
+      role: "participant",
+      roles: ["participant"],
+      primaryRole: "participant",
+      displayName: "Ola Chotnicka",
+      notes: "Opis bazowy",
+    });
+    const mockedApi = mockStoreFetch(createStore({}, actor));
+
+    await expect(
+      updateOrganizerProfile(
+        {
+          displayName: "Ola Organizer",
+          contactName: "Ola",
+          location: "Warszawa",
+          description: "Oficjalny opis organizatora",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.users[0].organizerProfileId).toBeTruthy();
+    expect(updatedStore.organizers[0]).toMatchObject({
+      userId: actor.id,
+      displayName: "Ola Organizer",
+      contactName: "Ola",
+      location: "Warszawa",
+      description: "Oficjalny opis organizatora",
+    });
+  });
+
+  it("stores a separate community organizer variant and uses it for community event snapshots", async () => {
+    const {
+      createTrainingEvent,
+      updateCommunityOrganizerProfile,
+      updateOrganizerProfile,
+    } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-participant-2",
+      role: "participant",
+      roles: ["participant"],
+      primaryRole: "participant",
+      displayName: "Marcin Młynek",
+      notes: "Profil użytkownika",
+    });
+    const mockedApi = mockStoreFetch(createStore({}, actor));
+
+    await updateOrganizerProfile(
+      {
+        displayName: "Marcin M",
+        contactName: "Marcin",
+        location: "Łódź",
+        description: "Oficjalny profil",
+      },
+      actor,
+    );
+    const actorWithOrganizerProfile = mockedApi.getStore().users[0];
+    await updateCommunityOrganizerProfile(
+      {
+        displayName: "Marcino",
+        contactName: "Marcino",
+        location: "Online",
+        description: "Społecznościowy profil",
+      },
+      actorWithOrganizerProfile,
+    );
+    const actorForEventCreation = mockedApi.getStore().users[0];
+    await createTrainingEvent(
+      {
+        title: "Krąg społeczności",
+        summary: "Opis skrócony",
+        description: "Opis pełny",
+        type: "Wydarzenie społeczności",
+        eventTypeSystem: "post",
+        scheduleDays: [
+          {
+            startsAt: "2099-05-10T18:00:00.000Z",
+            endsAt: "2099-05-10T20:00:00.000Z",
+          },
+        ],
+        location: "Online",
+        capacity: 20,
+        isPublished: false,
+        brandStatus: "supported",
+      },
+      actorForEventCreation,
+    );
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.organizers[0]).toMatchObject({
+      displayName: "Marcin M",
+      communityProfile: {
+        displayName: "Marcino",
+        contactName: "Marcino",
+        location: "Online",
+        description: "Społecznościowy profil",
+      },
+    });
+    expect(updatedStore.trainingEvents[0]).toMatchObject({
+      creatorDisplayName: "Marcino",
+    });
+  });
+});
+
 describe("group event roster defaults", () => {
   it("creates a full invited roster from the group when a grouped training event is created", async () => {
     const { createTrainingEvent } = await import("./mockRepository");

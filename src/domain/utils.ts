@@ -155,6 +155,75 @@ export function resolveCommunityEventOrganizerPhone(
   return organizerOwner?.phone?.trim() || null;
 }
 
+export function resolveOrganizerProfileVariant(
+  organizer: OrganizerProfile | null | undefined,
+  variant: "official" | "community",
+) {
+  if (variant === "community") {
+    return {
+      displayName:
+        organizer?.communityProfile?.displayName?.trim() ||
+        organizer?.displayName?.trim() ||
+        "",
+      description:
+        organizer?.communityProfile?.description?.trim() ||
+        organizer?.description?.trim() ||
+        "",
+      contactName:
+        organizer?.communityProfile?.contactName?.trim() ||
+        organizer?.contactName?.trim() ||
+        "",
+      location:
+        organizer?.communityProfile?.location?.trim() ||
+        organizer?.location?.trim() ||
+        "",
+    };
+  }
+
+  return {
+    displayName: organizer?.displayName?.trim() || "",
+    description: organizer?.description?.trim() || "",
+    contactName: organizer?.contactName?.trim() || "",
+    location: organizer?.location?.trim() || "",
+  };
+}
+
+export function resolveEventOwnerDisplayLabels(
+  event: Pick<
+    TrainingEvent,
+    | "brandStatus"
+    | "creatorDisplayName"
+    | "organizerId"
+    | "selfManagedByTrainer"
+    | "trainerId"
+  >,
+  store: Pick<DemoStore, "organizers" | "trainers">,
+) {
+  const trainer = event.trainerId
+    ? store.trainers.find((item) => item.id === event.trainerId) ?? null
+    : null;
+  const organizer = event.organizerId
+    ? store.organizers.find((item) => item.id === event.organizerId) ?? null
+    : null;
+  const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const organizerDisplay = resolveOrganizerProfileVariant(
+    organizer,
+    isCommunityEvent ? "community" : "official",
+  ).displayName;
+  const trainerName =
+    trainer?.displayName?.trim() ||
+    (isCommunityEvent ? organizerDisplay : "") ||
+    event.creatorDisplayName?.trim() ||
+    "Gospodarz wydarzenia";
+
+  return {
+    trainerName,
+    organizerName: isSelfManagedTrainingEvent(event)
+      ? trainerName
+      : organizerDisplay || "Organizator",
+  };
+}
+
 export function canOrganizerAccessTrainer(
   organizerId: string,
   trainerId: string,

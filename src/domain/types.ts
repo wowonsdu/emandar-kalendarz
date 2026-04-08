@@ -127,7 +127,15 @@ export interface OrganizerProfile {
   contactName?: string;
   location?: string;
   trainingIntent?: string;
+  communityProfile?: OrganizerProfileVariant;
   notificationSettings?: NotificationSettings;
+}
+
+export interface OrganizerProfileVariant {
+  displayName: string;
+  description: string;
+  contactName?: string;
+  location?: string;
 }
 
 export interface ParticipantProfile {
@@ -751,6 +759,13 @@ export interface TrainerProfileUpdateInput {
 }
 
 export interface OrganizerProfileUpdateInput {
+  displayName: string;
+  contactName: string;
+  location: string;
+  description: string;
+}
+
+export interface CommunityOrganizerProfileUpdateInput {
   displayName: string;
   contactName: string;
   location: string;

@@ -10,22 +10,19 @@ const rawBasePath = "/emandar-raw/";
 const outputDir = path.join(projectRoot, "dist-raw");
 const seedStorePath = path.join(projectRoot, "public/mock-data/seed-store.json");
 
-const rawArrayCollections = [
-  "groups",
-  "groupMembers",
-  "eventParticipants",
-  "trainingEvents",
-  "publicTrainingEvents",
-  "availabilitySlots",
-  "trainerSharedSlots",
-  "trainerCalendarFeeds",
-  "organizerCalendarFeeds",
-  "trainerOrganizerCalendarFeeds",
-  "trainerExternalBusyMonths",
-  "organizerExternalBusyMonths",
-  "enrollmentRequests",
-  "notifications",
-];
+function getDefaultNotificationSettings() {
+  return {
+    reminderLeadDays: 7,
+    sendToTrainer: true,
+    sendToOrganizer: true,
+    sendToParticipants: true,
+    requireParticipantSmsConfirmation: false,
+    reminderSmsTemplate:
+      "Przypomnienie o szkoleniu {{event_title}} dnia {{event_date}} w {{event_location}}.",
+    confirmationSmsTemplate:
+      "Czy bierzesz udział w szkoleniu {{event_title}} dnia {{event_date}}? Tak: {{confirm_url}} Nie: {{decline_url}}",
+  };
+}
 
 function rewriteBasePathStrings(value) {
   if (typeof value === "string") {
@@ -48,11 +45,38 @@ function rewriteBasePathStrings(value) {
 function createRawSeed(seedStore) {
   const nextStore = rewriteBasePathStrings(structuredClone(seedStore));
 
-  for (const collectionKey of rawArrayCollections) {
-    nextStore[collectionKey] = [];
-  }
-
-  return nextStore;
+  return {
+    users: nextStore.users ?? [],
+    trainers: nextStore.trainers ?? [],
+    organizers: nextStore.organizers ?? [],
+    participantProfiles: (nextStore.participantProfiles ?? []).filter((profile) =>
+      Boolean(profile.linkedUserId),
+    ),
+    groups: [],
+    groupMembers: [],
+    eventParticipants: [],
+    relations: [],
+    trainingEvents: [],
+    publicTrainingEvents: [],
+    availabilitySlots: [],
+    trainerSharedSlots: [],
+    trainerCalendarFeeds: [],
+    organizerCalendarFeeds: [],
+    trainerOrganizerCalendarFeeds: [],
+    trainerExternalBusyMonths: [],
+    organizerExternalBusyMonths: [],
+    enrollmentRequests: [],
+    notifications: [],
+    appSettings: rewriteBasePathStrings(
+      structuredClone(
+        seedStore.appSettings ?? {
+          signupPhotoMode: "optional",
+          enrollmentPhotoMode: "optional",
+          defaultNotificationSettings: getDefaultNotificationSettings(),
+        },
+      ),
+    ),
+  };
 }
 
 async function runBuild() {

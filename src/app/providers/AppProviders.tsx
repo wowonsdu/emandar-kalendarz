@@ -60,6 +60,7 @@ import {
   updateEventParticipantStatus as updateEventParticipantStatusAction,
   updateGroup as updateGroupAction,
   updateGroupMember as updateGroupMemberAction,
+  updateCommunityOrganizerProfile as updateCommunityOrganizerProfileAction,
   updateOrganizerCalendarFeedEnabled as updateOrganizerCalendarFeedEnabledAction,
   updateOrganizerTrainingDraft as updateOrganizerTrainingDraftAction,
   updateTrainerCalendarFeedEnabled as updateTrainerCalendarFeedEnabledAction,
@@ -92,6 +93,7 @@ import type {
   GroupMemberInput,
   GroupMemberUpdateInput,
   GroupUpdateInput,
+  CommunityOrganizerProfileUpdateInput,
   OrganizerCalendarFeedInput,
   OrganizerParticipantProfileInput,
   OrganizerTrainingDraftDecisionInput,
@@ -196,6 +198,9 @@ interface AppStateContextValue {
   ) => Promise<string>;
   updateTrainerProfile: (input: TrainerProfileUpdateInput) => Promise<void>;
   updateOrganizerProfile: (input: OrganizerProfileUpdateInput) => Promise<void>;
+  updateCommunityOrganizerProfile: (
+    input: CommunityOrganizerProfileUpdateInput,
+  ) => Promise<void>;
   updateUserModeratorRole: (userId: string, enabled: boolean) => Promise<void>;
   updateUserOrganizerFunctionsBlocked: (
     userId: string,
@@ -795,6 +800,15 @@ export function AppProviders({ children }: { children: ReactNode }) {
         }
 
         await withFriendlyErrors(() => updateOrganizerProfileAction(input, currentUser));
+      },
+      async updateCommunityOrganizerProfile(input) {
+        if (!currentUser) {
+          throw new Error("Musisz byc zalogowany.");
+        }
+
+        await withFriendlyErrors(() =>
+          updateCommunityOrganizerProfileAction(input, currentUser),
+        );
       },
       async updateUserModeratorRole(userId, enabled) {
         if (!currentUser) {

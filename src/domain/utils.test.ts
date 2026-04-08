@@ -30,8 +30,10 @@ import {
   isTrainingEventPubliclyVisible,
   getTrainingJoinAudienceLabel,
   resolveCommunityEventOrganizerPhone,
+  resolveEventOwnerDisplayLabels,
   resolveEnrollmentPhotoModeForEvent,
   resolveEnrollmentIntent,
+  resolveOrganizerProfileVariant,
   resolvePhotoMode,
   resolveOrganizerCollaborationStatus,
   resolveParticipantEnrollmentStatus,
@@ -139,6 +141,65 @@ describe("community organizer phone helpers", () => {
     expect(buildPhoneHref("+48 602-100-300")).toBe("tel:+48602100300");
     expect(buildPhoneHref("602 100 300")).toBe("tel:602100300");
     expect(buildPhoneHref("")).toBeNull();
+  });
+});
+
+describe("organizer profile variants", () => {
+  it("falls back from community profile to official organizer data", () => {
+    expect(
+      resolveOrganizerProfileVariant(
+        {
+          id: "organizer-1",
+          userId: "user-1",
+          displayName: "Marcin M",
+          description: "Opis oficjalny",
+          contactName: "Marcin",
+          location: "Warszawa",
+          isVisible: true,
+        },
+        "community",
+      ),
+    ).toMatchObject({
+      displayName: "Marcin M",
+      description: "Opis oficjalny",
+      contactName: "Marcin",
+      location: "Warszawa",
+    });
+  });
+
+  it("uses community organizer alias for community event owner labels", () => {
+    const labels = resolveEventOwnerDisplayLabels(
+      {
+        brandStatus: "supported",
+        creatorDisplayName: "Marcin Młynek",
+        organizerId: "organizer-1",
+        trainerId: null,
+        selfManagedByTrainer: false,
+      },
+      {
+        organizers: [
+          {
+            id: "organizer-1",
+            userId: "user-1",
+            displayName: "Marcin M",
+            description: "Opis oficjalny",
+            isVisible: true,
+            communityProfile: {
+              displayName: "Marcino",
+              description: "Opis community",
+              contactName: "Marcino",
+              location: "Online",
+            },
+          },
+        ],
+        trainers: [],
+      },
+    );
+
+    expect(labels).toEqual({
+      trainerName: "Marcino",
+      organizerName: "Marcino",
+    });
   });
 });
 

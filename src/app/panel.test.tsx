@@ -3,6 +3,7 @@ import { StaticRouter } from "react-router";
 import { describe, expect, it } from "vitest";
 import {
   AcceptedRequestGroupDialogBody,
+  buildParticipantOfficialEnrollmentSections,
   buildEnrollmentRequestTransferOptions,
   createAcceptedRequestGroupDialogDraft,
   EnrollmentRequestManagementActions,
@@ -16,11 +17,13 @@ import type {
   AppUser,
   DemoStore,
   EnrollmentRequest,
+  EventParticipant,
   Group,
   TrainerOrganizerRelation,
   TrainerProfile,
   TrainingEvent,
 } from "@/domain/types";
+import type { ParticipantEnrollmentViewRecord } from "./dashboard";
 
 function createEnrollmentRequest(
   overrides: Partial<EnrollmentRequest> = {},
@@ -67,6 +70,28 @@ function createTrainingEvent(overrides: Partial<TrainingEvent> = {}): TrainingEv
     brandStatus: "official",
     publicationApprovalStatus: "accepted",
     status: "active",
+    ...overrides,
+  };
+}
+
+function createEventParticipant(overrides: Partial<EventParticipant> = {}): EventParticipant {
+  return {
+    id: "event-1__participant-1",
+    eventId: "event-1",
+    eventTitle: "Wydarzenie",
+    groupId: "group-1",
+    groupName: "Grupa testowa",
+    organizerId: "organizer-1",
+    organizerUserId: "organizer-user-1",
+    trainerId: "trainer-1",
+    trainerUserId: "trainer-user-1",
+    participantProfileId: "participant-1",
+    participantDisplayName: "Jan Test",
+    participantPhone: "500600700",
+    priority: "regularni",
+    status: "invited",
+    source: "public-form",
+    invitedAt: "2026-04-01T09:30:00.000Z",
     ...overrides,
   };
 }
@@ -412,6 +437,19 @@ describe("EnrollmentRequestDecisionButtons", () => {
     expect(markup).toContain("Potwierdź");
     expect(markup).not.toContain("Odrzuć");
   });
+
+  it("shows reserve action for pending grouped official requests", () => {
+    const markup = renderToStaticMarkup(
+      <EnrollmentRequestDecisionButtons
+        finalStatus="pending"
+        canReserve
+        onDecision={() => {}}
+        onReserve={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Rezerwowy");
+  });
 });
 
 describe("EnrollmentRequestManagementActions", () => {
@@ -428,6 +466,104 @@ describe("EnrollmentRequestManagementActions", () => {
     expect(markup).toContain("Odrzuć");
     expect(markup).toContain("Przenieś");
     expect(markup).not.toContain("Potwierdź");
+  });
+
+  it("shows reserve action next to pending request controls", () => {
+    const markup = renderToStaticMarkup(
+      <EnrollmentRequestManagementActions
+        finalStatus="pending"
+        canReserve
+        onDecision={() => {}}
+        onReserve={() => {}}
+        onTransfer={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Odrzuć");
+    expect(markup).toContain("Rezerwowy");
+    expect(markup).toContain("Potwierdź");
+  });
+});
+
+describe("buildParticipantOfficialEnrollmentSections", () => {
+  it("groups active official records into pending, reserve, and participating sections", () => {
+    const records: ParticipantEnrollmentViewRecord[] = [
+      {
+        kind: "request",
+        request: createEnrollmentRequest({
+          id: "request-pending",
+          eventId: "event-pending",
+          finalStatus: "pending",
+        }),
+        event: createTrainingEvent({
+          id: "event-pending",
+          groupId: "group-1",
+          groupName: "Grupa testowa",
+        }),
+        isArchived: false,
+        displayStatus: "pending",
+      },
+      {
+        kind: "roster",
+        eventParticipant: createEventParticipant({
+          id: "event-reserve__participant-1",
+          eventId: "event-reserve",
+          status: "rezerwowy",
+        }),
+        event: createTrainingEvent({
+          id: "event-reserve",
+          groupId: "group-1",
+          groupName: "Grupa testowa",
+        }),
+        isArchived: false,
+      },
+      {
+        kind: "roster",
+        eventParticipant: createEventParticipant({
+          id: "event-participating__participant-1",
+          eventId: "event-participating",
+          status: "confirmed",
+        }),
+        event: createTrainingEvent({
+          id: "event-participating",
+          groupId: "group-1",
+          groupName: "Grupa testowa",
+        }),
+        isArchived: false,
+      },
+      {
+        kind: "roster",
+        eventParticipant: createEventParticipant({
+          id: "event-archived__participant-1",
+          eventId: "event-archived",
+          status: "declined",
+        }),
+        event: createTrainingEvent({
+          id: "event-archived",
+          groupId: "group-1",
+          groupName: "Grupa testowa",
+        }),
+        isArchived: true,
+      },
+    ];
+
+    expect(buildParticipantOfficialEnrollmentSections(records)).toEqual([
+      {
+        key: "pending",
+        title: "Oczekujące",
+        records: [records[0]],
+      },
+      {
+        key: "reserve",
+        title: "Lista rezerwowych",
+        records: [records[1]],
+      },
+      {
+        key: "participating",
+        title: "Uczestniczę",
+        records: [records[2]],
+      },
+    ]);
   });
 });
 

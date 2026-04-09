@@ -21,6 +21,7 @@ export type ParticipantProfileStatus = "active" | "archived";
 export type GroupEventType = "training" | "post";
 export type EventParticipantStatus =
   | "invited"
+  | "rezerwowy"
   | "confirmed"
   | "declined"
   | "removed";
@@ -817,6 +818,7 @@ export interface EnrollmentRequestManagementInput {
   requestId: string;
   decision: DecisionStatus;
   transferTargetEventId?: string | null;
+  acceptedParticipantStatus?: Extract<EventParticipantStatus, "invited" | "confirmed" | "rezerwowy">;
 }
 
 export interface ParticipantGroupEventManagementInput {

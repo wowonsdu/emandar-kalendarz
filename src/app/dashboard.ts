@@ -197,6 +197,8 @@ function getParticipantRosterRecordStatusLabel(status: EventParticipant["status"
   switch (status) {
     case "confirmed":
       return "Potwierdzone";
+    case "rezerwowy":
+      return "Rezerwowy";
     case "declined":
       return "Odrzucone";
     case "removed":

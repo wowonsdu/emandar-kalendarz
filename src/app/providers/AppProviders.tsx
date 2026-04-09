@@ -87,6 +87,7 @@ import type {
   DemoStore,
   EmandarBrandStatus,
   EventParticipantInput,
+  EventParticipantStatus,
   EventParticipantStatusUpdateInput,
   EnrollmentFormInput,
   GroupInput,
@@ -142,6 +143,7 @@ interface AppStateContextValue {
     requestId: string,
     decision: DecisionStatus,
     transferTargetEventId?: string,
+    acceptedParticipantStatus?: Extract<EventParticipantStatus, "invited" | "confirmed" | "rezerwowy">,
   ) => Promise<void>;
   manageOwnGroupEventParticipation: (
     eventParticipantId: string,
@@ -465,7 +467,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
           decideEnrollmentAction(requestId, currentUser, decision),
         );
       },
-      async manageEnrollmentRequest(requestId, decision, transferTargetEventId) {
+      async manageEnrollmentRequest(
+        requestId,
+        decision,
+        transferTargetEventId,
+        acceptedParticipantStatus,
+      ) {
         if (!currentUser) {
           throw new Error("Musisz być zalogowany.");
         }
@@ -476,6 +483,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
               requestId,
               decision,
               transferTargetEventId,
+              acceptedParticipantStatus,
             },
             currentUser,
           ),

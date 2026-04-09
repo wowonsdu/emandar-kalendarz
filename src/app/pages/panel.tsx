@@ -42,6 +42,7 @@ import {
   getOrganizerOfficialDashboardModel,
   getParticipantDashboardModel,
   getParticipantEnrollmentViewRecords,
+  type ParticipantEnrollmentViewRecord,
   type ParticipantGroupEventRecord,
   type ParticipantPendingEnrollmentRequestRecord,
 } from "@/app/dashboard";
@@ -1254,7 +1255,7 @@ function ParticipantGroupEventCard({
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-            {record.eventParticipant.status}
+            {getEventParticipantStatusLabel(record.eventParticipant.status)}
           </span>
           <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
             {getGroupPriorityLabel(record.eventParticipant.priority)}
@@ -1611,6 +1612,7 @@ function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
 
 const MANAGEABLE_EVENT_PARTICIPANT_STATUSES = [
   "invited",
+  "rezerwowy",
   "confirmed",
   "declined",
 ] as const satisfies EventParticipantStatus[];
@@ -1618,8 +1620,9 @@ const MANAGEABLE_EVENT_PARTICIPANT_STATUSES = [
 const EVENT_PARTICIPANT_STATUS_ORDER: Record<EventParticipantStatus, number> = {
   confirmed: 0,
   invited: 1,
-  declined: 2,
-  removed: 3,
+  rezerwowy: 2,
+  declined: 3,
+  removed: 4,
 };
 
 type GroupEventRosterSectionKey = GroupMemberPriority | "joining";
@@ -1628,12 +1631,16 @@ function getEventParticipantStatusLabel(status: EventParticipantStatus) {
   switch (status) {
     case "confirmed":
       return "Potwierdził";
+    case "rezerwowy":
+      return "Rezerwowy";
     case "declined":
       return "Odrzucił";
     case "removed":
       return "Usunięty";
-    default:
+    case "invited":
       return "Zaproszony";
+    default:
+      return status;
   }
 }
 
@@ -2002,11 +2009,19 @@ type EnrollmentRequestDisplayStatus = EnrollmentRequest["finalStatus"] | "partia
 
 type EnrollmentRequestArchiveSectionKey = "active" | "confirmed" | "rejected";
 
+type ParticipantOfficialEnrollmentSectionKey = "pending" | "reserve" | "participating";
+
 type EnrollmentRequestArchiveSection = {
   key: EnrollmentRequestArchiveSectionKey;
   title: string;
   requests: EnrollmentRequest[];
   defaultOpen: boolean;
+};
+
+type ParticipantOfficialEnrollmentSection = {
+  key: ParticipantOfficialEnrollmentSectionKey;
+  title: string;
+  records: ParticipantEnrollmentViewRecord[];
 };
 
 type EnrollmentRequestListItemPosition = "single" | "first" | "middle" | "last";
@@ -2033,6 +2048,61 @@ function resolveEnrollmentRequestDisplayStatus(
   request: Pick<EnrollmentRequest, "finalStatus">,
 ): EnrollmentRequestDisplayStatus {
   return request.finalStatus as EnrollmentRequestDisplayStatus;
+}
+
+function canMoveEnrollmentRequestToReserve(event: Pick<TrainingEvent, "brandStatus" | "groupId">) {
+  return !isCommunityPanelEvent(event) && Boolean(event.groupId);
+}
+
+export function buildParticipantOfficialEnrollmentSections(
+  records: ParticipantEnrollmentViewRecord[],
+): ParticipantOfficialEnrollmentSection[] {
+  const buckets: Record<ParticipantOfficialEnrollmentSectionKey, ParticipantEnrollmentViewRecord[]> = {
+    pending: [],
+    reserve: [],
+    participating: [],
+  };
+
+  records.forEach((record) => {
+    if (record.isArchived) {
+      return;
+    }
+
+    if (record.kind === "request" && record.displayStatus === "pending") {
+      buckets.pending.push(record);
+      return;
+    }
+
+    if (record.kind === "roster" && record.eventParticipant.status === "rezerwowy") {
+      buckets.reserve.push(record);
+      return;
+    }
+
+    if (
+      record.kind === "roster" &&
+      (record.eventParticipant.status === "invited" || record.eventParticipant.status === "confirmed")
+    ) {
+      buckets.participating.push(record);
+    }
+  });
+
+  return [
+    {
+      key: "pending",
+      title: "Oczekujące",
+      records: buckets.pending,
+    },
+    {
+      key: "reserve",
+      title: "Lista rezerwowych",
+      records: buckets.reserve,
+    },
+    {
+      key: "participating",
+      title: "Uczestniczę",
+      records: buckets.participating,
+    },
+  ].filter((section) => section.records.length > 0);
 }
 
 function isEnrollmentRequestTransferredByStaff(
@@ -2565,12 +2635,16 @@ function getEnrollmentRequestDecisionOptions(
 
 export function EnrollmentRequestDecisionButtons({
   finalStatus,
+  canReserve = false,
   disabled = false,
   onDecision,
+  onReserve,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
+  canReserve?: boolean;
   disabled?: boolean;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
+  onReserve?: () => void;
 }) {
   return (
     <div className="flex items-center gap-3">
@@ -2589,6 +2663,16 @@ export function EnrollmentRequestDecisionButtons({
           {decision === "accepted" ? "Potwierdź" : "Odrzuć"}
         </button>
       ))}
+      {canReserve && finalStatus === "pending" ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onReserve?.()}
+          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+        >
+          Rezerwowy
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -2823,17 +2907,21 @@ function EnrollmentRequestTransferPanel({
 
 export function EnrollmentRequestManagementActions({
   finalStatus,
+  canReserve = false,
   disabled = false,
   transferPending = false,
   transferTargetEventId = "",
   onDecision,
+  onReserve,
   onTransfer,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
+  canReserve?: boolean;
   disabled?: boolean;
   transferPending?: boolean;
   transferTargetEventId?: string;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
+  onReserve?: () => void;
   onTransfer: () => void;
 }) {
   const canReject = finalStatus !== "rejected";
@@ -2851,6 +2939,17 @@ export function EnrollmentRequestManagementActions({
           className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
         >
           Odrzuć
+        </button>
+      ) : null}
+
+      {canReserve && canAccept ? (
+        <button
+          type="button"
+          disabled={isDisabled}
+          onClick={() => onReserve?.()}
+          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+        >
+          Rezerwowy
         </button>
       ) : null}
 
@@ -3060,10 +3159,12 @@ function ManagedEventParticipantSections({
 
 function ManagedEnrollmentRequestsSection({
   canManageRequests,
+  canReserveRequests,
   event,
   eventGroup,
   movingRequestId,
   onDecision,
+  onReserve,
   onTransfer,
   onTransferSelectionChange,
   requestSections,
@@ -3076,10 +3177,12 @@ function ManagedEnrollmentRequestsSection({
   onExpandedSectionChange,
 }: {
   canManageRequests: boolean;
+  canReserveRequests: boolean;
   event: TrainingEvent;
   eventGroup?: Group | null;
   movingRequestId: string | null;
   onDecision: (request: EnrollmentRequest, decision: DecisionStatus) => Promise<void>;
+  onReserve: (request: EnrollmentRequest) => Promise<void>;
   onTransfer: (request: EnrollmentRequest) => Promise<void>;
   onTransferSelectionChange: (requestId: string, nextValue: string) => void;
   requestSections: EnrollmentRequestArchiveSection[];
@@ -3158,10 +3261,12 @@ function ManagedEnrollmentRequestsSection({
                       {canManageRequests ? (
                         <EnrollmentRequestManagementActions
                           finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
+                          canReserve={canReserveRequests}
                           disabled={updatingRequestId === request.id}
                           transferPending={movingRequestId === request.id}
                           transferTargetEventId={transferTargetEventId}
                           onDecision={(decision) => void onDecision(request, decision)}
+                          onReserve={() => void onReserve(request)}
                           onTransfer={() => void onTransfer(request)}
                         />
                       ) : null}
@@ -5729,6 +5834,62 @@ export function RequestsPage() {
     );
   }
 
+  async function handleRequestDecision(
+    request: EnrollmentRequest,
+    event: TrainingEvent,
+    decision: Extract<DecisionStatus, "accepted" | "rejected">,
+  ) {
+    setUpdatingRequestId(request.id);
+
+    try {
+      await manageEnrollmentRequest(request.id, decision);
+      if (decision === "accepted") {
+        const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
+          request,
+          event,
+          store,
+        });
+        const addedToGroup = groupAssignmentTarget
+          ? await openAcceptedRequestGroupDialog(groupAssignmentTarget)
+          : false;
+        toast.success(
+          event.groupId
+            ? addedToGroup
+              ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+              : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+            : "Potwierdzono zgłoszenie.",
+        );
+      } else {
+        toast.success("Odrzucono zgłoszenie.");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zaktualizować zgłoszenia.",
+      );
+    } finally {
+      setUpdatingRequestId(null);
+    }
+  }
+
+  async function handleReserveRequest(request: EnrollmentRequest, event: TrainingEvent) {
+    setUpdatingRequestId(request.id);
+
+    try {
+      await manageEnrollmentRequest(request.id, "accepted", undefined, "rezerwowy");
+      toast.success(
+        event.groupId
+          ? "Przeniesiono zgłoszenie na listę rezerwowych wydarzenia."
+          : "Przeniesiono zgłoszenie na listę rezerwowych.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się przenieść zgłoszenia na rezerwę.",
+      );
+    } finally {
+      setUpdatingRequestId(null);
+    }
+  }
+
   return (
     <PanelSection
       eyebrow="Chcą wziąć udział"
@@ -5788,43 +5949,12 @@ export function RequestsPage() {
                       {canDecideRequest ? (
                         <EnrollmentRequestDecisionButtons
                           finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
+                          canReserve={canMoveEnrollmentRequestToReserve(event)}
                           disabled={updatingRequestId === request.id}
-                          onDecision={(decision) => {
-                            void (async () => {
-                              setUpdatingRequestId(request.id);
-
-                              try {
-                                await manageEnrollmentRequest(request.id, decision);
-                                if (decision === "accepted") {
-                                  const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
-                                    request,
-                                    event,
-                                    store,
-                                  });
-                                  const addedToGroup = groupAssignmentTarget
-                                    ? await openAcceptedRequestGroupDialog(groupAssignmentTarget)
-                                    : false;
-                                  toast.success(
-                                    event.groupId
-                                      ? addedToGroup
-                                        ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
-                                        : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
-                                      : "Potwierdzono zgłoszenie.",
-                                  );
-                                } else if (decision === "rejected") {
-                                  toast.success("Odrzucono zgłoszenie.");
-                                }
-                              } catch (error) {
-                                toast.error(
-                                  error instanceof Error
-                                    ? error.message
-                                    : "Nie udało się zaktualizować zgłoszenia.",
-                                );
-                              } finally {
-                                setUpdatingRequestId(null);
-                              }
-                            })();
-                          }}
+                          onDecision={(decision) =>
+                            void handleRequestDecision(request, event, decision)
+                          }
+                          onReserve={() => void handleReserveRequest(request, event)}
                         />
                       ) : null}
                     </div>
@@ -8939,6 +9069,10 @@ export function EventsPage() {
       participantEnrollmentRecords.filter((record) => !isCommunityPanelEvent(record.event)),
     [participantEnrollmentRecords],
   );
+  const participantOfficialSections = useMemo(
+    () => buildParticipantOfficialEnrollmentSections(participantOfficialRecords),
+    [participantOfficialRecords],
+  );
   const participantCommunityRecords = useMemo(
     () =>
       participantEnrollmentRecords.filter((record) => isCommunityPanelEvent(record.event)),
@@ -9938,26 +10072,41 @@ export function EventsPage() {
         )
       ) : !isCreatorView && isOfficialJoinedView ? (
         <div className="space-y-6">
-          {participantOfficialRecords.length === 0 ? (
+          {participantOfficialSections.length === 0 ? (
             <EmptyPanelState
-              title="Nie masz jeszcze żadnych szkoleń"
-              description="Kiedy zapiszesz się na szkolenie Emandar, pojawi się ono tutaj."
+              title="Brak aktywnych szkoleń"
+              description="Gdy zgłosisz się na szkolenie Emandar albo trafisz na roster, pojawi się ono tutaj w odpowiedniej sekcji."
             />
           ) : (
-            <div className="space-y-4">
-              <SectionBlockHeading />
-              {participantOfficialRecords.map((record) => (
-                record.kind === "request" ? (
-                  <ParticipantPendingEnrollmentRequestCard
-                    key={record.request.id}
-                    record={record}
-                  />
-                ) : (
-                  <ParticipantGroupEventCard
-                    key={record.eventParticipant.id}
-                    record={record}
-                  />
-                )
+            <div className="-mx-6 space-y-5 sm:mx-0 sm:space-y-6">
+              {participantOfficialSections.map((section) => (
+                <section key={section.key} className="space-y-1.5 sm:space-y-3">
+                  <div className="flex items-center gap-2 px-6 sm:px-1">
+                    <span className="rounded-full bg-brand-navy/8 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:px-3 sm:py-1 sm:text-[11px] sm:tracking-[0.2em]">
+                      {section.title}
+                    </span>
+                    <div className="h-px flex-1 bg-brand-line/80" />
+                    <span className="text-[11px] text-brand-muted sm:text-xs">
+                      {section.records.length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 px-6 sm:px-0">
+                    {section.records.map((record) =>
+                      record.kind === "request" ? (
+                        <ParticipantPendingEnrollmentRequestCard
+                          key={record.request.id}
+                          record={record}
+                        />
+                      ) : (
+                        <ParticipantGroupEventCard
+                          key={record.eventParticipant.id}
+                          record={record}
+                        />
+                      ),
+                    )}
+                  </div>
+                </section>
               ))}
             </div>
           )}
@@ -10552,13 +10701,24 @@ export function EventManagementPage() {
   async function handleEnrollmentDecision(
     request: EnrollmentRequest,
     decision: DecisionStatus,
+    acceptedParticipantStatus?: Extract<EventParticipantStatus, "invited" | "confirmed" | "rezerwowy">,
   ) {
     setUpdatingRequestId(request.id);
 
     try {
-      await manageEnrollmentRequest(request.id, decision);
+      await manageEnrollmentRequest(
+        request.id,
+        decision,
+        undefined,
+        acceptedParticipantStatus,
+      );
 
       if (decision === "accepted") {
+        if (acceptedParticipantStatus === "rezerwowy") {
+          toast.success("Przeniesiono zgłoszenie na listę rezerwowych.");
+          return;
+        }
+
         const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
           request,
           event,
@@ -10586,6 +10746,10 @@ export function EventManagementPage() {
     } finally {
       setUpdatingRequestId(null);
     }
+  }
+
+  async function handleEnrollmentReserve(request: EnrollmentRequest) {
+    return handleEnrollmentDecision(request, "accepted", "rezerwowy");
   }
 
   async function handleEventParticipantStatusChange(
@@ -10993,10 +11157,12 @@ export function EventManagementPage() {
           <>
             <ManagedEnrollmentRequestsSection
               canManageRequests={canManageEvent && !eventIsArchived}
+              canReserveRequests={canMoveEnrollmentRequestToReserve(event)}
               event={event}
               eventGroup={eventGroup}
               movingRequestId={movingRequestId}
               onDecision={handleEnrollmentDecision}
+              onReserve={handleEnrollmentReserve}
               onTransfer={handleTransferEnrollmentRequest}
               onTransferSelectionChange={(requestId, nextValue) =>
                 setTransferSelections((previous) => ({
@@ -11811,10 +11977,12 @@ export function EventManagementPage() {
         <>
           <ManagedEnrollmentRequestsSection
             canManageRequests={true}
+            canReserveRequests={canMoveEnrollmentRequestToReserve(event)}
             event={event}
             eventGroup={eventGroup}
             movingRequestId={movingRequestId}
             onDecision={handleEnrollmentDecision}
+            onReserve={handleEnrollmentReserve}
             onTransfer={handleTransferEnrollmentRequest}
             onTransferSelectionChange={(requestId, nextValue) =>
               setTransferSelections((previous) => ({

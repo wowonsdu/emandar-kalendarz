@@ -870,6 +870,12 @@ describe("manageEnrollmentRequest", () => {
       status: "invited",
       source: "public-form",
     });
+    expect(updatedStore.trainingEvents[0]).toMatchObject({
+      id: "event-group",
+      assignedCount: 1,
+      enrolledCount: 0,
+      reserveCount: 0,
+    });
   });
 
   it("lets an organizer finalize grouped enrollments into the roster", async () => {
@@ -995,9 +1001,15 @@ describe("manageEnrollmentRequest", () => {
       status: "invited",
       source: "public-form",
     });
+    expect(updatedStore.trainingEvents[0]).toMatchObject({
+      id: "event-group-organizer",
+      assignedCount: 1,
+      enrolledCount: 0,
+      reserveCount: 0,
+    });
   });
 
-  it("lets an organizer move an accepted grouped enrollment to the reserve roster", async () => {
+  it("moves accepted grouped enrollments to reserve automatically when the roster is full", async () => {
     const { manageEnrollmentRequest } = await import("./mockRepository");
     const actor = createActor({
       id: "user-organizer-1",
@@ -1019,6 +1031,7 @@ describe("manageEnrollmentRequest", () => {
         trainerUserId: "user-trainer-1",
         groupId: "group-1",
         groupName: "EnergyTeam x1",
+        capacity: 1,
       },
       actor,
     );
@@ -1094,6 +1107,28 @@ describe("manageEnrollmentRequest", () => {
         createdAt: "2026-04-02T12:00:00.000Z",
       },
     ];
+    store.eventParticipants = [
+      {
+        id: "event-group-reserve__participant-existing",
+        eventId: "event-group-reserve",
+        eventTitle: "Szkolenie grupowe",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        participantProfileId: "participant-existing",
+        participantDisplayName: "Miejsce zajęte",
+        participantPhone: "+48 605 100 399",
+        participantUserId: null,
+        priority: "stali",
+        status: "invited",
+        source: "auto-core",
+        invitedAt: "2026-04-01T10:00:00.000Z",
+        updatedAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
     const mockedApi = mockStoreFetch(store);
 
     await expect(
@@ -1101,7 +1136,6 @@ describe("manageEnrollmentRequest", () => {
         {
           requestId: "enrollment-organizer-reserve",
           decision: "accepted",
-          acceptedParticipantStatus: "rezerwowy",
         },
         actor,
       ),
@@ -1114,7 +1148,8 @@ describe("manageEnrollmentRequest", () => {
       eventParticipantId: "event-group-reserve__participant-1",
       participantStatus: "active",
     });
-    expect(updatedStore.eventParticipants[0]).toMatchObject({
+    expect(updatedStore.eventParticipants.find((item) => item.id === "event-group-reserve__participant-1"))
+      .toMatchObject({
       id: "event-group-reserve__participant-1",
       eventId: "event-group-reserve",
       participantProfileId: "participant-1",
@@ -1123,7 +1158,9 @@ describe("manageEnrollmentRequest", () => {
     });
     expect(updatedStore.trainingEvents[0]).toMatchObject({
       id: "event-group-reserve",
+      assignedCount: 1,
       enrolledCount: 0,
+      reserveCount: 1,
     });
   });
 
@@ -1905,7 +1942,7 @@ describe("organizer profile updates", () => {
 });
 
 describe("group event roster defaults", () => {
-  it("creates a full invited roster from the group when a grouped training event is created", async () => {
+  it("creates an invited roster from eligible group members when a grouped training event is created", async () => {
     const { createTrainingEvent } = await import("./mockRepository");
     const actor = createActor({
       id: "user-organizer-1",
@@ -2029,9 +2066,11 @@ describe("group event roster defaults", () => {
     expect(createdEvent).toMatchObject({
       groupId: "group-1",
       groupName: "Grupa oddechowa",
+      assignedCount: 1,
       enrolledCount: 0,
+      reserveCount: 0,
     });
-    expect(updatedStore.eventParticipants).toHaveLength(2);
+    expect(updatedStore.eventParticipants).toHaveLength(1);
     expect(updatedStore.eventParticipants.map((item) => ({
       participantProfileId: item.participantProfileId,
       priority: item.priority,
@@ -2045,17 +2084,11 @@ describe("group event roster defaults", () => {
           status: "invited",
           source: "auto-core",
         },
-        {
-          participantProfileId: "participant-2",
-          priority: "rezerwowi",
-          status: "invited",
-          source: "auto-core",
-        },
       ]),
     );
   });
 
-  it("counts only confirmed participants in enrolledCount for grouped events", async () => {
+  it("counts assigned, confirmed, and reserve participants separately for grouped events", async () => {
     const { updateEventParticipantStatus } = await import("./mockRepository");
     const actor = createActor();
     const store = createStore(
@@ -2128,6 +2161,8 @@ describe("group event roster defaults", () => {
 
     let updatedStore = mockedApi.getStore();
     expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(1);
 
     await expect(
       updateEventParticipantStatus(
@@ -2141,6 +2176,8 @@ describe("group event roster defaults", () => {
 
     updatedStore = mockedApi.getStore();
     expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(1);
 
     await expect(
       updateEventParticipantStatus(
@@ -2154,6 +2191,8 @@ describe("group event roster defaults", () => {
 
     updatedStore = mockedApi.getStore();
     expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(2);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(0);
 
     await expect(
       updateEventParticipantStatus(
@@ -2167,6 +2206,8 @@ describe("group event roster defaults", () => {
 
     updatedStore = mockedApi.getStore();
     expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(0);
   });
 
   it("does not restore the previous user profile after sign-out", async () => {

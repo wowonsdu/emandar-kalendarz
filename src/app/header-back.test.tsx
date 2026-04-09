@@ -95,6 +95,25 @@ describe("header back config", () => {
     });
   });
 
+  it("routes community event edit views back to the community events list", () => {
+    const config = getHeaderBackConfig({
+      kind: "panel",
+      pathname: "/panel/wydarzenia-spolecznosci/event-1/edytuj",
+      search: "",
+      state: null,
+      rootPaths: new Set([
+        "/panel/dashboard",
+        "/panel/wydarzenia-spolecznosci",
+      ]),
+    });
+
+    expect(config).toEqual({
+      showBackButton: true,
+      fallbackPath: "/panel/wydarzenia-spolecznosci",
+      stateBackPath: null,
+    });
+  });
+
   it("keeps explicit state back paths ahead of fallbacks", () => {
     const config = getHeaderBackConfig({
       kind: "public",

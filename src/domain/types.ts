@@ -259,6 +259,8 @@ export interface TrainingEvent {
   location: string;
   tags?: string[];
   capacity: number;
+  assignedCount?: number;
+  reserveCount?: number;
   enrolledCount: number;
   isPublished: boolean;
   imageHint: string;

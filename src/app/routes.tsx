@@ -90,6 +90,7 @@ export const router = createBrowserRouter(
             { path: "szkolenia/:eventId", Component: EventManagementPage },
             { path: "wydarzenia-spolecznosci", Component: EventsPage },
             { path: "wydarzenia-spolecznosci/utworz", Component: EventsPage },
+            { path: "wydarzenia-spolecznosci/:eventId/edytuj", Component: EventManagementPage },
             { path: "wydarzenia-spolecznosci/:eventId", Component: EventManagementPage },
             { path: "moderacja-wydarzen-spolecznosci", Component: EventsPage },
             { path: "uzytkownicy", Component: UserManagementPage },

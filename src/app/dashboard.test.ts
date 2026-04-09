@@ -505,6 +505,7 @@ describe("dashboard helpers", () => {
         },
       ],
       capacity: 10,
+      assignedCount: 8,
       enrolledCount: 6,
     });
     const groupedEventAccepted = createEvent({
@@ -625,7 +626,8 @@ describe("dashboard helpers", () => {
       expect.objectContaining({
         event: expect.objectContaining({ id: "event-group-1" }),
         pendingRequestCount: 1,
-        missingPeople: 4,
+        missingPeople: 2,
+        fillRate: 80,
       }),
     ]);
   });

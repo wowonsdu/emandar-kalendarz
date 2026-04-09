@@ -593,20 +593,49 @@ export function getTrainingEventScheduleBounds(
   };
 }
 
-export function getAvailablePlaces(
-  event: Pick<TrainingEvent, "capacity" | "enrolledCount">,
+export function isOfficialGroupTrainingEvent(
+  event: Partial<Pick<TrainingEvent, "brandStatus" | "groupId">>,
 ) {
-  return Math.max(event.capacity - event.enrolledCount, 0);
+  return !isCommunityBrandStatus(event.brandStatus) && Boolean(event.groupId);
+}
+
+export function getEventParticipantCount(
+  event: Pick<TrainingEvent, "enrolledCount" | "capacity"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  if (isOfficialGroupTrainingEvent(event)) {
+    return typeof event.assignedCount === "number" ? event.assignedCount : event.enrolledCount;
+  }
+
+  return event.enrolledCount;
+}
+
+export function getEventOverflowCount(
+  event: Pick<TrainingEvent, "enrolledCount" | "capacity"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  return Math.max(getEventParticipantCount(event) - event.capacity, 0);
+}
+
+export function getAvailablePlaces(
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  return Math.max(event.capacity - getEventParticipantCount(event), 0);
 }
 
 export function getEventFillRate(
-  event: Pick<TrainingEvent, "capacity" | "enrolledCount">,
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
 ) {
   if (event.capacity <= 0) {
     return 0;
   }
 
-  return Math.round((Math.min(event.enrolledCount, event.capacity) / event.capacity) * 1000) / 10;
+  return (
+    Math.round((Math.min(getEventParticipantCount(event), event.capacity) / event.capacity) * 1000) /
+    10
+  );
 }
 
 export function aggregateEventCapacityStats(events: TrainingEvent[]) {

@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   AcceptedRequestGroupDialogBody,
   buildParticipantOfficialEnrollmentSections,
+  buildCommunityParticipantSections,
+  buildCommunityReserveSections,
   buildEnrollmentRequestTransferOptions,
+  buildManagedEventParticipantSections,
   createAcceptedRequestGroupDialogDraft,
   EnrollmentRequestManagementActions,
   EnrollmentRequestDecisionButtons,
@@ -364,6 +367,7 @@ describe("splitEnrollmentRequestsByIntent", () => {
     ]);
 
     expect(sections.map((section) => section.key)).toEqual(["active", "confirmed", "rejected"]);
+    expect(sections.find((section) => section.key === "active")?.title).toBe("Oczekujące");
     expect(sections.find((section) => section.key === "active")?.requests.map((item) => item.id)).toEqual([
       "request-pending",
     ]);
@@ -438,17 +442,16 @@ describe("EnrollmentRequestDecisionButtons", () => {
     expect(markup).not.toContain("Odrzuć");
   });
 
-  it("shows reserve action for pending grouped official requests", () => {
+  it("shows acceptance hint for pending grouped official requests", () => {
     const markup = renderToStaticMarkup(
       <EnrollmentRequestDecisionButtons
         finalStatus="pending"
-        canReserve
+        acceptHint="Po potwierdzeniu osoba trafi na listę rezerwowych."
         onDecision={() => {}}
-        onReserve={() => {}}
       />,
     );
 
-    expect(markup).toContain("Rezerwowy");
+    expect(markup).toContain("Po potwierdzeniu osoba trafi na listę rezerwowych.");
   });
 });
 
@@ -468,20 +471,89 @@ describe("EnrollmentRequestManagementActions", () => {
     expect(markup).not.toContain("Potwierdź");
   });
 
-  it("shows reserve action next to pending request controls", () => {
+  it("shows acceptance hint next to pending request controls", () => {
     const markup = renderToStaticMarkup(
       <EnrollmentRequestManagementActions
         finalStatus="pending"
-        canReserve
+        acceptHint="Po potwierdzeniu osoba trafi na listę uczestników szkolenia."
         onDecision={() => {}}
-        onReserve={() => {}}
         onTransfer={() => {}}
       />,
     );
 
     expect(markup).toContain("Odrzuć");
-    expect(markup).toContain("Rezerwowy");
     expect(markup).toContain("Potwierdź");
+    expect(markup).toContain("Po potwierdzeniu osoba trafi na listę uczestników szkolenia.");
+  });
+});
+
+describe("buildManagedEventParticipantSections", () => {
+  it("splits official grouped training roster into assigned, reserve, and inactive sections", () => {
+    const sections = buildManagedEventParticipantSections(
+      createTrainingEvent({
+        groupId: "group-1",
+        groupName: "Grupa testowa",
+        brandStatus: "official",
+      }),
+      [
+        createEventParticipant({ id: "participant-invited", status: "invited" }),
+        createEventParticipant({ id: "participant-confirmed", status: "confirmed" }),
+        createEventParticipant({ id: "participant-reserve", status: "rezerwowy" }),
+        createEventParticipant({ id: "participant-declined", status: "declined" }),
+      ],
+      new Map(),
+    );
+
+    expect(sections).toEqual([
+      expect.objectContaining({
+        key: "assigned",
+        title: "Lista uczestników",
+        participants: expect.arrayContaining([
+          expect.objectContaining({ id: "participant-confirmed" }),
+          expect.objectContaining({ id: "participant-invited" }),
+        ]),
+      }),
+      expect.objectContaining({
+        key: "reserve",
+        title: "Lista rezerwowych",
+        participants: [expect.objectContaining({ id: "participant-reserve" })],
+      }),
+      expect.objectContaining({
+        key: "inactive",
+        title: "Poza listą",
+        participants: [expect.objectContaining({ id: "participant-declined" })],
+      }),
+    ]);
+  });
+});
+
+describe("community participant sections", () => {
+  it("splits community participants and reserve entries into separate section helpers", () => {
+    const participants = [
+      createEventParticipant({ id: "participant-invited", status: "invited" }),
+      createEventParticipant({ id: "participant-confirmed", status: "confirmed" }),
+      createEventParticipant({ id: "participant-reserve", status: "rezerwowy" }),
+      createEventParticipant({ id: "participant-declined", status: "declined" }),
+    ];
+
+    expect(buildCommunityParticipantSections(participants)).toEqual([
+      expect.objectContaining({
+        key: "participants",
+        title: "Uczestnicy",
+        participants: expect.arrayContaining([
+          expect.objectContaining({ id: "participant-confirmed" }),
+          expect.objectContaining({ id: "participant-invited" }),
+        ]),
+      }),
+    ]);
+
+    expect(buildCommunityReserveSections(participants)).toEqual([
+      expect.objectContaining({
+        key: "reserve",
+        title: "Rezerwowi",
+        participants: [expect.objectContaining({ id: "participant-reserve" })],
+      }),
+    ]);
   });
 });
 

@@ -16,6 +16,8 @@ import {
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  getEventOverflowCount,
+  getEventParticipantCount,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventWorkflowStatusLabel,
@@ -243,6 +245,52 @@ describe("participant priority helpers", () => {
       { priority: "regularni", ids: ["regularni-a"] },
       { priority: "rezerwowi", ids: ["rezerwowi-z"] },
     ]);
+  });
+});
+
+describe("event participant occupancy helpers", () => {
+  it("uses assignedCount for official grouped trainings", () => {
+    const event = {
+      brandStatus: "official" as const,
+      groupId: "group-1",
+      assignedCount: 5,
+      enrolledCount: 0,
+      capacity: 10,
+    };
+
+    expect(getEventParticipantCount(event)).toBe(5);
+    expect(getAvailablePlaces(event)).toBe(5);
+    expect(getEventFillRate(event)).toBe(50);
+    expect(getEventOverflowCount(event)).toBe(0);
+  });
+
+  it("keeps enrolledCount-based occupancy for non-grouped or community events", () => {
+    const communityEvent = {
+      brandStatus: "supported" as const,
+      groupId: null,
+      assignedCount: 8,
+      enrolledCount: 3,
+      capacity: 10,
+    };
+
+    expect(getEventParticipantCount(communityEvent)).toBe(3);
+    expect(getAvailablePlaces(communityEvent)).toBe(7);
+    expect(getEventFillRate(communityEvent)).toBe(30);
+  });
+
+  it("reports overflow for over-capacity grouped trainings without creating negative availability", () => {
+    const event = {
+      brandStatus: "official" as const,
+      groupId: "group-1",
+      assignedCount: 25,
+      enrolledCount: 20,
+      capacity: 20,
+    };
+
+    expect(getEventParticipantCount(event)).toBe(25);
+    expect(getEventOverflowCount(event)).toBe(5);
+    expect(getAvailablePlaces(event)).toBe(0);
+    expect(getEventFillRate(event)).toBe(100);
   });
 });
 

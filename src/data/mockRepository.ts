@@ -61,6 +61,7 @@ import {
   getRoleHierarchyLevel,
   hasModeratorAccess,
   isCommunityBrandStatus,
+  isOfficialGroupTrainingEvent,
   isTrainingEventArchived,
   isTrainingEventPubliclyVisible,
   isOrganizerFunctionsBlocked,
@@ -326,13 +327,54 @@ function countConfirmedEventParticipants(store: DemoStore, eventId: string) {
   ).length;
 }
 
-function recomputeEventEnrolledCount(store: DemoStore, eventId: string) {
+function countAssignedEventParticipants(
+  store: Pick<DemoStore, "eventParticipants">,
+  eventId: string,
+) {
+  return store.eventParticipants.filter(
+    (participant) =>
+      participant.eventId === eventId &&
+      (participant.status === "invited" || participant.status === "confirmed"),
+  ).length;
+}
+
+function countReservedEventParticipants(
+  store: Pick<DemoStore, "eventParticipants">,
+  eventId: string,
+) {
+  return store.eventParticipants.filter(
+    (participant) => participant.eventId === eventId && participant.status === "rezerwowy",
+  ).length;
+}
+
+function recomputeEventParticipantCounts(store: DemoStore, eventId: string) {
   const event = store.trainingEvents.find((item) => item.id === eventId);
   if (!event) {
     return;
   }
 
+  event.assignedCount = countAssignedEventParticipants(store, eventId);
   event.enrolledCount = countConfirmedEventParticipants(store, eventId);
+  event.reserveCount = countReservedEventParticipants(store, eventId);
+}
+
+function resolveEligibleGroupPriorities(
+  event: Pick<TrainingEvent, "eligibleGroupPriorities">,
+) {
+  return event.eligibleGroupPriorities?.length && event.eligibleGroupPriorities.length > 0
+    ? event.eligibleGroupPriorities
+    : (["stali", "regularni"] as const satisfies GroupMemberPriority[]);
+}
+
+function canAutoAssignGroupMemberToEvent(
+  event: Pick<TrainingEvent, "groupId" | "eligibleGroupPriorities">,
+  member: Pick<GroupMember, "priority" | "membershipStatus">,
+) {
+  return (
+    Boolean(event.groupId) &&
+    member.membershipStatus === "active" &&
+    resolveEligibleGroupPriorities(event).includes(member.priority)
+  );
 }
 
 function syncParticipantProfileGroupMembership(
@@ -373,7 +415,7 @@ function syncGroupMemberToEvent(
   member: GroupMember,
   source: EventParticipant["source"] = "auto-core",
 ) {
-  if (!event.groupId || member.membershipStatus !== "active") {
+  if (!canAutoAssignGroupMemberToEvent(event, member)) {
     return null;
   }
 
@@ -429,7 +471,7 @@ function syncGroupMemberToEvent(
     store.eventParticipants.unshift(payload);
   }
 
-  recomputeEventEnrolledCount(store, event.id);
+  recomputeEventParticipantCounts(store, event.id);
   return eventParticipantId;
 }
 
@@ -458,7 +500,7 @@ function syncGroupRosterToEvent(store: DemoStore, event: TrainingEvent) {
     syncGroupMemberToEvent(store, event, member, "auto-core");
   });
 
-  recomputeEventEnrolledCount(store, event.id);
+  recomputeEventParticipantCounts(store, event.id);
 }
 
 function splitDisplayName(value: string) {
@@ -936,7 +978,9 @@ function rebuildEventDerivedFields(store: DemoStore) {
   store.trainingEvents = store.trainingEvents.map((event) => {
     return {
       ...event,
+      assignedCount: countAssignedEventParticipants(store, event.id),
       enrolledCount: countConfirmedEventParticipants(store, event.id),
+      reserveCount: countReservedEventParticipants(store, event.id),
     };
   });
 
@@ -1558,7 +1602,7 @@ function syncEventParticipantFromEnrollment(
   }
 
   request.eventParticipantId = eventParticipantId;
-  recomputeEventEnrolledCount(store, event.id);
+  recomputeEventParticipantCounts(store, event.id);
 }
 
 function markEventParticipantFromEnrollmentAsDeclined(
@@ -1618,6 +1662,26 @@ function transferEnrollmentRequestToEvent(
   store.enrollmentRequests.unshift(transferredRequest);
 }
 
+function resolveAcceptedRequestParticipantStatus(
+  store: Pick<DemoStore, "eventParticipants">,
+  event: Pick<TrainingEvent, "id" | "assignedCount" | "capacity" | "brandStatus" | "groupId">,
+  preferredStatus?: Extract<EventParticipant["status"], "invited" | "confirmed" | "rezerwowy">,
+) {
+  if (preferredStatus) {
+    return preferredStatus;
+  }
+
+  if (isOfficialGroupTrainingEvent(event)) {
+    const assignedCount =
+      typeof event.assignedCount === "number"
+        ? event.assignedCount
+        : countAssignedEventParticipants(store, event.id);
+    return assignedCount < event.capacity ? "invited" : "rezerwowy";
+  }
+
+  return event.groupId ? "invited" : "confirmed";
+}
+
 export async function decideEnrollment(
   requestId: string,
   currentUser: AppUser,
@@ -1671,7 +1735,7 @@ export async function manageEnrollmentRequest(
       request.participantManagedAt = nowIso();
       request.participantActionSource = "staff";
       markEventParticipantFromEnrollmentAsDeclined(store, request);
-      recomputeEventEnrolledCount(store, event.id);
+      recomputeEventParticipantCounts(store, event.id);
       transferEnrollmentRequestToEvent(store, request, targetEvent);
       return;
     }
@@ -1682,7 +1746,7 @@ export async function manageEnrollmentRequest(
       syncEventParticipantFromEnrollment(
         store,
         request,
-        input.acceptedParticipantStatus ?? (event.groupId ? "invited" : "confirmed"),
+        resolveAcceptedRequestParticipantStatus(store, event, input.acceptedParticipantStatus),
       );
     }
 
@@ -1693,7 +1757,7 @@ export async function manageEnrollmentRequest(
       request.participantStatus = "active";
     }
 
-    recomputeEventEnrolledCount(store, event.id);
+    recomputeEventParticipantCounts(store, event.id);
   });
 }
 
@@ -1720,7 +1784,7 @@ export async function manageOwnGroupEventParticipation(
       entry.status = "declined";
       entry.declinedAt = nowIso();
       entry.updatedAt = nowIso();
-      recomputeEventEnrolledCount(store, entry.eventId);
+      recomputeEventParticipantCounts(store, entry.eventId);
       return;
     }
 
@@ -1731,7 +1795,7 @@ export async function manageOwnGroupEventParticipation(
     entry.status = "declined";
     entry.declinedAt = nowIso();
     entry.updatedAt = nowIso();
-    recomputeEventEnrolledCount(store, entry.eventId);
+    recomputeEventParticipantCounts(store, entry.eventId);
     store.enrollmentRequests.unshift({
       id: createId("enrollment"),
       eventId: input.transferTargetEventId,
@@ -2126,7 +2190,7 @@ export async function addEventParticipant(input: EventParticipantInput, actor: A
       overCapacity: input.overCapacity === true,
       invitedAt: nowIso(),
     });
-    recomputeEventEnrolledCount(store, event.id);
+    recomputeEventParticipantCounts(store, event.id);
 
     return {
       ok: true as const,
@@ -2186,7 +2250,7 @@ export async function updateEventParticipantStatus(
       participant.confirmedAt = undefined;
     }
 
-    recomputeEventEnrolledCount(store, participant.eventId);
+    recomputeEventParticipantCounts(store, participant.eventId);
   });
 }
 
@@ -2476,6 +2540,8 @@ export async function createOrganizerTrainingDraft(
       eventImages: cloneValue(input.eventImages ?? []),
       useEventImageAsCover: input.useEventImageAsCover === true,
       eventTypeSystem: input.eventTypeSystem ?? group.defaultEventType,
+      assignedCount: 0,
+      reserveCount: 0,
       enrolledCount: 0,
       workflowStatus: "draft-requested",
       publishAutomaticallyAfterTrainerApproval: input.publishAutomaticallyAfterTrainerApproval,
@@ -2682,6 +2748,8 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
       eventImages: cloneValue(input.eventImages ?? []),
       useEventImageAsCover: input.useEventImageAsCover === true,
       eventTypeSystem: input.eventTypeSystem ?? group?.defaultEventType ?? null,
+      assignedCount: 0,
+      reserveCount: 0,
       enrolledCount: 0,
       workflowStatus: "published",
       requiresOrganizerApproval:
@@ -2717,7 +2785,7 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
     if (nextEvent.groupId) {
       syncGroupRosterToEvent(store, nextEvent);
     } else {
-      recomputeEventEnrolledCount(store, nextEvent.id);
+      recomputeEventParticipantCounts(store, nextEvent.id);
     }
   });
 }

@@ -91,6 +91,8 @@ import {
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  getEventOverflowCount,
+  getEventParticipantCount,
   getHighestRole,
   getRoleLabel,
   getTrainingJoinAudienceLabel,
@@ -99,6 +101,7 @@ import {
   getTrainingEventStatusLabel,
   hasModeratorAccess,
   hasInheritedRole,
+  isOfficialGroupTrainingEvent,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
@@ -448,6 +451,8 @@ type EventManagementSettingsDraft = {
   location: string;
   eventImages: TrainingEventImage[];
   useEventImageAsCover: boolean;
+  summary: string;
+  description: string;
   enrollmentPhotoRequirement: "default" | "required" | "optional";
   joinAudience: "existing-practitioners" | "new-people";
   tags: string;
@@ -964,7 +969,6 @@ function applyCommunityEventEditorValuesToTrainingForm(
 
 function getCommunityEventEditorValuesFromManagementDraft(
   draft: EventManagementSettingsDraft,
-  event: TrainingEvent,
 ): CommunityEventEditorValues {
   return {
     status: draft.status,
@@ -976,8 +980,8 @@ function getCommunityEventEditorValuesFromManagementDraft(
     eventImages: draft.eventImages,
     useEventImageAsCover: draft.useEventImageAsCover,
     tags: draft.tags,
-    summary: event.summary,
-    description: event.description,
+    summary: draft.summary,
+    description: draft.description,
     firstDayDate: draft.firstDayDate,
     scheduleDays: draft.scheduleDays,
   };
@@ -998,6 +1002,8 @@ function applyCommunityEventEditorValuesToManagementDraft(
     eventImages: values.eventImages,
     useEventImageAsCover: values.useEventImageAsCover,
     tags: values.tags,
+    summary: values.summary,
+    description: values.description,
     firstDayDate: values.firstDayDate,
     scheduleDays: values.scheduleDays,
   };
@@ -1146,17 +1152,17 @@ function getParticipantGroupTransferOptions(
         return false;
       }
 
-      if (
-        isTrainingEventArchived(event) ||
-        isEventFinished(event) ||
-        !event.isPublished ||
-        !isTrainingEventCollaborationAccepted(event) ||
-        Boolean(event.rosterFinalizedAt) ||
-        new Date(event.startsAt).getTime() <= Date.now() ||
-        event.capacity <= event.enrolledCount
-      ) {
-        return false;
-      }
+        if (
+          isTrainingEventArchived(event) ||
+          isEventFinished(event) ||
+          !event.isPublished ||
+          !isTrainingEventCollaborationAccepted(event) ||
+          Boolean(event.rosterFinalizedAt) ||
+          new Date(event.startsAt).getTime() <= Date.now() ||
+          getEventParticipantCount(event) >= event.capacity
+        ) {
+          return false;
+        }
 
       const eligiblePriorities =
         event.eligibleGroupPriorities?.length && event.eligibleGroupPriorities.length > 0
@@ -1287,9 +1293,13 @@ function ParticipantGroupEventCard({
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-brand-muted">
         <span>{getPanelScheduleRangeLabel(record.event)}</span>
         <span>{record.event.location}</span>
-        <span>
-          {record.event.enrolledCount}/{record.event.capacity} miejsc
-        </span>
+        <span>{getEventParticipantCountLabel(record.event)} miejsc</span>
+        {getEventConfirmedCountLabel(record.event) ? (
+          <span>{getEventConfirmedCountLabel(record.event)}</span>
+        ) : null}
+        {getEventCapacityOverflowLabel(record.event) ? (
+          <span>{getEventCapacityOverflowLabel(record.event)}</span>
+        ) : null}
       </div>
 
       {canCancelParticipation ? (
@@ -1417,9 +1427,13 @@ function ParticipantPendingEnrollmentRequestCard({
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-brand-muted">
         <span>{getPanelScheduleRangeLabel(record.event)}</span>
         <span>{record.event.location}</span>
-        <span>
-          {record.event.enrolledCount}/{record.event.capacity} miejsc
-        </span>
+        <span>{getEventParticipantCountLabel(record.event)} miejsc</span>
+        {getEventConfirmedCountLabel(record.event) ? (
+          <span>{getEventConfirmedCountLabel(record.event)}</span>
+        ) : null}
+        {getEventCapacityOverflowLabel(record.event) ? (
+          <span>{getEventCapacityOverflowLabel(record.event)}</span>
+        ) : null}
       </div>
 
       <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
@@ -1597,6 +1611,10 @@ function getDashboardChartHeight(itemCount: number) {
   return Math.max(180, itemCount * 48);
 }
 
+function getCommunityEventEditPath(eventId: string) {
+  return `/panel/wydarzenia-spolecznosci/${eventId}/edytuj`;
+}
+
 function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
   switch (status) {
     case "accepted":
@@ -1626,6 +1644,7 @@ const EVENT_PARTICIPANT_STATUS_ORDER: Record<EventParticipantStatus, number> = {
 };
 
 type GroupEventRosterSectionKey = GroupMemberPriority | "joining";
+type ManagedOfficialTrainingRosterSectionKey = "assigned" | "reserve" | "inactive";
 
 function getEventParticipantStatusLabel(status: EventParticipantStatus) {
   switch (status) {
@@ -1642,6 +1661,52 @@ function getEventParticipantStatusLabel(status: EventParticipantStatus) {
     default:
       return status;
   }
+}
+
+function getEventParticipantCountLabel(
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  return `${getEventParticipantCount(event)}/${event.capacity}`;
+}
+
+function getEventCapacityOverflowLabel(
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  const overflowCount = getEventOverflowCount(event);
+  return overflowCount > 0 ? `Nad limit: ${overflowCount}` : null;
+}
+
+function getEventConfirmedCountLabel(
+  event: Pick<TrainingEvent, "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId">>,
+) {
+  return isOfficialGroupTrainingEvent(event) ? `Potwierdzeni: ${event.enrolledCount}` : null;
+}
+
+function resolveEnrollmentAcceptanceTargetStatus(
+  event: Pick<TrainingEvent, "brandStatus" | "groupId" | "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "assignedCount">>,
+) {
+  if (!isOfficialGroupTrainingEvent(event)) {
+    return event.groupId ? "invited" : "confirmed";
+  }
+
+  return getEventParticipantCount(event) < event.capacity ? "invited" : "rezerwowy";
+}
+
+function getEnrollmentAcceptanceHint(
+  event: Pick<TrainingEvent, "brandStatus" | "groupId" | "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "assignedCount">>,
+) {
+  if (!isOfficialGroupTrainingEvent(event)) {
+    return null;
+  }
+
+  return resolveEnrollmentAcceptanceTargetStatus(event) === "rezerwowy"
+    ? "Po potwierdzeniu osoba trafi na listę rezerwowych."
+    : "Po potwierdzeniu osoba trafi na listę uczestników szkolenia.";
 }
 
 function getEventParticipantSourceLabel(source: EventParticipant["source"]) {
@@ -1661,6 +1726,19 @@ function getGroupEventRosterSectionLabel(section: GroupEventRosterSectionKey) {
   }
 
   return getGroupPriorityLabel(section);
+}
+
+function getManagedOfficialTrainingRosterSectionLabel(
+  section: ManagedOfficialTrainingRosterSectionKey,
+) {
+  switch (section) {
+    case "assigned":
+      return "Lista uczestników";
+    case "reserve":
+      return "Lista rezerwowych";
+    default:
+      return "Poza listą";
+  }
 }
 
 function sortGroupEventParticipantsByStatusAndName(participants: EventParticipant[]) {
@@ -1702,6 +1780,38 @@ function buildGroupEventRosterSections(
     .map((sectionKey) => ({
       key: sectionKey,
       title: getGroupEventRosterSectionLabel(sectionKey),
+      participants: sortGroupEventParticipantsByStatusAndName(buckets[sectionKey]),
+    }))
+    .filter((section) => section.participants.length > 0);
+}
+
+function buildManagedOfficialTrainingRosterSections(
+  participants: EventParticipant[],
+): ManagedEventParticipantSection[] {
+  const buckets: Record<ManagedOfficialTrainingRosterSectionKey, EventParticipant[]> = {
+    assigned: [],
+    reserve: [],
+    inactive: [],
+  };
+
+  participants.forEach((participant) => {
+    if (participant.status === "removed" || participant.status === "declined") {
+      buckets.inactive.push(participant);
+      return;
+    }
+
+    if (participant.status === "rezerwowy") {
+      buckets.reserve.push(participant);
+      return;
+    }
+
+    buckets.assigned.push(participant);
+  });
+
+  return (["assigned", "reserve", "inactive"] as const)
+    .map((sectionKey) => ({
+      key: sectionKey,
+      title: getManagedOfficialTrainingRosterSectionLabel(sectionKey),
       participants: sortGroupEventParticipantsByStatusAndName(buckets[sectionKey]),
     }))
     .filter((section) => section.participants.length > 0);
@@ -1887,6 +1997,57 @@ export function AcceptedRequestGroupDialogBody({
   );
 }
 
+function CommunityEventMutationForm({
+  disabled = false,
+  submitLabel,
+  submitting,
+  uploadingImages,
+  helperMessage,
+  values,
+  onChange,
+  onSubmit,
+  onUploadImages,
+}: {
+  disabled?: boolean;
+  submitLabel: string;
+  submitting: boolean;
+  uploadingImages: boolean;
+  helperMessage?: string | null;
+  values: CommunityEventEditorValues;
+  onChange: (updater: (previous: CommunityEventEditorValues) => CommunityEventEditorValues) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onUploadImages: (files: File[]) => Promise<void>;
+}) {
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+    >
+      <CommunityEventEditorFields
+        values={values}
+        uploadingImages={uploadingImages}
+        disabled={disabled || submitting}
+        onChange={onChange}
+        onUploadImages={onUploadImages}
+      />
+
+      {helperMessage ? (
+        <div className="mt-4 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted">
+          {helperMessage}
+        </div>
+      ) : null}
+
+      <button
+        type="submit"
+        disabled={disabled || submitting}
+        className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+      >
+        {submitting ? "Zapisywanie..." : submitLabel}
+      </button>
+    </form>
+  );
+}
+
 function useAcceptedRequestGroupDialog({
   addGroupMember,
 }: {
@@ -2050,10 +2211,6 @@ function resolveEnrollmentRequestDisplayStatus(
   return request.finalStatus as EnrollmentRequestDisplayStatus;
 }
 
-function canMoveEnrollmentRequestToReserve(event: Pick<TrainingEvent, "brandStatus" | "groupId">) {
-  return !isCommunityPanelEvent(event) && Boolean(event.groupId);
-}
-
 export function buildParticipantOfficialEnrollmentSections(
   records: ParticipantEnrollmentViewRecord[],
 ): ParticipantOfficialEnrollmentSection[] {
@@ -2146,7 +2303,7 @@ export function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
   return [
     {
       key: "active",
-      title: "Zgłoszenia",
+      title: "Oczekujące",
       requests: activeRequests,
       defaultOpen: true,
     },
@@ -2635,43 +2792,36 @@ function getEnrollmentRequestDecisionOptions(
 
 export function EnrollmentRequestDecisionButtons({
   finalStatus,
-  canReserve = false,
+  acceptHint = null,
   disabled = false,
   onDecision,
-  onReserve,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
-  canReserve?: boolean;
+  acceptHint?: string | null;
   disabled?: boolean;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
-  onReserve?: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3">
-      {getEnrollmentRequestDecisionOptions(finalStatus).map((decision) => (
-        <button
-          key={decision}
-          type="button"
-          disabled={disabled}
-          onClick={() => onDecision(decision)}
-          className={
-            decision === "accepted"
-              ? "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
-              : "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
-          }
-        >
-          {decision === "accepted" ? "Potwierdź" : "Odrzuć"}
-        </button>
-      ))}
-      {canReserve && finalStatus === "pending" ? (
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onReserve?.()}
-          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
-        >
-          Rezerwowy
-        </button>
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        {getEnrollmentRequestDecisionOptions(finalStatus).map((decision) => (
+          <button
+            key={decision}
+            type="button"
+            disabled={disabled}
+            onClick={() => onDecision(decision)}
+            className={
+              decision === "accepted"
+                ? "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
+                : "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+            }
+          >
+            {decision === "accepted" ? "Potwierdź" : "Odrzuć"}
+          </button>
+        ))}
+      </div>
+      {finalStatus === "pending" && acceptHint ? (
+        <p className="text-sm text-brand-muted">{acceptHint}</p>
       ) : null}
     </div>
   );
@@ -2780,11 +2930,15 @@ export function EnrollmentRequestSlimRow({
   );
 }
 
-function buildManagedEventParticipantSections(
-  event: Pick<TrainingEvent, "groupId">,
+export function buildManagedEventParticipantSections(
+  event: Pick<TrainingEvent, "brandStatus" | "groupId">,
   participants: EventParticipant[],
   activeGroupMembersByParticipantProfileId: Map<string, GroupMember>,
 ): ManagedEventParticipantSection[] {
+  if (isOfficialGroupTrainingEvent(event)) {
+    return buildManagedOfficialTrainingRosterSections(participants);
+  }
+
   if (event.groupId) {
     return buildGroupEventRosterSections(participants, activeGroupMembersByParticipantProfileId);
   }
@@ -2799,6 +2953,46 @@ function buildManagedEventParticipantSections(
       key: "participants",
       title: "Uczestnicy",
       participants: sortGroupEventParticipantsByStatusAndName(visibleParticipants),
+    },
+  ];
+}
+
+export function buildCommunityParticipantSections(
+  participants: EventParticipant[],
+): ManagedEventParticipantSection[] {
+  const visibleParticipants = participants.filter(
+    (participant) => participant.status === "invited" || participant.status === "confirmed",
+  );
+
+  if (visibleParticipants.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      key: "participants",
+      title: "Uczestnicy",
+      participants: sortGroupEventParticipantsByStatusAndName(visibleParticipants),
+    },
+  ];
+}
+
+export function buildCommunityReserveSections(
+  participants: EventParticipant[],
+): ManagedEventParticipantSection[] {
+  const reserveParticipants = participants.filter(
+    (participant) => participant.status === "rezerwowy",
+  );
+
+  if (reserveParticipants.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      key: "reserve",
+      title: "Rezerwowi",
+      participants: sortGroupEventParticipantsByStatusAndName(reserveParticipants),
     },
   ];
 }
@@ -2907,21 +3101,19 @@ function EnrollmentRequestTransferPanel({
 
 export function EnrollmentRequestManagementActions({
   finalStatus,
-  canReserve = false,
+  acceptHint = null,
   disabled = false,
   transferPending = false,
   transferTargetEventId = "",
   onDecision,
-  onReserve,
   onTransfer,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
-  canReserve?: boolean;
+  acceptHint?: string | null;
   disabled?: boolean;
   transferPending?: boolean;
   transferTargetEventId?: string;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
-  onReserve?: () => void;
   onTransfer: () => void;
 }) {
   const canReject = finalStatus !== "rejected";
@@ -2930,45 +3122,39 @@ export function EnrollmentRequestManagementActions({
   const isDisabled = disabled || transferPending;
 
   return (
-    <div className="flex items-center gap-3">
-      {canReject ? (
-        <button
-          type="button"
-          disabled={isDisabled}
-          onClick={() => onDecision("rejected")}
-          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
-        >
-          Odrzuć
-        </button>
-      ) : null}
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        {canReject ? (
+          <button
+            type="button"
+            disabled={isDisabled}
+            onClick={() => onDecision("rejected")}
+            className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+          >
+            Odrzuć
+          </button>
+        ) : null}
 
-      {canReserve && canAccept ? (
-        <button
-          type="button"
-          disabled={isDisabled}
-          onClick={() => onReserve?.()}
-          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
-        >
-          Rezerwowy
-        </button>
-      ) : null}
+        {shouldTransfer || canAccept ? (
+          <button
+            type="button"
+            disabled={isDisabled}
+            onClick={() => {
+              if (shouldTransfer) {
+                onTransfer();
+                return;
+              }
 
-      {shouldTransfer || canAccept ? (
-        <button
-          type="button"
-          disabled={isDisabled}
-          onClick={() => {
-            if (shouldTransfer) {
-              onTransfer();
-              return;
-            }
-
-            onDecision("accepted");
-          }}
-          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
-        >
-          {shouldTransfer ? (transferPending ? "Przenoszenie..." : "Przenieś") : "Potwierdź"}
-        </button>
+              onDecision("accepted");
+            }}
+            className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
+          >
+            {shouldTransfer ? (transferPending ? "Przenoszenie..." : "Przenieś") : "Potwierdź"}
+          </button>
+        ) : null}
+      </div>
+      {!shouldTransfer && canAccept && acceptHint ? (
+        <p className="text-sm text-brand-muted">{acceptHint}</p>
       ) : null}
     </div>
   );
@@ -3159,12 +3345,11 @@ function ManagedEventParticipantSections({
 
 function ManagedEnrollmentRequestsSection({
   canManageRequests,
-  canReserveRequests,
   event,
   eventGroup,
+  title = "Chcą wziąć udział",
   movingRequestId,
   onDecision,
-  onReserve,
   onTransfer,
   onTransferSelectionChange,
   requestSections,
@@ -3177,12 +3362,11 @@ function ManagedEnrollmentRequestsSection({
   onExpandedSectionChange,
 }: {
   canManageRequests: boolean;
-  canReserveRequests: boolean;
   event: TrainingEvent;
   eventGroup?: Group | null;
+  title?: string;
   movingRequestId: string | null;
   onDecision: (request: EnrollmentRequest, decision: DecisionStatus) => Promise<void>;
-  onReserve: (request: EnrollmentRequest) => Promise<void>;
   onTransfer: (request: EnrollmentRequest) => Promise<void>;
   onTransferSelectionChange: (requestId: string, nextValue: string) => void;
   requestSections: EnrollmentRequestArchiveSection[];
@@ -3197,7 +3381,7 @@ function ManagedEnrollmentRequestsSection({
   return (
     <div className="space-y-4">
       <SectionBlockHeading
-        title="Chcą wziąć udział"
+        title={title}
         description="Aktywne zgłoszenia są na górze, a potwierdzone i odrzucone osoby spadają niżej do osobnych zwiniętych sekcji."
       />
       {requestSections.length === 0 ? (
@@ -3219,6 +3403,7 @@ function ManagedEnrollmentRequestsSection({
                 const transferTargetEventId = transferSelections[request.id] ?? "";
                 const showTransferPanel = requestTransferOptions.length > 0;
                 const showPhoto = hasEnrollmentRequestReadyPhoto(request);
+                const acceptHint = getEnrollmentAcceptanceHint(event);
 
                 return (
                   <EnrollmentRequestSlimRow
@@ -3261,12 +3446,11 @@ function ManagedEnrollmentRequestsSection({
                       {canManageRequests ? (
                         <EnrollmentRequestManagementActions
                           finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
-                          canReserve={canReserveRequests}
+                          acceptHint={acceptHint}
                           disabled={updatingRequestId === request.id}
                           transferPending={movingRequestId === request.id}
                           transferTargetEventId={transferTargetEventId}
                           onDecision={(decision) => void onDecision(request, decision)}
-                          onReserve={() => void onReserve(request)}
                           onTransfer={() => void onTransfer(request)}
                         />
                       ) : null}
@@ -3514,16 +3698,18 @@ function EventDetailScopeSwitch({
   onChange,
   requestCount,
   participantCountLabel,
+  reserveCount,
 }: {
-  activeTab: "requests" | "participants" | "edit";
-  onChange: (nextTab: "requests" | "participants" | "edit") => void;
+  activeTab: "requests" | "participants" | "reserve";
+  onChange: (nextTab: "requests" | "participants" | "reserve") => void;
   requestCount: number;
   participantCountLabel: string;
+  reserveCount: number;
 }) {
   const items = [
     {
       id: "requests" as const,
-      label: "Chcą wziąć udział",
+      label: "Zgłoszenia",
       badge: requestCount > 0 ? String(requestCount) : undefined,
       icon: <Bell size={15} />,
     },
@@ -3534,10 +3720,10 @@ function EventDetailScopeSwitch({
       icon: <Users size={15} />,
     },
     {
-      id: "edit" as const,
-      label: "Edycja wydarzenia",
-      badge: undefined,
-      icon: null,
+      id: "reserve" as const,
+      label: "Rezerwowi",
+      badge: reserveCount > 0 ? String(reserveCount) : undefined,
+      icon: <ShieldCheck size={15} />,
     },
   ];
 
@@ -3979,9 +4165,12 @@ type DashboardEventBarDatum = {
   startsAt: string;
   statusLabel: string;
   status: TrainingEventStatus;
+  isOfficialGroupTraining: boolean;
   fillRate: number;
   missingPeople: number;
   occupiedPlaces: number;
+  confirmedCount: number;
+  overflowCount: number;
   capacity: number;
   availablePlaces: number;
 };
@@ -3991,6 +4180,8 @@ type DashboardMonthCapacityDatum = {
   label: string;
   totalCapacity: number;
   enrolledCount: number;
+  confirmedCount: number;
+  overflowCount: number;
   availablePlaces: number;
 };
 
@@ -4040,7 +4231,13 @@ function MissingPeopleTooltip({
       <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
       <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
       <p className="mt-2 text-sm text-brand-navy">Brakuje: {item.missingPeople} osob</p>
-      <p className="text-sm text-brand-navy">Zapisani: {item.occupiedPlaces}/{item.capacity}</p>
+      <p className="text-sm text-brand-navy">Na rosterze: {item.occupiedPlaces}/{item.capacity}</p>
+      {item.isOfficialGroupTraining ? (
+        <p className="text-sm text-brand-navy">Potwierdzeni: {item.confirmedCount}</p>
+      ) : null}
+      {item.overflowCount > 0 ? (
+        <p className="text-sm text-brand-navy">Nad limit: {item.overflowCount}</p>
+      ) : null}
     </div>
   );
 }
@@ -4061,9 +4258,13 @@ function CapacityByMonthTooltip({
   return (
     <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
       <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
-      <p className="mt-2 text-sm text-brand-navy">Zapisani: {item.enrolledCount}</p>
+      <p className="mt-2 text-sm text-brand-navy">Na rosterze: {item.enrolledCount}</p>
+      <p className="text-sm text-brand-navy">Potwierdzeni: {item.confirmedCount}</p>
       <p className="text-sm text-brand-navy">Liczba miejsc: {item.totalCapacity}</p>
       <p className="text-sm text-brand-navy">Wolne miejsca: {item.availablePlaces}</p>
+      {item.overflowCount > 0 ? (
+        <p className="text-sm text-brand-navy">Nad limit: {item.overflowCount}</p>
+      ) : null}
     </div>
   );
 }
@@ -4176,7 +4377,13 @@ function CancelledEventsTooltip({
       <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
       <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
       <p className="mt-2 text-sm text-brand-navy">Liczba miejsc: {item.capacity}</p>
-      <p className="text-sm text-brand-navy">Zapisani przed anulacja: {item.occupiedPlaces}</p>
+      <p className="text-sm text-brand-navy">Na rosterze: {item.occupiedPlaces}</p>
+      {item.isOfficialGroupTraining ? (
+        <p className="text-sm text-brand-navy">Potwierdzeni: {item.confirmedCount}</p>
+      ) : null}
+      {item.overflowCount > 0 ? (
+        <p className="text-sm text-brand-navy">Nad limit: {item.overflowCount}</p>
+      ) : null}
     </div>
   );
 }
@@ -4609,12 +4816,17 @@ function OperationalDashboardPerspectiveView({
         (event) => ({
           id: event.id,
           label: event.location || event.title,
+          isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
           fillRate: getEventFillRate(event),
           statusLabel: getTrainingEventStatusLabel(event.status),
           status: resolveTrainingEventStatus(event.status),
-          occupiedPlaces: event.enrolledCount,
+          occupiedPlaces: getEventParticipantCount(event),
+          confirmedCount: event.enrolledCount,
+          overflowCount: getEventOverflowCount(event),
           availablePlaces: getAvailablePlaces(event),
           startsAt: event.startsAt,
+          capacity: event.capacity,
+          missingPeople: getAvailablePlaces(event),
         }),
       ),
     [activeCommunityEvents, confirmedCommunityEvents],
@@ -4650,9 +4862,12 @@ function OperationalDashboardPerspectiveView({
         startsAt: event.startsAt,
         statusLabel: getTrainingEventStatusLabel(event.status),
         status: resolveTrainingEventStatus(event.status),
+        isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
         fillRate: getEventFillRate(event),
         missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
+        occupiedPlaces: getEventParticipantCount(event),
+        confirmedCount: event.enrolledCount,
+        overflowCount: getEventOverflowCount(event),
         capacity: event.capacity,
         availablePlaces: getAvailablePlaces(event),
       })),
@@ -4691,7 +4906,9 @@ function OperationalDashboardPerspectiveView({
           key: bucket.key,
           label: bucket.label,
           totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
-          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          enrolledCount: monthEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
+          confirmedCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          overflowCount: monthEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
           availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
         };
       }),
@@ -4762,9 +4979,12 @@ function OperationalDashboardPerspectiveView({
         startsAt: event.startsAt,
         statusLabel: getTrainingEventStatusLabel(event.status),
         status: resolveTrainingEventStatus(event.status),
+        isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
         fillRate: getEventFillRate(event),
         missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
+        occupiedPlaces: getEventParticipantCount(event),
+        confirmedCount: event.enrolledCount,
+        overflowCount: getEventOverflowCount(event),
         capacity: event.capacity,
         availablePlaces: getAvailablePlaces(event),
       })),
@@ -4789,9 +5009,12 @@ function OperationalDashboardPerspectiveView({
         startsAt: event.startsAt,
         statusLabel: getTrainingEventStatusLabel(event.status),
         status: resolveTrainingEventStatus(event.status),
+        isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
         fillRate: getEventFillRate(event),
         missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
+        occupiedPlaces: getEventParticipantCount(event),
+        confirmedCount: event.enrolledCount,
+        overflowCount: getEventOverflowCount(event),
         capacity: event.capacity,
         availablePlaces: getAvailablePlaces(event),
       })),
@@ -4808,7 +5031,9 @@ function OperationalDashboardPerspectiveView({
           key: bucket.key,
           label: bucket.label,
           totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
-          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          enrolledCount: monthEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
+          confirmedCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          overflowCount: monthEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
           availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
         };
       }),
@@ -5062,7 +5287,7 @@ function OperationalDashboardPerspectiveView({
 
             <DashboardChartCard
               title="Zapełnienie terminów"
-              description="Porównanie przyszłych terminów według poziomu zajętych miejsc."
+              description="Porównanie przyszłych terminów według poziomu zapełnienia rosteru."
             >
               {organizerFillRateData.length === 0 ? (
                 <DashboardChartEmptyState message="Brak terminów do porównania w tym oknie czasu." />
@@ -5097,11 +5322,11 @@ function OperationalDashboardPerspectiveView({
 
             <DashboardChartCard
               title="Obłożenie w miesiącach"
-              description="Łączna liczba zapisanych osób versus cała pula miejsc w pipeline grup."
+              description="Łączna liczba osób na rosterze versus cała pula miejsc w pipeline grup."
             >
               <DashboardLegend
                 items={[
-                  { label: "Zapisani", color: "#174f9a" },
+                  { label: "Na rosterze", color: "#174f9a" },
                   { label: "Liczba miejsc", color: "#88aee0" },
                 ]}
               />
@@ -5249,6 +5474,12 @@ function OperationalDashboardPerspectiveView({
                   <p className="text-sm text-brand-muted">
                     Wolne miejsca: {summary.missingPeople} • Zapełnienie: {Math.round(summary.fillRate)}%
                   </p>
+                  <p className="text-sm text-brand-muted">
+                    Na rosterze: {getEventParticipantCount(summary.event)}/{summary.event.capacity}
+                    {getEventOverflowCount(summary.event) > 0
+                      ? ` • Nad limit: ${getEventOverflowCount(summary.event)}`
+                      : ""}
+                  </p>
                 </div>
               ))}
               {(organizerOfficialDashboard?.eventsRequiringDecision.length ?? 0) === 0 && (
@@ -5335,7 +5566,7 @@ function OperationalDashboardPerspectiveView({
 
           <DashboardChartCard
             title="Zapelnienie terminow"
-            description="Porownanie wydarzen wedlug procentu zajetych miejsc."
+            description="Porownanie wydarzen wedlug procentu zapełnienia rosteru."
           >
             {fillRateData.length === 0 ? (
               <DashboardChartEmptyState message="Brak wydarzen do porownania w tym oknie czasu." />
@@ -5374,11 +5605,11 @@ function OperationalDashboardPerspectiveView({
 
           <DashboardChartCard
             title="Oblozenie w miesiacach"
-            description="Laczna liczba zapisanych osob versus cala pula miejsc w nadchodzacych miesiacach."
+            description="Laczna liczba osob na rosterze versus cala pula miejsc w nadchodzacych miesiacach."
           >
             <DashboardLegend
               items={[
-                { label: "Zapisani", color: "#174f9a" },
+                { label: "Na rosterze", color: "#174f9a" },
                 { label: "Liczba miejsc", color: "#88aee0" },
               ]}
             />
@@ -5842,8 +6073,16 @@ export function RequestsPage() {
     setUpdatingRequestId(request.id);
 
     try {
+      const acceptedTargetStatus =
+        decision === "accepted" ? resolveEnrollmentAcceptanceTargetStatus(event) : null;
+
       await manageEnrollmentRequest(request.id, decision);
       if (decision === "accepted") {
+        if (acceptedTargetStatus === "rezerwowy") {
+          toast.success("Potwierdzono zgłoszenie i dodano osobę do listy rezerwowych.");
+          return;
+        }
+
         const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
           request,
           event,
@@ -5865,25 +6104,6 @@ export function RequestsPage() {
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się zaktualizować zgłoszenia.",
-      );
-    } finally {
-      setUpdatingRequestId(null);
-    }
-  }
-
-  async function handleReserveRequest(request: EnrollmentRequest, event: TrainingEvent) {
-    setUpdatingRequestId(request.id);
-
-    try {
-      await manageEnrollmentRequest(request.id, "accepted", undefined, "rezerwowy");
-      toast.success(
-        event.groupId
-          ? "Przeniesiono zgłoszenie na listę rezerwowych wydarzenia."
-          : "Przeniesiono zgłoszenie na listę rezerwowych.",
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Nie udało się przenieść zgłoszenia na rezerwę.",
       );
     } finally {
       setUpdatingRequestId(null);
@@ -5949,12 +6169,11 @@ export function RequestsPage() {
                       {canDecideRequest ? (
                         <EnrollmentRequestDecisionButtons
                           finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
-                          canReserve={canMoveEnrollmentRequestToReserve(event)}
+                          acceptHint={getEnrollmentAcceptanceHint(event)}
                           disabled={updatingRequestId === request.id}
                           onDecision={(decision) =>
                             void handleRequestDecision(request, event, decision)
                           }
-                          onReserve={() => void handleReserveRequest(request, event)}
                         />
                       ) : null}
                     </div>
@@ -9364,9 +9583,43 @@ export function EventsPage() {
 
       {isCreatorView ? (
         isCommunitySection ? (
-          <form
-            onSubmit={async (event) => {
-              event.preventDefault();
+          <CommunityEventMutationForm
+            values={getCommunityEventEditorValuesFromTrainingForm(trainerEventForm)}
+            uploadingImages={uploadingCreatorImages}
+            submitting={creatingEvent}
+            submitLabel="Wyślij wydarzenie do moderacji"
+            helperMessage="Po zapisie wydarzenie trafi do moderacji admina. Publikacja następuje dopiero po akceptacji Dariusza albo roli admin."
+            onChange={(updater) =>
+              setTrainerEventForm((previous) =>
+                applyCommunityEventEditorValuesToTrainingForm(
+                  previous,
+                  updater(getCommunityEventEditorValuesFromTrainingForm(previous)),
+                ),
+              )
+            }
+            onUploadImages={async (files) => {
+              const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
+              const filesToUpload = files.slice(0, availableSlots);
+
+              if (filesToUpload.length === 0) {
+                toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                return;
+              }
+
+              setUploadingCreatorImages(true);
+
+              try {
+                const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                setTrainerEventForm((previous) => ({
+                  ...previous,
+                  eventImages: [...previous.eventImages, ...uploadedImages],
+                }));
+              } finally {
+                setUploadingCreatorImages(false);
+              }
+            }}
+            onSubmit={async (submitEvent) => {
+              submitEvent.preventDefault();
               setCreatingEvent(true);
 
               try {
@@ -9406,56 +9659,7 @@ export function EventsPage() {
                 setCreatingEvent(false);
               }
             }}
-            className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-          >
-            <CommunityEventEditorFields
-              values={getCommunityEventEditorValuesFromTrainingForm(trainerEventForm)}
-              uploadingImages={uploadingCreatorImages}
-              disabled={creatingEvent}
-              onChange={(updater) =>
-                setTrainerEventForm((previous) =>
-                  applyCommunityEventEditorValuesToTrainingForm(
-                    previous,
-                    updater(getCommunityEventEditorValuesFromTrainingForm(previous)),
-                  ),
-                )
-              }
-              onUploadImages={async (files) => {
-                const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
-                const filesToUpload = files.slice(0, availableSlots);
-
-                if (filesToUpload.length === 0) {
-                  toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
-                  return;
-                }
-
-                setUploadingCreatorImages(true);
-
-                try {
-                  const uploadedImages = await uploadCommunityEventImages(filesToUpload);
-                  setTrainerEventForm((previous) => ({
-                    ...previous,
-                    eventImages: [...previous.eventImages, ...uploadedImages],
-                  }));
-                } finally {
-                  setUploadingCreatorImages(false);
-                }
-              }}
-            />
-
-            <div className="mt-4 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted">
-              Po zapisie wydarzenie trafi do moderacji admina. Publikacja następuje dopiero po
-              akceptacji Dariusza albo roli admin.
-            </div>
-
-            <button
-              type="submit"
-              disabled={creatingEvent}
-              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-            >
-              {creatingEvent ? "Zapisywanie..." : "Wyślij wydarzenie do moderacji"}
-            </button>
-          </form>
+          />
         ) : !isCommunitySection && hasOfficialManagementScope && availableOfficialGroups.length === 0 ? (
           <EmptyPanelState
             title="Najpierw utwórz grupę"
@@ -10367,7 +10571,13 @@ export function EventsPage() {
                 <div className="mt-5 space-y-3 text-sm text-brand-muted">
                   <div className="flex flex-wrap gap-x-5 gap-y-2">
                     <span>{scheduleRangeLabel}</span>
-                    <span>{event.enrolledCount}/{event.capacity} miejsc</span>
+                    <span>{getEventParticipantCountLabel(event)} miejsc</span>
+                    {getEventConfirmedCountLabel(event) ? (
+                      <span>{getEventConfirmedCountLabel(event)}</span>
+                    ) : null}
+                    {getEventCapacityOverflowLabel(event) ? (
+                      <span>{getEventCapacityOverflowLabel(event)}</span>
+                    ) : null}
                     <span>Próg: {resolveMinimumParticipants(event)} osób</span>
                     <span>Chcą wziąć udział: {activeRequestsCount}</span>
                     {isCommunitySection ? (
@@ -10490,7 +10700,7 @@ export function EventManagementPage() {
   const hydratedSettingsSnapshotRef = useRef<string | null>(null);
   const [isSettingsDirty, setIsSettingsDirty] = useState(false);
   const [communityDetailTab, setCommunityDetailTab] = useState<
-    "requests" | "participants" | "edit"
+    "requests" | "participants" | "reserve"
   >("requests");
   const [publishingEvent, setPublishingEvent] = useState(false);
   const {
@@ -10508,6 +10718,8 @@ export function EventManagementPage() {
     location: "",
     eventImages: [] as TrainingEventImage[],
     useEventImageAsCover: false,
+    summary: "",
+    description: "",
     enrollmentPhotoRequirement: "default" as "default" | "required" | "optional",
     joinAudience: "new-people",
     tags: "",
@@ -10537,6 +10749,7 @@ export function EventManagementPage() {
       : fallbackListPath === "/panel/wydarzenia-spolecznosci"
         ? "Wróć do wydarzeń społeczności"
         : "Wróć do listy szkoleń";
+  const isCommunityEditRoute = location.pathname.endsWith("/edytuj");
 
   function createEventManagementSettingsDraft(sourceEvent: TrainingEvent) {
     return {
@@ -10548,6 +10761,8 @@ export function EventManagementPage() {
       location: sourceEvent.location ?? "",
       eventImages: sourceEvent.eventImages ?? [],
       useEventImageAsCover: sourceEvent.useEventImageAsCover === true,
+      summary: sourceEvent.summary,
+      description: sourceEvent.description,
       enrollmentPhotoRequirement: sourceEvent.enrollmentPhotoRequirement ?? "default",
       joinAudience: resolveTrainingJoinAudienceForEvent(sourceEvent, eventGroup),
       tags: (sourceEvent.tags ?? []).join(", "),
@@ -10650,6 +10865,22 @@ export function EventManagementPage() {
   const groupEventParticipants = (store.eventParticipants ?? []).filter(
     (item) => item.eventId === event.id,
   );
+  const communityParticipantSections = useMemo(
+    () => buildCommunityParticipantSections(groupEventParticipants),
+    [groupEventParticipants],
+  );
+  const communityReserveSections = useMemo(
+    () => buildCommunityReserveSections(groupEventParticipants),
+    [groupEventParticipants],
+  );
+  const communityParticipantCount = communityParticipantSections.reduce(
+    (sum, section) => sum + section.participants.length,
+    0,
+  );
+  const communityReserveCount = communityReserveSections.reduce(
+    (sum, section) => sum + section.participants.length,
+    0,
+  );
   const managedParticipantSections = buildManagedEventParticipantSections(
     event,
     groupEventParticipants,
@@ -10701,21 +10932,18 @@ export function EventManagementPage() {
   async function handleEnrollmentDecision(
     request: EnrollmentRequest,
     decision: DecisionStatus,
-    acceptedParticipantStatus?: Extract<EventParticipantStatus, "invited" | "confirmed" | "rezerwowy">,
   ) {
     setUpdatingRequestId(request.id);
 
     try {
-      await manageEnrollmentRequest(
-        request.id,
-        decision,
-        undefined,
-        acceptedParticipantStatus,
-      );
+      const acceptedTargetStatus =
+        decision === "accepted" ? resolveEnrollmentAcceptanceTargetStatus(event) : null;
+
+      await manageEnrollmentRequest(request.id, decision);
 
       if (decision === "accepted") {
-        if (acceptedParticipantStatus === "rezerwowy") {
-          toast.success("Przeniesiono zgłoszenie na listę rezerwowych.");
+        if (acceptedTargetStatus === "rezerwowy") {
+          toast.success("Zaakceptowano zgłoszenie i dodano osobę do listy rezerwowych.");
           return;
         }
 
@@ -10746,10 +10974,6 @@ export function EventManagementPage() {
     } finally {
       setUpdatingRequestId(null);
     }
-  }
-
-  async function handleEnrollmentReserve(request: EnrollmentRequest) {
-    return handleEnrollmentDecision(request, "accepted", "rezerwowy");
   }
 
   async function handleEventParticipantStatusChange(
@@ -10802,8 +11026,97 @@ export function EventManagementPage() {
   if (isCommunityEvent) {
     const communityEditorValues = getCommunityEventEditorValuesFromManagementDraft(
       settingsDraft,
-      event,
     );
+
+    if (isCommunityEditRoute) {
+      if (!canManageEvent || eventIsArchived) {
+        return <Navigate to={getPanelEventDetailPath(event)} replace />;
+      }
+
+      return (
+        <PanelSection
+          eyebrow={sectionEyebrow}
+          title="Edytuj wydarzenie społeczności"
+          description="Tutaj edytujesz istniejące wydarzenie społeczności tym samym formularzem co przy tworzeniu."
+        >
+          <CommunityEventMutationForm
+            values={communityEditorValues}
+            uploadingImages={uploadingSettingsImages}
+            submitting={savingSettings}
+            submitLabel="Zapisz zmiany w wydarzeniu społeczności"
+            helperMessage="Edytujesz istniejące wydarzenie społeczności."
+            onChange={(updater) =>
+              updateSettingsDraft((previous) =>
+                applyCommunityEventEditorValuesToManagementDraft(
+                  previous,
+                  updater(getCommunityEventEditorValuesFromManagementDraft(previous)),
+                ),
+              )
+            }
+            onUploadImages={async (files) => {
+              const availableSlots = Math.max(0, 8 - settingsDraft.eventImages.length);
+              const filesToUpload = files.slice(0, availableSlots);
+
+              if (filesToUpload.length === 0) {
+                toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                return;
+              }
+
+              setUploadingSettingsImages(true);
+
+              try {
+                const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                updateSettingsDraft((previous) => ({
+                  ...previous,
+                  eventImages: [...previous.eventImages, ...uploadedImages],
+                }));
+              } finally {
+                setUploadingSettingsImages(false);
+              }
+            }}
+            onSubmit={async (submitEvent) => {
+              submitEvent.preventDefault();
+              setSavingSettings(true);
+
+              try {
+                await updateTrainingEventManagement(
+                  event.id,
+                  settingsDraft.status,
+                  Number(settingsDraft.capacity) || event.capacity,
+                  Number(settingsDraft.minimumParticipants) || resolveMinimumParticipants(event),
+                  Number(settingsDraft.confirmationLeadTimeDays) || 0,
+                  settingsDraft.title,
+                  settingsDraft.location,
+                  settingsDraft.summary,
+                  settingsDraft.description,
+                  parseEventTags(settingsDraft.tags),
+                  settingsDraft.eventImages,
+                  settingsDraft.useEventImageAsCover,
+                  buildScheduleDaysFromDrafts(
+                    settingsDraft.firstDayDate,
+                    settingsDraft.scheduleDays,
+                  ),
+                  undefined,
+                  settingsDraft.enrollmentPhotoRequirement,
+                  undefined,
+                );
+                toast.success("Zapisano zmiany w wydarzeniu społeczności.");
+                setIsSettingsDirty(false);
+                navigate(getPanelEventDetailPath(event), { replace: true });
+              } catch (error) {
+                toast.error(
+                  error instanceof Error
+                    ? error.message
+                    : "Nie udało się zapisać zmian w wydarzeniu.",
+                );
+              } finally {
+                setSavingSettings(false);
+              }
+            }}
+          />
+        </PanelSection>
+      );
+    }
 
     return (
       <PanelSection
@@ -10832,6 +11145,14 @@ export function EventManagementPage() {
                 ))}
               </div>
             </div>
+            {canManageEvent && !eventIsArchived ? (
+              <Link
+                to={getCommunityEventEditPath(event.id)}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+              >
+                Edytuj wydarzenie
+              </Link>
+            ) : null}
           </div>
 
           <div
@@ -11025,118 +11346,20 @@ export function EventManagementPage() {
           activeTab={communityDetailTab}
           onChange={setCommunityDetailTab}
           requestCount={pendingRequestsCount}
-          participantCountLabel={`${event.enrolledCount}/${event.capacity}`}
+          participantCountLabel={`${communityParticipantCount}/${event.capacity}`}
+          reserveCount={communityReserveCount}
         />
-
-        {communityDetailTab === "edit" ? (
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <CommunityEventEditorFields
-              values={communityEditorValues}
-              disabled={!canManageEvent || eventIsArchived}
-              uploadingImages={uploadingSettingsImages}
-              onChange={(updater) =>
-                updateSettingsDraft((previous) =>
-                  applyCommunityEventEditorValuesToManagementDraft(
-                    previous,
-                    updater(getCommunityEventEditorValuesFromManagementDraft(previous, event)),
-                  ),
-                )
-              }
-              onUploadImages={async (files) => {
-                const availableSlots = Math.max(0, 8 - settingsDraft.eventImages.length);
-                const filesToUpload = files.slice(0, availableSlots);
-
-                if (filesToUpload.length === 0) {
-                  toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
-                  return;
-                }
-
-                setUploadingSettingsImages(true);
-
-                try {
-                  const uploadedImages = await uploadCommunityEventImages(filesToUpload);
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    eventImages: [...previous.eventImages, ...uploadedImages],
-                  }));
-                } finally {
-                  setUploadingSettingsImages(false);
-                }
-              }}
-            />
-
-            {canManageEvent && !eventIsArchived ? (
-              <>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    disabled={savingSettings}
-                    onClick={async () => {
-                      setSavingSettings(true);
-
-                      try {
-                        await updateTrainingEventManagement(
-                          event.id,
-                          settingsDraft.status,
-                          Number(settingsDraft.capacity) || event.capacity,
-                          Number(settingsDraft.minimumParticipants) ||
-                            resolveMinimumParticipants(event),
-                          Number(settingsDraft.confirmationLeadTimeDays) || 0,
-                          settingsDraft.title,
-                          settingsDraft.location,
-                          communityEditorValues.summary,
-                          communityEditorValues.description,
-                          parseEventTags(settingsDraft.tags),
-                          settingsDraft.eventImages,
-                          settingsDraft.useEventImageAsCover,
-                          buildScheduleDaysFromDrafts(
-                            settingsDraft.firstDayDate,
-                            settingsDraft.scheduleDays,
-                          ),
-                          undefined,
-                          settingsDraft.enrollmentPhotoRequirement,
-                          undefined,
-                        );
-                        toast.success("Zapisano ustawienia wydarzenia.");
-                        setIsSettingsDirty(false);
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zapisać ustawień wydarzenia.",
-                        );
-                      } finally {
-                        setSavingSettings(false);
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                  >
-                    {savingSettings ? "Zapisywanie..." : "Zapisz ustawienia"}
-                  </button>
-                </div>
-                <p className="mt-3 text-sm text-brand-muted">
-                  Po osiągnięciu minimalnego progu status zmieni się automatycznie na potwierdzone.
-                </p>
-              </>
-            ) : (
-              <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
-                Moderator widzi ten formularz poglądowo. Edycja danych wydarzenia pozostaje po
-                stronie twórcy albo admina.
-              </p>
-            )}
-          </article>
-        ) : null}
 
         {communityDetailTab === "participants" ? (
           <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
               title="Uczestnicy wydarzenia"
-              description="Zaakceptowane osoby trafiają tutaj automatycznie po decyzji organizatora."
+              description="Tutaj widać osoby, które są obecnie na liście uczestników wydarzenia."
             />
-            {managedParticipantSections.length === 0 ? (
+            {communityParticipantSections.length === 0 ? (
               <EmptyPanelState
-                title="Brak potwierdzonych uczestników"
-                description="Zaakceptowane osoby pojawią się tutaj automatycznie."
+                title="Brak uczestników wydarzenia"
+                description="Zaakceptowane osoby pojawią się tutaj po przeniesieniu na listę uczestników."
               />
             ) : (
               <ManagedEventParticipantSections
@@ -11146,7 +11369,33 @@ export function EventManagementPage() {
                 onExpandedChange={toggleExpandedRosterParticipant}
                 onStatusChange={handleEventParticipantStatusChange}
                 participantProfilesById={participantProfilesById}
-                sections={managedParticipantSections}
+                sections={communityParticipantSections}
+                updatingParticipantId={updatingEventParticipantId}
+              />
+            )}
+          </article>
+        ) : null}
+
+        {communityDetailTab === "reserve" ? (
+          <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <SectionBlockHeading
+              title="Lista rezerwowych"
+              description="Tutaj widać osoby odłożone na listę rezerwowych tego wydarzenia."
+            />
+            {communityReserveSections.length === 0 ? (
+              <EmptyPanelState
+                title="Brak rezerwowych"
+                description="Gdy kogoś przeniesiesz na rezerwę, pojawi się tutaj."
+              />
+            ) : (
+              <ManagedEventParticipantSections
+                canManageParticipant={canManageEvent}
+                eventIsArchived={eventIsArchived}
+                expandedParticipantIds={expandedRosterParticipantIds}
+                onExpandedChange={toggleExpandedRosterParticipant}
+                onStatusChange={handleEventParticipantStatusChange}
+                participantProfilesById={participantProfilesById}
+                sections={communityReserveSections}
                 updatingParticipantId={updatingEventParticipantId}
               />
             )}
@@ -11157,12 +11406,11 @@ export function EventManagementPage() {
           <>
             <ManagedEnrollmentRequestsSection
               canManageRequests={canManageEvent && !eventIsArchived}
-              canReserveRequests={canMoveEnrollmentRequestToReserve(event)}
+              title="Zgłoszenia"
               event={event}
               eventGroup={eventGroup}
               movingRequestId={movingRequestId}
               onDecision={handleEnrollmentDecision}
-              onReserve={handleEnrollmentReserve}
               onTransfer={handleTransferEnrollmentRequest}
               onTransferSelectionChange={(requestId, nextValue) =>
                 setTransferSelections((previous) => ({
@@ -11224,10 +11472,17 @@ export function EventManagementPage() {
           </div>
         </div>
 
-          <div className="mt-5 space-y-3 text-sm text-brand-muted">
+        <div className="mt-5 space-y-3 text-sm text-brand-muted">
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             <span>{scheduleRangeLabel}</span>
             <span>Maks. miejsc: {event.capacity}</span>
+            <span>Na rosterze: {getEventParticipantCountLabel(event)}</span>
+            {getEventConfirmedCountLabel(event) ? (
+              <span>{getEventConfirmedCountLabel(event)}</span>
+            ) : null}
+            {getEventCapacityOverflowLabel(event) ? (
+              <span>{getEventCapacityOverflowLabel(event)}</span>
+            ) : null}
             <span>Minimalny prog: {resolveMinimumParticipants(event)}</span>
             {!isCommunityEvent ? (
               <span>Mogą dołączyć: {getTrainingJoinAudienceLabel(resolvedEventJoinAudience)}</span>
@@ -11864,7 +12119,7 @@ export function EventManagementPage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <SectionBlockHeading
               title="Roster wydarzenia grupowego"
-              description="To jest administracyjny skład wydarzenia oparty o grupę i priorytety członków, niezależny od publicznych zgłoszeń."
+              description="To jest administracyjna lista uczestników szkolenia i osób odłożonych na listę rezerwowych."
             />
             <div className="flex flex-col items-start gap-2 sm:items-end">
               {event.rosterFinalizedAt ? (
@@ -11956,7 +12211,7 @@ export function EventManagementPage() {
           {managedParticipantSections.length === 0 ? (
             <EmptyPanelState
               title="Roster jest pusty"
-              description="Po akceptacji zgłoszeń osoby pojawią się tutaj w sekcjach według rangi grupowej lub jako dołączający."
+              description="Po akceptacji zgłoszeń osoby pojawią się tutaj na liście uczestników albo rezerwowych."
             />
           ) : (
             <ManagedEventParticipantSections
@@ -11977,12 +12232,10 @@ export function EventManagementPage() {
         <>
           <ManagedEnrollmentRequestsSection
             canManageRequests={true}
-            canReserveRequests={canMoveEnrollmentRequestToReserve(event)}
             event={event}
             eventGroup={eventGroup}
             movingRequestId={movingRequestId}
             onDecision={handleEnrollmentDecision}
-            onReserve={handleEnrollmentReserve}
             onTransfer={handleTransferEnrollmentRequest}
             onTransferSelectionChange={(requestId, nextValue) =>
               setTransferSelections((previous) => ({

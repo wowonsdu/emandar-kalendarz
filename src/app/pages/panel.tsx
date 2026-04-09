@@ -42,6 +42,7 @@ import {
   getOrganizerOfficialDashboardModel,
   getParticipantDashboardModel,
   getParticipantEnrollmentViewRecords,
+  type ParticipantEnrollmentViewRecord,
   type ParticipantGroupEventRecord,
   type ParticipantPendingEnrollmentRequestRecord,
 } from "@/app/dashboard";
@@ -67,6 +68,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/app/components/ui/dialog";
@@ -1253,7 +1255,7 @@ function ParticipantGroupEventCard({
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-            {record.eventParticipant.status}
+            {getEventParticipantStatusLabel(record.eventParticipant.status)}
           </span>
           <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
             {getGroupPriorityLabel(record.eventParticipant.priority)}
@@ -1610,6 +1612,7 @@ function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
 
 const MANAGEABLE_EVENT_PARTICIPANT_STATUSES = [
   "invited",
+  "rezerwowy",
   "confirmed",
   "declined",
 ] as const satisfies EventParticipantStatus[];
@@ -1617,8 +1620,9 @@ const MANAGEABLE_EVENT_PARTICIPANT_STATUSES = [
 const EVENT_PARTICIPANT_STATUS_ORDER: Record<EventParticipantStatus, number> = {
   confirmed: 0,
   invited: 1,
-  declined: 2,
-  removed: 3,
+  rezerwowy: 2,
+  declined: 3,
+  removed: 4,
 };
 
 type GroupEventRosterSectionKey = GroupMemberPriority | "joining";
@@ -1627,12 +1631,16 @@ function getEventParticipantStatusLabel(status: EventParticipantStatus) {
   switch (status) {
     case "confirmed":
       return "Potwierdził";
+    case "rezerwowy":
+      return "Rezerwowy";
     case "declined":
       return "Odrzucił";
     case "removed":
       return "Usunięty";
-    default:
+    case "invited":
       return "Zaproszony";
+    default:
+      return status;
   }
 }
 
@@ -1699,17 +1707,29 @@ function buildGroupEventRosterSections(
     .filter((section) => section.participants.length > 0);
 }
 
-function parseGroupMemberPriorityPromptValue(value: string | null) {
-  const normalized = value?.trim().toLowerCase();
-  if (
-    normalized === "stali" ||
-    normalized === "regularni" ||
-    normalized === "rezerwowi"
-  ) {
-    return normalized as GroupMemberPriority;
-  }
+type AcceptedRequestGroupDialogDraft = {
+  priority: GroupMemberPriority;
+  notes: string;
+  syncFutureEvents: boolean;
+};
 
-  return null;
+type AcceptedRequestGroupAssignmentTarget = {
+  groupId: string;
+  participantProfileId: string;
+  participantName: string;
+  futureOpenGroupEventsCount: number;
+};
+
+type AcceptedRequestGroupDialogSession = AcceptedRequestGroupAssignmentTarget & {
+  draft: AcceptedRequestGroupDialogDraft;
+};
+
+export function createAcceptedRequestGroupDialogDraft(): AcceptedRequestGroupDialogDraft {
+  return {
+    priority: "regularni",
+    notes: "",
+    syncFutureEvents: false,
+  };
 }
 
 function getFutureOpenGroupEvents(
@@ -1742,70 +1762,254 @@ function hasActiveGroupMember(
   );
 }
 
-async function maybeAddAcceptedRequestToGroup({
+function getAcceptedRequestGroupAssignmentTarget({
   request,
   event,
   store,
-  addGroupMember,
 }: {
-  request: EnrollmentRequest;
+  request: Pick<EnrollmentRequest, "participantProfileId" | "imieNazwisko">;
   event: Pick<TrainingEvent, "id" | "groupId">;
   store: Pick<DemoStore, "groupMembers" | "trainingEvents">;
-  addGroupMember: (
-    input: {
-      groupId: string;
-      participantProfileId: string;
-      priority: GroupMemberPriority;
-      syncFutureEvents?: boolean;
-    },
-  ) => Promise<void>;
 }) {
   if (!event.groupId || !request.participantProfileId) {
-    return false;
+    return null;
   }
 
   if (hasActiveGroupMember(store, event.groupId, request.participantProfileId)) {
-    return false;
-  }
-
-  const shouldAddToGroup = window.confirm(
-    "Osoba trafiła na roster wydarzenia. Dopisać ją też do grupy?",
-  );
-  if (!shouldAddToGroup) {
-    return false;
-  }
-
-  const priorityValue = window.prompt(
-    "Podaj rangę w grupie: stali, regularni albo rezerwowi.",
-    "regularni",
-  );
-  const priority = parseGroupMemberPriorityPromptValue(priorityValue);
-  if (!priority) {
-    toast.error("Osoba została dodana do rosteru. Do grupy wpisz: stali, regularni albo rezerwowi.");
-    return false;
+    return null;
   }
 
   const futureOpenGroupEvents = getFutureOpenGroupEvents(store, event.groupId, event.id);
-  const shouldSyncFutureEvents =
-    futureOpenGroupEvents.length > 0
-      ? window.confirm(
-          `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
-        )
-      : false;
 
-  await addGroupMember({
+  return {
     groupId: event.groupId,
     participantProfileId: request.participantProfileId,
-    priority,
-    syncFutureEvents: shouldSyncFutureEvents,
-  });
+    participantName: request.imieNazwisko,
+    futureOpenGroupEventsCount: futureOpenGroupEvents.length,
+  };
+}
 
-  return true;
+export function AcceptedRequestGroupDialogBody({
+  draft,
+  disabled = false,
+  futureOpenGroupEventsCount,
+  onCancel,
+  onDraftChange,
+  onSubmit,
+}: {
+  draft: AcceptedRequestGroupDialogDraft;
+  disabled?: boolean;
+  futureOpenGroupEventsCount: number;
+  onCancel: () => void;
+  onDraftChange: (
+    updater: (previous: AcceptedRequestGroupDialogDraft) => AcceptedRequestGroupDialogDraft,
+  ) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="mt-6 space-y-4">
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Ranga w grupie</span>
+        <select
+          autoFocus
+          value={draft.priority}
+          onChange={(event) =>
+            onDraftChange((previous) => ({
+              ...previous,
+              priority: event.target.value as GroupMemberPriority,
+            }))
+          }
+          disabled={disabled}
+          className="w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <option value="stali">Stali</option>
+          <option value="regularni">Regularni</option>
+          <option value="rezerwowi">Rezerwowi</option>
+        </select>
+      </label>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Notatki</span>
+        <textarea
+          rows={3}
+          value={draft.notes}
+          onChange={(event) =>
+            onDraftChange((previous) => ({
+              ...previous,
+              notes: event.target.value,
+            }))
+          }
+          disabled={disabled}
+          className="w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        />
+      </label>
+
+      {futureOpenGroupEventsCount > 0 ? (
+        <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+          <input
+            type="checkbox"
+            checked={draft.syncFutureEvents}
+            onChange={(event) =>
+              onDraftChange((previous) => ({
+                ...previous,
+                syncFutureEvents: event.target.checked,
+              }))
+            }
+            disabled={disabled}
+            className="mt-1"
+          />
+          <span>
+            {futureOpenGroupEventsCount === 1
+              ? "Dodaj też automatycznie do 1 przyszłego otwartego szkolenia tej grupy."
+              : `Dodaj też automatycznie do ${futureOpenGroupEventsCount} przyszłych otwartych szkoleń tej grupy.`}
+          </span>
+        </label>
+      ) : null}
+
+      <DialogFooter className="mt-6">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={disabled}
+          className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Anuluj
+        </button>
+        <button
+          type="submit"
+          disabled={disabled}
+          className="inline-flex items-center justify-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {disabled ? "Dodawanie..." : "Dodaj do grupy"}
+        </button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function useAcceptedRequestGroupDialog({
+  addGroupMember,
+}: {
+  addGroupMember: (input: {
+    groupId: string;
+    participantProfileId: string;
+    priority: GroupMemberPriority;
+    notes?: string;
+    syncFutureEvents?: boolean;
+  }) => Promise<void>;
+}) {
+  const [session, setSession] = useState<AcceptedRequestGroupDialogSession | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const resolverRef = useRef<((value: boolean) => void) | null>(null);
+
+  function closeDialog(result: boolean) {
+    resolverRef.current?.(result);
+    resolverRef.current = null;
+    setSubmitting(false);
+    setSession(null);
+  }
+
+  function updateDraft(
+    updater: (previous: AcceptedRequestGroupDialogDraft) => AcceptedRequestGroupDialogDraft,
+  ) {
+    setSession((previous) =>
+      previous
+        ? {
+            ...previous,
+            draft: updater(previous.draft),
+          }
+        : previous,
+    );
+  }
+
+  function openDialog(target: AcceptedRequestGroupAssignmentTarget) {
+    if (resolverRef.current) {
+      resolverRef.current(false);
+      resolverRef.current = null;
+    }
+
+    setSubmitting(false);
+    setSession({
+      ...target,
+      draft: createAcceptedRequestGroupDialogDraft(),
+    });
+
+    return new Promise<boolean>((resolve) => {
+      resolverRef.current = resolve;
+    });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session) {
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      await addGroupMember({
+        groupId: session.groupId,
+        participantProfileId: session.participantProfileId,
+        priority: session.draft.priority,
+        notes: session.draft.notes,
+        syncFutureEvents:
+          session.futureOpenGroupEventsCount > 0 ? session.draft.syncFutureEvents : false,
+      });
+      closeDialog(true);
+    } catch (error) {
+      setSubmitting(false);
+      toast.error(error instanceof Error ? error.message : "Nie udało się dodać osoby do grupy.");
+    }
+  }
+
+  const dialog = session ? (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !submitting) {
+          closeDialog(false);
+        }
+      }}
+    >
+      <DialogContent className="max-w-md rounded-[2rem] border border-brand-line bg-white p-0">
+        <div className="p-6 sm:p-7">
+          <DialogHeader className="text-left">
+            <DialogTitle className="text-2xl font-semibold text-brand-navy">
+              Dopisz do grupy
+            </DialogTitle>
+            <DialogDescription className="text-sm text-brand-muted">
+              {`${
+                session.participantName || "Ta osoba"
+              } trafiła już na roster wydarzenia. Wybierz rangę, uzupełnij notatkę i zdecyduj, czy dopisać ją też do grupy.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          <AcceptedRequestGroupDialogBody
+            draft={session.draft}
+            disabled={submitting}
+            futureOpenGroupEventsCount={session.futureOpenGroupEventsCount}
+            onCancel={() => closeDialog(false)}
+            onDraftChange={updateDraft}
+            onSubmit={handleSubmit}
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  ) : null;
+
+  return {
+    dialog,
+    openDialog,
+  };
 }
 
 type EnrollmentRequestDisplayStatus = EnrollmentRequest["finalStatus"] | "partial";
 
 type EnrollmentRequestArchiveSectionKey = "active" | "confirmed" | "rejected";
+
+type ParticipantOfficialEnrollmentSectionKey = "pending" | "reserve" | "participating";
 
 type EnrollmentRequestArchiveSection = {
   key: EnrollmentRequestArchiveSectionKey;
@@ -1813,6 +2017,14 @@ type EnrollmentRequestArchiveSection = {
   requests: EnrollmentRequest[];
   defaultOpen: boolean;
 };
+
+type ParticipantOfficialEnrollmentSection = {
+  key: ParticipantOfficialEnrollmentSectionKey;
+  title: string;
+  records: ParticipantEnrollmentViewRecord[];
+};
+
+type EnrollmentRequestListItemPosition = "single" | "first" | "middle" | "last";
 
 type ManagedEventParticipantSection = {
   key: string;
@@ -1836,6 +2048,61 @@ function resolveEnrollmentRequestDisplayStatus(
   request: Pick<EnrollmentRequest, "finalStatus">,
 ): EnrollmentRequestDisplayStatus {
   return request.finalStatus as EnrollmentRequestDisplayStatus;
+}
+
+function canMoveEnrollmentRequestToReserve(event: Pick<TrainingEvent, "brandStatus" | "groupId">) {
+  return !isCommunityPanelEvent(event) && Boolean(event.groupId);
+}
+
+export function buildParticipantOfficialEnrollmentSections(
+  records: ParticipantEnrollmentViewRecord[],
+): ParticipantOfficialEnrollmentSection[] {
+  const buckets: Record<ParticipantOfficialEnrollmentSectionKey, ParticipantEnrollmentViewRecord[]> = {
+    pending: [],
+    reserve: [],
+    participating: [],
+  };
+
+  records.forEach((record) => {
+    if (record.isArchived) {
+      return;
+    }
+
+    if (record.kind === "request" && record.displayStatus === "pending") {
+      buckets.pending.push(record);
+      return;
+    }
+
+    if (record.kind === "roster" && record.eventParticipant.status === "rezerwowy") {
+      buckets.reserve.push(record);
+      return;
+    }
+
+    if (
+      record.kind === "roster" &&
+      (record.eventParticipant.status === "invited" || record.eventParticipant.status === "confirmed")
+    ) {
+      buckets.participating.push(record);
+    }
+  });
+
+  return [
+    {
+      key: "pending",
+      title: "Oczekujące",
+      records: buckets.pending,
+    },
+    {
+      key: "reserve",
+      title: "Lista rezerwowych",
+      records: buckets.reserve,
+    },
+    {
+      key: "participating",
+      title: "Uczestniczę",
+      records: buckets.participating,
+    },
+  ].filter((section) => section.records.length > 0);
 }
 
 function isEnrollmentRequestTransferredByStaff(
@@ -2280,6 +2547,37 @@ function getEnrollmentRequestContextLabels(
   };
 }
 
+function getEnrollmentRequestListItemPosition(
+  index: number,
+  total: number,
+): EnrollmentRequestListItemPosition {
+  if (total <= 1) {
+    return "single";
+  }
+
+  if (index === 0) {
+    return "first";
+  }
+
+  if (index === total - 1) {
+    return "last";
+  }
+
+  return "middle";
+}
+
+function EnrollmentRequestListSurface({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return (
+    <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80">
+      {children}
+    </div>
+  );
+}
+
 function EnrollmentRequestMetaRow({
   request,
 }: {
@@ -2337,12 +2635,16 @@ function getEnrollmentRequestDecisionOptions(
 
 export function EnrollmentRequestDecisionButtons({
   finalStatus,
+  canReserve = false,
   disabled = false,
   onDecision,
+  onReserve,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
+  canReserve?: boolean;
   disabled?: boolean;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
+  onReserve?: () => void;
 }) {
   return (
     <div className="flex items-center gap-3">
@@ -2361,6 +2663,16 @@ export function EnrollmentRequestDecisionButtons({
           {decision === "accepted" ? "Potwierdź" : "Odrzuć"}
         </button>
       ))}
+      {canReserve && finalStatus === "pending" ? (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onReserve?.()}
+          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+        >
+          Rezerwowy
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -2372,6 +2684,7 @@ export function EnrollmentRequestSlimRow({
   isExpanded,
   onExpandedChange,
   isSaving = false,
+  itemPosition = "single",
   children,
 }: {
   request: EnrollmentRequest;
@@ -2380,31 +2693,37 @@ export function EnrollmentRequestSlimRow({
   isExpanded: boolean;
   onExpandedChange: (open: boolean) => void;
   isSaving?: boolean;
+  itemPosition?: EnrollmentRequestListItemPosition;
   children: ReactNode;
 }) {
   const { groupLabel, locationLabel } = getEnrollmentRequestContextLabels(event, eventGroup);
   const eventDetailPath = getPanelEventDetailPath(event);
+  const itemShapeClassName =
+    itemPosition === "single"
+      ? "rounded-[1.75rem]"
+      : itemPosition === "first"
+        ? "rounded-t-[1.75rem]"
+        : itemPosition === "last"
+          ? "rounded-b-[1.75rem]"
+          : "";
 
   return (
     <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
       <article
         className={cn(
-          "bg-white px-6 py-3",
-          "sm:rounded-3xl sm:border sm:bg-white sm:p-4 sm:shadow-soft",
+          "overflow-hidden bg-white px-6 py-3 sm:px-6 sm:py-4",
+          itemShapeClassName,
         )}
       >
-        <div className="flex min-w-0 items-start gap-3 sm:items-center">
-          <div className="min-w-0 flex-1">
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1.5 sm:items-center">
+          <div className="min-w-0">
             <Link
               to={eventDetailPath}
               className="inline-flex max-w-full truncate text-xs font-semibold uppercase tracking-[0.18em] text-brand-sky-deep underline-offset-4 transition hover:text-brand-navy hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky-deep/40 sm:text-[13px] sm:tracking-[0.22em]"
             >
               {groupLabel}
             </Link>
-            <p className="mt-1 truncate text-sm text-brand-muted">{locationLabel}</p>
-            <p className="mt-1.5 truncate text-[17px] font-semibold leading-tight text-brand-navy sm:text-lg">
-              {request.imieNazwisko}
-            </p>
+            <p className="mt-1 min-w-0 text-sm text-brand-muted">{locationLabel}</p>
           </div>
 
           <div className="flex shrink-0 items-start gap-2 sm:items-center">
@@ -2447,6 +2766,10 @@ export function EnrollmentRequestSlimRow({
               </button>
             </CollapsibleTrigger>
           </div>
+
+          <p className="col-span-2 min-w-0 text-[17px] font-semibold leading-tight text-brand-navy sm:text-lg">
+            {request.imieNazwisko}
+          </p>
         </div>
 
         <CollapsibleContent className="mt-3 border-t border-brand-line/60 pt-3 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
@@ -2584,17 +2907,21 @@ function EnrollmentRequestTransferPanel({
 
 export function EnrollmentRequestManagementActions({
   finalStatus,
+  canReserve = false,
   disabled = false,
   transferPending = false,
   transferTargetEventId = "",
   onDecision,
+  onReserve,
   onTransfer,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
+  canReserve?: boolean;
   disabled?: boolean;
   transferPending?: boolean;
   transferTargetEventId?: string;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
+  onReserve?: () => void;
   onTransfer: () => void;
 }) {
   const canReject = finalStatus !== "rejected";
@@ -2612,6 +2939,17 @@ export function EnrollmentRequestManagementActions({
           className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
         >
           Odrzuć
+        </button>
+      ) : null}
+
+      {canReserve && canAccept ? (
+        <button
+          type="button"
+          disabled={isDisabled}
+          onClick={() => onReserve?.()}
+          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+        >
+          Rezerwowy
         </button>
       ) : null}
 
@@ -2821,10 +3159,12 @@ function ManagedEventParticipantSections({
 
 function ManagedEnrollmentRequestsSection({
   canManageRequests,
+  canReserveRequests,
   event,
   eventGroup,
   movingRequestId,
   onDecision,
+  onReserve,
   onTransfer,
   onTransferSelectionChange,
   requestSections,
@@ -2837,10 +3177,12 @@ function ManagedEnrollmentRequestsSection({
   onExpandedSectionChange,
 }: {
   canManageRequests: boolean;
+  canReserveRequests: boolean;
   event: TrainingEvent;
   eventGroup?: Group | null;
   movingRequestId: string | null;
   onDecision: (request: EnrollmentRequest, decision: DecisionStatus) => Promise<void>;
+  onReserve: (request: EnrollmentRequest) => Promise<void>;
   onTransfer: (request: EnrollmentRequest) => Promise<void>;
   onTransferSelectionChange: (requestId: string, nextValue: string) => void;
   requestSections: EnrollmentRequestArchiveSection[];
@@ -2872,66 +3214,67 @@ function ManagedEnrollmentRequestsSection({
             open={expandedRequestSections[section.key] ?? section.defaultOpen}
             onOpenChange={(open) => onExpandedSectionChange(section.key, open)}
           >
-            <div className="-mx-6 mt-1 sm:mx-0 sm:mt-0">
-              <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80 sm:space-y-3 sm:divide-y-0 sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:shadow-none">
-                {section.requests.map((request) => {
-                  const transferTargetEventId = transferSelections[request.id] ?? "";
-                  const showTransferPanel = requestTransferOptions.length > 0;
-                  const showPhoto = hasEnrollmentRequestReadyPhoto(request);
+            <EnrollmentRequestListSurface>
+              {section.requests.map((request, index) => {
+                const transferTargetEventId = transferSelections[request.id] ?? "";
+                const showTransferPanel = requestTransferOptions.length > 0;
+                const showPhoto = hasEnrollmentRequestReadyPhoto(request);
 
-                  return (
-                    <EnrollmentRequestSlimRow
-                      key={request.id}
-                      request={request}
-                      event={event}
-                      eventGroup={eventGroup}
-                      isExpanded={expandedRequestIds.includes(request.id)}
-                      onExpandedChange={(open) => onExpandedRequestChange(request.id, open)}
-                      isSaving={updatingRequestId === request.id || movingRequestId === request.id}
-                    >
-                      <div className="space-y-4">
-                        <EnrollmentRequestMetaRow request={request} />
-                        <EnrollmentRequestMessageBlock request={request} />
+                return (
+                  <EnrollmentRequestSlimRow
+                    key={request.id}
+                    request={request}
+                    event={event}
+                    eventGroup={eventGroup}
+                    isExpanded={expandedRequestIds.includes(request.id)}
+                    onExpandedChange={(open) => onExpandedRequestChange(request.id, open)}
+                    isSaving={updatingRequestId === request.id || movingRequestId === request.id}
+                    itemPosition={getEnrollmentRequestListItemPosition(index, section.requests.length)}
+                  >
+                    <div className="space-y-4">
+                      <EnrollmentRequestMetaRow request={request} />
+                      <EnrollmentRequestMessageBlock request={request} />
 
-                        {showPhoto || showTransferPanel ? (
-                          <div
-                            className={cn(
-                              "grid gap-4",
-                              showPhoto && showTransferPanel ? "lg:grid-cols-[1.2fr_1fr]" : "",
-                            )}
-                          >
-                            <EnrollmentPhotoCard request={request} />
-                            <EnrollmentRequestTransferPanel
-                              title={
-                                isCommunityPanelEvent(event)
-                                  ? "Przenieś na inne wydarzenie"
-                                  : "Przenieś na inny termin"
-                              }
-                              options={requestTransferOptions}
-                              value={transferTargetEventId}
-                              onChange={(nextValue) =>
-                                onTransferSelectionChange(request.id, nextValue)
-                              }
-                            />
-                          </div>
-                        ) : null}
-
-                        {canManageRequests ? (
-                          <EnrollmentRequestManagementActions
-                            finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
-                            disabled={updatingRequestId === request.id}
-                            transferPending={movingRequestId === request.id}
-                            transferTargetEventId={transferTargetEventId}
-                            onDecision={(decision) => void onDecision(request, decision)}
-                            onTransfer={() => void onTransfer(request)}
+                      {showPhoto || showTransferPanel ? (
+                        <div
+                          className={cn(
+                            "grid gap-4",
+                            showPhoto && showTransferPanel ? "lg:grid-cols-[1.2fr_1fr]" : "",
+                          )}
+                        >
+                          <EnrollmentPhotoCard request={request} />
+                          <EnrollmentRequestTransferPanel
+                            title={
+                              isCommunityPanelEvent(event)
+                                ? "Przenieś na inne wydarzenie"
+                                : "Przenieś na inny termin"
+                            }
+                            options={requestTransferOptions}
+                            value={transferTargetEventId}
+                            onChange={(nextValue) =>
+                              onTransferSelectionChange(request.id, nextValue)
+                            }
                           />
-                        ) : null}
-                      </div>
-                    </EnrollmentRequestSlimRow>
-                  );
-                })}
-              </div>
-            </div>
+                        </div>
+                      ) : null}
+
+                      {canManageRequests ? (
+                        <EnrollmentRequestManagementActions
+                          finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
+                          canReserve={canReserveRequests}
+                          disabled={updatingRequestId === request.id}
+                          transferPending={movingRequestId === request.id}
+                          transferTargetEventId={transferTargetEventId}
+                          onDecision={(decision) => void onDecision(request, decision)}
+                          onReserve={() => void onReserve(request)}
+                          onTransfer={() => void onTransfer(request)}
+                        />
+                      ) : null}
+                    </div>
+                  </EnrollmentRequestSlimRow>
+                );
+              })}
+            </EnrollmentRequestListSurface>
           </EnrollmentRequestArchiveSectionBlock>
         ))
       )}
@@ -5466,6 +5809,12 @@ export function RequestsPage() {
   });
   const [expandedRequestIds, setExpandedRequestIds] = useState<string[]>([]);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
+  const {
+    dialog: acceptedRequestGroupDialog,
+    openDialog: openAcceptedRequestGroupDialog,
+  } = useAcceptedRequestGroupDialog({
+    addGroupMember,
+  });
   const manageableEventIds = new Set(
     store.trainingEvents
       .filter((event) => canManageTrainingEvent(event, currentUser))
@@ -5483,6 +5832,62 @@ export function RequestsPage() {
         ? Array.from(new Set([...previous, requestId]))
         : previous.filter((item) => item !== requestId),
     );
+  }
+
+  async function handleRequestDecision(
+    request: EnrollmentRequest,
+    event: TrainingEvent,
+    decision: Extract<DecisionStatus, "accepted" | "rejected">,
+  ) {
+    setUpdatingRequestId(request.id);
+
+    try {
+      await manageEnrollmentRequest(request.id, decision);
+      if (decision === "accepted") {
+        const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
+          request,
+          event,
+          store,
+        });
+        const addedToGroup = groupAssignmentTarget
+          ? await openAcceptedRequestGroupDialog(groupAssignmentTarget)
+          : false;
+        toast.success(
+          event.groupId
+            ? addedToGroup
+              ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+              : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+            : "Potwierdzono zgłoszenie.",
+        );
+      } else {
+        toast.success("Odrzucono zgłoszenie.");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zaktualizować zgłoszenia.",
+      );
+    } finally {
+      setUpdatingRequestId(null);
+    }
+  }
+
+  async function handleReserveRequest(request: EnrollmentRequest, event: TrainingEvent) {
+    setUpdatingRequestId(request.id);
+
+    try {
+      await manageEnrollmentRequest(request.id, "accepted", undefined, "rezerwowy");
+      toast.success(
+        event.groupId
+          ? "Przeniesiono zgłoszenie na listę rezerwowych wydarzenia."
+          : "Przeniesiono zgłoszenie na listę rezerwowych.",
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się przenieść zgłoszenia na rezerwę.",
+      );
+    } finally {
+      setUpdatingRequestId(null);
+    }
   }
 
   return (
@@ -5511,80 +5916,55 @@ export function RequestsPage() {
               }))
             }
           >
-            {section.requests.map((request) => {
-              const event = store.trainingEvents.find((item) => item.id === request.eventId);
-              if (!event) {
-                return null;
-              }
+            <EnrollmentRequestListSurface>
+              {section.requests.map((request, index) => {
+                const event = store.trainingEvents.find((item) => item.id === request.eventId);
+                if (!event) {
+                  return null;
+                }
 
-              const eventGroup = event.groupId
-                ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
-                : null;
-              const canDecideRequest = canManageTrainingEvent(event, currentUser);
-              const isExpanded = expandedRequestIds.includes(request.id);
+                const eventGroup = event.groupId
+                  ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
+                  : null;
+                const canDecideRequest = canManageTrainingEvent(event, currentUser);
+                const isExpanded = expandedRequestIds.includes(request.id);
 
-              return (
-                <EnrollmentRequestSlimRow
-                  key={request.id}
-                  request={request}
-                  event={event}
-                  eventGroup={eventGroup}
-                  isExpanded={isExpanded}
-                  onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
-                  isSaving={updatingRequestId === request.id}
-                >
-                  <div className="space-y-4">
-                    <EnrollmentRequestMetaRow request={request} />
-                    <EnrollmentRequestMessageBlock request={request} />
+                return (
+                  <EnrollmentRequestSlimRow
+                    key={request.id}
+                    request={request}
+                    event={event}
+                    eventGroup={eventGroup}
+                    isExpanded={isExpanded}
+                    onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                    isSaving={updatingRequestId === request.id}
+                    itemPosition={getEnrollmentRequestListItemPosition(index, section.requests.length)}
+                  >
+                    <div className="space-y-4">
+                      <EnrollmentRequestMetaRow request={request} />
+                      <EnrollmentRequestMessageBlock request={request} />
 
-                    <EnrollmentPhotoCard request={request} />
+                      <EnrollmentPhotoCard request={request} />
 
-                    {canDecideRequest ? (
-                      <EnrollmentRequestDecisionButtons
-                        finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
-                        disabled={updatingRequestId === request.id}
-                        onDecision={(decision) => {
-                          void (async () => {
-                            setUpdatingRequestId(request.id);
-
-                            try {
-                              await manageEnrollmentRequest(request.id, decision);
-                              if (decision === "accepted") {
-                                const addedToGroup = await maybeAddAcceptedRequestToGroup({
-                                  request,
-                                  event,
-                                  store,
-                                  addGroupMember,
-                                });
-                                toast.success(
-                                  event.groupId
-                                    ? addedToGroup
-                                      ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
-                                      : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
-                                    : "Potwierdzono zgłoszenie.",
-                                );
-                              } else if (decision === "rejected") {
-                                toast.success("Odrzucono zgłoszenie.");
-                              }
-                            } catch (error) {
-                              toast.error(
-                                error instanceof Error
-                                  ? error.message
-                                  : "Nie udało się zaktualizować zgłoszenia.",
-                              );
-                            } finally {
-                              setUpdatingRequestId(null);
-                            }
-                          })();
-                        }}
-                      />
-                    ) : null}
-                  </div>
-                </EnrollmentRequestSlimRow>
-              );
-            })}
+                      {canDecideRequest ? (
+                        <EnrollmentRequestDecisionButtons
+                          finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
+                          canReserve={canMoveEnrollmentRequestToReserve(event)}
+                          disabled={updatingRequestId === request.id}
+                          onDecision={(decision) =>
+                            void handleRequestDecision(request, event, decision)
+                          }
+                          onReserve={() => void handleReserveRequest(request, event)}
+                        />
+                      ) : null}
+                    </div>
+                  </EnrollmentRequestSlimRow>
+                );
+              })}
+            </EnrollmentRequestListSurface>
           </EnrollmentRequestArchiveSectionBlock>
         ))}
+        {acceptedRequestGroupDialog}
       </div>
     </PanelSection>
   );
@@ -8689,6 +9069,10 @@ export function EventsPage() {
       participantEnrollmentRecords.filter((record) => !isCommunityPanelEvent(record.event)),
     [participantEnrollmentRecords],
   );
+  const participantOfficialSections = useMemo(
+    () => buildParticipantOfficialEnrollmentSections(participantOfficialRecords),
+    [participantOfficialRecords],
+  );
   const participantCommunityRecords = useMemo(
     () =>
       participantEnrollmentRecords.filter((record) => isCommunityPanelEvent(record.event)),
@@ -9688,26 +10072,41 @@ export function EventsPage() {
         )
       ) : !isCreatorView && isOfficialJoinedView ? (
         <div className="space-y-6">
-          {participantOfficialRecords.length === 0 ? (
+          {participantOfficialSections.length === 0 ? (
             <EmptyPanelState
-              title="Nie masz jeszcze żadnych szkoleń"
-              description="Kiedy zapiszesz się na szkolenie Emandar, pojawi się ono tutaj."
+              title="Brak aktywnych szkoleń"
+              description="Gdy zgłosisz się na szkolenie Emandar albo trafisz na roster, pojawi się ono tutaj w odpowiedniej sekcji."
             />
           ) : (
-            <div className="space-y-4">
-              <SectionBlockHeading />
-              {participantOfficialRecords.map((record) => (
-                record.kind === "request" ? (
-                  <ParticipantPendingEnrollmentRequestCard
-                    key={record.request.id}
-                    record={record}
-                  />
-                ) : (
-                  <ParticipantGroupEventCard
-                    key={record.eventParticipant.id}
-                    record={record}
-                  />
-                )
+            <div className="-mx-6 space-y-5 sm:mx-0 sm:space-y-6">
+              {participantOfficialSections.map((section) => (
+                <section key={section.key} className="space-y-1.5 sm:space-y-3">
+                  <div className="flex items-center gap-2 px-6 sm:px-1">
+                    <span className="rounded-full bg-brand-navy/8 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:px-3 sm:py-1 sm:text-[11px] sm:tracking-[0.2em]">
+                      {section.title}
+                    </span>
+                    <div className="h-px flex-1 bg-brand-line/80" />
+                    <span className="text-[11px] text-brand-muted sm:text-xs">
+                      {section.records.length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 px-6 sm:px-0">
+                    {section.records.map((record) =>
+                      record.kind === "request" ? (
+                        <ParticipantPendingEnrollmentRequestCard
+                          key={record.request.id}
+                          record={record}
+                        />
+                      ) : (
+                        <ParticipantGroupEventCard
+                          key={record.eventParticipant.id}
+                          record={record}
+                        />
+                      ),
+                    )}
+                  </div>
+                </section>
               ))}
             </div>
           )}
@@ -10094,6 +10493,12 @@ export function EventManagementPage() {
     "requests" | "participants" | "edit"
   >("requests");
   const [publishingEvent, setPublishingEvent] = useState(false);
+  const {
+    dialog: acceptedRequestGroupDialog,
+    openDialog: openAcceptedRequestGroupDialog,
+  } = useAcceptedRequestGroupDialog({
+    addGroupMember,
+  });
   const [settingsDraft, setSettingsDraft] = useState<EventManagementSettingsDraft>({
     status: "active" as TrainingEventStatus,
     capacity: "1",
@@ -10273,18 +10678,6 @@ export function EventManagementPage() {
       }),
     [currentUser, event, store],
   );
-  const futureOpenGroupEvents = event.groupId
-    ? sortEventsByDate(
-        store.trainingEvents.filter(
-          (item) =>
-            item.groupId === event.groupId &&
-            item.id !== event.id &&
-            !isTrainingEventArchived(item) &&
-            !item.rosterFinalizedAt &&
-            new Date(item.startsAt).getTime() > Date.now(),
-        ),
-      )
-    : [];
   const requestSections = splitEnrollmentRequestsByIntent(requests);
   const pendingRequestsCount =
     requestSections.find((section) => section.key === "active")?.requests.length ?? 0;
@@ -10305,60 +10698,35 @@ export function EventManagementPage() {
     );
   }
 
-  async function maybeAddAcceptedRequestToGroup(request: EnrollmentRequest) {
-    if (
-      !event.groupId ||
-      !request.participantProfileId ||
-      activeGroupMembersByParticipantProfileId.has(request.participantProfileId)
-    ) {
-      return false;
-    }
-
-    const shouldAddToGroup = window.confirm(
-      "Osoba trafiła na roster wydarzenia. Dopisać ją też do grupy?",
-    );
-    if (!shouldAddToGroup) {
-      return false;
-    }
-
-    const priorityValue = window.prompt(
-      "Podaj rangę w grupie: stali, regularni albo rezerwowi.",
-      "regularni",
-    );
-    const priority = parseGroupMemberPriorityPromptValue(priorityValue);
-    if (!priority) {
-      toast.error("Osoba została dodana do rosteru. Do grupy wpisz: stali, regularni albo rezerwowi.");
-      return false;
-    }
-
-    const shouldSyncFutureEvents =
-      futureOpenGroupEvents.length > 0
-        ? window.confirm(
-            `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
-          )
-        : false;
-
-    await addGroupMember({
-      groupId: event.groupId,
-      participantProfileId: request.participantProfileId,
-      priority,
-      syncFutureEvents: shouldSyncFutureEvents,
-    });
-
-    return true;
-  }
-
   async function handleEnrollmentDecision(
     request: EnrollmentRequest,
     decision: DecisionStatus,
+    acceptedParticipantStatus?: Extract<EventParticipantStatus, "invited" | "confirmed" | "rezerwowy">,
   ) {
     setUpdatingRequestId(request.id);
 
     try {
-      await manageEnrollmentRequest(request.id, decision);
+      await manageEnrollmentRequest(
+        request.id,
+        decision,
+        undefined,
+        acceptedParticipantStatus,
+      );
 
       if (decision === "accepted") {
-        const addedToGroup = await maybeAddAcceptedRequestToGroup(request);
+        if (acceptedParticipantStatus === "rezerwowy") {
+          toast.success("Przeniesiono zgłoszenie na listę rezerwowych.");
+          return;
+        }
+
+        const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
+          request,
+          event,
+          store,
+        });
+        const addedToGroup = groupAssignmentTarget
+          ? await openAcceptedRequestGroupDialog(groupAssignmentTarget)
+          : false;
         toast.success(
           event.groupId
             ? addedToGroup
@@ -10378,6 +10746,10 @@ export function EventManagementPage() {
     } finally {
       setUpdatingRequestId(null);
     }
+  }
+
+  async function handleEnrollmentReserve(request: EnrollmentRequest) {
+    return handleEnrollmentDecision(request, "accepted", "rezerwowy");
   }
 
   async function handleEventParticipantStatusChange(
@@ -10782,33 +11154,38 @@ export function EventManagementPage() {
         ) : null}
 
         {communityDetailTab === "requests" ? (
-          <ManagedEnrollmentRequestsSection
-            canManageRequests={canManageEvent && !eventIsArchived}
-            event={event}
-            eventGroup={eventGroup}
-            movingRequestId={movingRequestId}
-            onDecision={handleEnrollmentDecision}
-            onTransfer={handleTransferEnrollmentRequest}
-            onTransferSelectionChange={(requestId, nextValue) =>
-              setTransferSelections((previous) => ({
-                ...previous,
-                [requestId]: nextValue,
-              }))
-            }
-            requestSections={requestSections}
-            requestTransferOptions={requestTransferOptions}
-            transferSelections={transferSelections}
-            updatingRequestId={updatingRequestId}
-            expandedRequestIds={expandedRequestIds}
-            expandedRequestSections={expandedRequestSections}
-            onExpandedRequestChange={toggleExpandedRequest}
-            onExpandedSectionChange={(key, open) =>
-              setExpandedRequestSections((previous) => ({
-                ...previous,
-                [key]: open,
-              }))
-            }
-          />
+          <>
+            <ManagedEnrollmentRequestsSection
+              canManageRequests={canManageEvent && !eventIsArchived}
+              canReserveRequests={canMoveEnrollmentRequestToReserve(event)}
+              event={event}
+              eventGroup={eventGroup}
+              movingRequestId={movingRequestId}
+              onDecision={handleEnrollmentDecision}
+              onReserve={handleEnrollmentReserve}
+              onTransfer={handleTransferEnrollmentRequest}
+              onTransferSelectionChange={(requestId, nextValue) =>
+                setTransferSelections((previous) => ({
+                  ...previous,
+                  [requestId]: nextValue,
+                }))
+              }
+              requestSections={requestSections}
+              requestTransferOptions={requestTransferOptions}
+              transferSelections={transferSelections}
+              updatingRequestId={updatingRequestId}
+              expandedRequestIds={expandedRequestIds}
+              expandedRequestSections={expandedRequestSections}
+              onExpandedRequestChange={toggleExpandedRequest}
+              onExpandedSectionChange={(key, open) =>
+                setExpandedRequestSections((previous) => ({
+                  ...previous,
+                  [key]: open,
+                }))
+              }
+            />
+            {acceptedRequestGroupDialog}
+          </>
         ) : null}
       </PanelSection>
     );
@@ -11597,33 +11974,38 @@ export function EventManagementPage() {
       ) : null}
 
       {canManageEvent && !eventIsArchived ? (
-        <ManagedEnrollmentRequestsSection
-          canManageRequests={true}
-          event={event}
-          eventGroup={eventGroup}
-          movingRequestId={movingRequestId}
-          onDecision={handleEnrollmentDecision}
-          onTransfer={handleTransferEnrollmentRequest}
-          onTransferSelectionChange={(requestId, nextValue) =>
-            setTransferSelections((previous) => ({
-              ...previous,
-              [requestId]: nextValue,
-            }))
-          }
-          requestSections={requestSections}
-          requestTransferOptions={requestTransferOptions}
-          transferSelections={transferSelections}
-          updatingRequestId={updatingRequestId}
-          expandedRequestIds={expandedRequestIds}
-          expandedRequestSections={expandedRequestSections}
-          onExpandedRequestChange={toggleExpandedRequest}
-          onExpandedSectionChange={(key, open) =>
-            setExpandedRequestSections((previous) => ({
-              ...previous,
-              [key]: open,
-            }))
-          }
-        />
+        <>
+          <ManagedEnrollmentRequestsSection
+            canManageRequests={true}
+            canReserveRequests={canMoveEnrollmentRequestToReserve(event)}
+            event={event}
+            eventGroup={eventGroup}
+            movingRequestId={movingRequestId}
+            onDecision={handleEnrollmentDecision}
+            onReserve={handleEnrollmentReserve}
+            onTransfer={handleTransferEnrollmentRequest}
+            onTransferSelectionChange={(requestId, nextValue) =>
+              setTransferSelections((previous) => ({
+                ...previous,
+                [requestId]: nextValue,
+              }))
+            }
+            requestSections={requestSections}
+            requestTransferOptions={requestTransferOptions}
+            transferSelections={transferSelections}
+            updatingRequestId={updatingRequestId}
+            expandedRequestIds={expandedRequestIds}
+            expandedRequestSections={expandedRequestSections}
+            onExpandedRequestChange={toggleExpandedRequest}
+            onExpandedSectionChange={(key, open) =>
+              setExpandedRequestSections((previous) => ({
+                ...previous,
+                [key]: open,
+              }))
+            }
+          />
+          {acceptedRequestGroupDialog}
+        </>
       ) : null}
     </PanelSection>
   );

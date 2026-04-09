@@ -386,6 +386,10 @@ function syncGroupMemberToEvent(
   const eventParticipantId = buildEventParticipantId(event.id, profile.id);
   const existingIndex = store.eventParticipants.findIndex((item) => item.id === eventParticipantId);
   const existingParticipant = existingIndex >= 0 ? store.eventParticipants[existingIndex] : null;
+  const resolvedStatus =
+    existingParticipant?.status === "confirmed" || existingParticipant?.status === "rezerwowy"
+      ? existingParticipant.status
+      : "invited";
   const payload: EventParticipant = {
     id: eventParticipantId,
     eventId: event.id,
@@ -401,7 +405,7 @@ function syncGroupMemberToEvent(
     participantPhone: profile.phone,
     participantUserId: profile.linkedUserId ?? null,
     priority: member.priority,
-    status: existingParticipant?.status === "confirmed" ? "confirmed" : "invited",
+    status: resolvedStatus,
     source: existingParticipant?.source ?? source,
     overCapacity: existingParticipant?.overCapacity,
     invitedAt: existingParticipant?.invitedAt ?? nowIso(),
@@ -409,9 +413,8 @@ function syncGroupMemberToEvent(
     attendanceConfirmationRequestedAt: existingParticipant?.attendanceConfirmationRequestedAt,
     attendanceConfirmationRespondedAt: existingParticipant?.attendanceConfirmationRespondedAt,
     attendanceConfirmationExpiresAt: existingParticipant?.attendanceConfirmationExpiresAt,
-    confirmedAt: existingParticipant?.status === "confirmed"
-      ? existingParticipant.confirmedAt ?? nowIso()
-      : undefined,
+    confirmedAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.confirmedAt ?? nowIso() : undefined,
     declinedAt: existingParticipant?.status === "declined" ? existingParticipant.declinedAt : undefined,
     removedAt: existingParticipant?.status === "removed" ? existingParticipant.removedAt : undefined,
     updatedAt: nowIso(),
@@ -1529,9 +1532,19 @@ function syncEventParticipantFromEnrollment(
     priority: activeGroupMember?.priority ?? "regularni",
     status: resolvedStatus,
     source: "public-form",
-    invitedAt: nowIso(),
+    invitedAt: existingParticipant?.invitedAt ?? nowIso(),
+    attendanceConfirmationStatus:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationStatus : undefined,
+    attendanceConfirmationRequestedAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationRequestedAt : undefined,
+    attendanceConfirmationRespondedAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationRespondedAt : undefined,
+    attendanceConfirmationExpiresAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationExpiresAt : undefined,
     confirmedAt:
       resolvedStatus === "confirmed" ? existingParticipant?.confirmedAt ?? nowIso() : undefined,
+    declinedAt: resolvedStatus === "declined" ? existingParticipant?.declinedAt ?? nowIso() : undefined,
+    removedAt: resolvedStatus === "removed" ? existingParticipant?.removedAt ?? nowIso() : undefined,
     updatedAt: nowIso(),
   };
 
@@ -1618,6 +1631,7 @@ export async function manageEnrollmentRequest(
     requestId: string;
     decision: DecisionStatus;
     transferTargetEventId?: string | null;
+    acceptedParticipantStatus?: Extract<EventParticipant["status"], "invited" | "confirmed" | "rezerwowy">;
   },
   currentUser: AppUser,
 ) {
@@ -1665,7 +1679,11 @@ export async function manageEnrollmentRequest(
     request.finalStatus = deriveEnrollmentFinalStatus(input.decision);
 
     if (request.finalStatus === "accepted") {
-      syncEventParticipantFromEnrollment(store, request, event.groupId ? "invited" : "confirmed");
+      syncEventParticipantFromEnrollment(
+        store,
+        request,
+        input.acceptedParticipantStatus ?? (event.groupId ? "invited" : "confirmed"),
+      );
     }
 
     if (request.finalStatus === "rejected") {
@@ -2139,12 +2157,33 @@ export async function updateEventParticipantStatus(
     participant.updatedAt = nowIso();
     if (input.status === "confirmed") {
       participant.confirmedAt = nowIso();
+      participant.declinedAt = undefined;
+      participant.removedAt = undefined;
     }
     if (input.status === "declined" || input.status === "removed") {
       participant.declinedAt = nowIso();
+      if (input.status === "declined") {
+        participant.removedAt = undefined;
+      }
+      participant.attendanceConfirmationStatus = undefined;
+      participant.attendanceConfirmationRequestedAt = undefined;
+      participant.attendanceConfirmationRespondedAt = undefined;
+      participant.attendanceConfirmationExpiresAt = undefined;
+    }
+    if (input.status === "rezerwowy" || input.status === "invited") {
+      participant.confirmedAt = undefined;
+      participant.declinedAt = undefined;
+      participant.removedAt = undefined;
+      participant.attendanceConfirmationStatus = undefined;
+      participant.attendanceConfirmationRequestedAt = undefined;
+      participant.attendanceConfirmationRespondedAt = undefined;
+      participant.attendanceConfirmationExpiresAt = undefined;
+    }
+    if (input.status === "removed") {
+      participant.removedAt = nowIso();
     }
     if (input.status !== "confirmed") {
-      participant.confirmedAt = input.status === "confirmed" ? participant.confirmedAt : undefined;
+      participant.confirmedAt = undefined;
     }
 
     recomputeEventEnrolledCount(store, participant.eventId);

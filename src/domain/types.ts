@@ -45,8 +45,6 @@ export type EnrollmentPhotoRequirement = "default" | "required" | "optional";
 export type PhotoMode = "required" | "optional" | "disabled";
 export type TrainingJoinAudience = "existing-practitioners" | "new-people";
 export type TrainingJoinAudienceSetting = "default" | TrainingJoinAudience;
-export type TrainerSharedSlotSource = "manual" | "ical-derived";
-export type TrainerSharedSlotStatus = "active" | "archived";
 
 export interface AvatarCropSettings {
   sourceWidth: number;
@@ -267,7 +265,6 @@ export interface TrainingEvent {
   brandStatus: EmandarBrandStatus;
   status?: TrainingEventStatus;
   workflowStatus?: TrainingEventWorkflowStatus;
-  sharedSlotId?: string | null;
   publishAutomaticallyAfterTrainerApproval?: boolean;
   minimumParticipants?: number;
   requiresOrganizerApproval?: boolean;
@@ -324,143 +321,6 @@ export interface EventParticipant {
   declinedAt?: string;
   removedAt?: string;
   updatedAt?: string;
-}
-
-export interface AvailabilitySlot {
-  id: string;
-  trainerId: string;
-  trainerUserId?: string;
-  startsAt: string;
-  endsAt: string;
-  location: string;
-  notes: string;
-  visibility: "approved-organizers";
-  visibleToOrganizerIds?: string[];
-}
-
-export interface TrainerSharedSlot {
-  id: string;
-  trainerId: string;
-  trainerUserId?: string;
-  startsAt: string;
-  endsAt: string;
-  location: string;
-  notes: string;
-  visibility: "approved-organizers";
-  source: TrainerSharedSlotSource;
-  status: TrainerSharedSlotStatus;
-  createdAt: string;
-  updatedAt?: string;
-  archivedAt?: string;
-  archivedReason?: "manual" | "conflict" | "relation-detached";
-}
-
-export type TrainerCalendarFeedProvider = "google" | "apple" | "ical";
-export type TrainerCalendarFeedSyncStatus = "idle" | "success" | "error";
-
-export interface TrainerCalendarFeed {
-  id: string;
-  trainerId: string;
-  trainerUserId?: string;
-  provider: TrainerCalendarFeedProvider;
-  url: string;
-  enabled: boolean;
-  lastSyncedAt?: string;
-  lastSyncStatus?: TrainerCalendarFeedSyncStatus;
-  lastSyncError?: string;
-  createdAt: string;
-  updatedAt?: string;
-}
-
-export interface OrganizerExternalBusyMonth {
-  id: string;
-  organizerId: string;
-  monthKey: string;
-  intervals: ExternalBusyInterval[];
-  updatedAt: string;
-}
-
-export interface OrganizerCalendarFeed {
-  id: string;
-  organizerId: string;
-  organizerUserId?: string;
-  provider: TrainerCalendarFeedProvider;
-  url: string;
-  enabled: boolean;
-  lastSyncedAt?: string;
-  lastSyncStatus?: TrainerCalendarFeedSyncStatus;
-  lastSyncError?: string;
-  createdAt: string;
-  updatedAt?: string;
-}
-
-export interface TrainerOrganizerCalendarFeed {
-  id: string;
-  relationId: string;
-  trainerId: string;
-  organizerId: string;
-  trainerUserId?: string;
-  organizerUserId?: string;
-  tokenVersion: number;
-  token?: string;
-  tokenHash: string;
-  enabled: boolean;
-  createdAt: string;
-  updatedAt?: string;
-  tokenRotatedAt?: string;
-  publicFeedUrl?: string;
-  matchedSharedSlotIds?: string[];
-}
-
-export interface ExternalBusyInterval {
-  startsAt: string;
-  endsAt: string;
-  source: "emandar" | "ical";
-  sourceLabel?: string;
-}
-
-export interface TrainerExternalBusyMonth {
-  id: string;
-  trainerId: string;
-  monthKey: string;
-  intervals: ExternalBusyInterval[];
-  updatedAt: string;
-}
-
-export interface TrainerCalendarLivePreview {
-  busyIntervals: ExternalBusyInterval[];
-  enabledFeedCount: number;
-  successfulFeedCount: number;
-  fetchedAt: string;
-  rangeStart: string;
-  rangeEnd: string;
-}
-
-export interface SharedAvailabilityWindow {
-  startsAt: string;
-  endsAt: string;
-  durationHours: number;
-  availableTrainerIds: string[];
-  missingTrainerIds: string[];
-  availableCount: number;
-  isFullMatch: boolean;
-}
-
-export type TrainerFreeDaySliceBucket =
-  | "1-day"
-  | "2-days"
-  | "3-days"
-  | "4-plus-days";
-
-export interface TrainerFreeDaySlice {
-  startsAt: string;
-  endsAt: string;
-  dayKey: string;
-  durationHours: number;
-  spanStartsAt: string;
-  spanEndsAt: string;
-  spanDays: number;
-  spanBucket: TrainerFreeDaySliceBucket;
 }
 
 export interface EnrollmentRequest {
@@ -533,13 +393,6 @@ export interface DemoStore {
   relations: TrainerOrganizerRelation[];
   trainingEvents: TrainingEvent[];
   publicTrainingEvents: TrainingEvent[];
-  availabilitySlots: AvailabilitySlot[];
-  trainerSharedSlots?: TrainerSharedSlot[];
-  trainerCalendarFeeds?: TrainerCalendarFeed[];
-  organizerCalendarFeeds?: OrganizerCalendarFeed[];
-  trainerOrganizerCalendarFeeds?: TrainerOrganizerCalendarFeed[];
-  trainerExternalBusyMonths?: TrainerExternalBusyMonth[];
-  organizerExternalBusyMonths?: OrganizerExternalBusyMonth[];
   enrollmentRequests: EnrollmentRequest[];
   notifications: NotificationRecord[];
   appSettings: AppSettings;
@@ -587,91 +440,6 @@ export interface OrganizerParticipantProfileInput {
   phone: string;
   notes?: string;
   referralSource?: string;
-}
-
-export interface AvailabilityInput {
-  trainerId: string;
-  startsAt: string;
-  endsAt: string;
-  location: string;
-  notes: string;
-}
-
-export interface TrainerCalendarFeedInput {
-  provider: TrainerCalendarFeedProvider;
-  url: string;
-}
-
-export interface OrganizerCalendarFeedInput {
-  provider: TrainerCalendarFeedProvider;
-  url: string;
-}
-
-export interface TrainerSharedSlotInput {
-  startsAt: string;
-  endsAt: string;
-  location: string;
-  notes: string;
-  source?: TrainerSharedSlotSource;
-}
-
-export interface TrainerSharedSlotUpdateInput {
-  slotId: string;
-  startsAt: string;
-  endsAt: string;
-  location: string;
-  notes: string;
-}
-
-export interface OrganizerTrainingDraftInput {
-  groupId: string;
-  sharedSlotId: string;
-  trainerId?: string;
-  title?: string;
-  eventImages?: TrainingEventImage[];
-  useEventImageAsCover?: boolean;
-  summary: string;
-  description: string;
-  type: string;
-  eventTypeSystem?: GroupEventType;
-  scheduleDays: TrainingEventScheduleDay[];
-  location: string;
-  tags?: string[];
-  capacity: number;
-  eligibleGroupPriorities?: GroupMemberPriority[];
-  confirmationLeadTimeDays?: number;
-  brandStatus?: EmandarBrandStatus;
-  status?: TrainingEventStatus;
-  minimumParticipants?: number;
-  publishAutomaticallyAfterTrainerApproval?: boolean;
-}
-
-export interface OrganizerTrainingDraftUpdateInput {
-  eventId: string;
-  groupId: string;
-  sharedSlotId: string;
-  title?: string;
-  eventImages?: TrainingEventImage[];
-  useEventImageAsCover?: boolean;
-  summary: string;
-  description: string;
-  type: string;
-  eventTypeSystem?: GroupEventType;
-  scheduleDays: TrainingEventScheduleDay[];
-  location: string;
-  tags?: string[];
-  capacity: number;
-  eligibleGroupPriorities?: GroupMemberPriority[];
-  confirmationLeadTimeDays?: number;
-  status?: TrainingEventStatus;
-  minimumParticipants?: number;
-  publishAutomaticallyAfterTrainerApproval?: boolean;
-}
-
-export interface OrganizerTrainingDraftDecisionInput {
-  eventId: string;
-  decision: "accepted" | "rejected";
-  message?: string;
 }
 
 export interface TrainingEventInput {

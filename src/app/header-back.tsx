@@ -42,10 +42,6 @@ function hasPanelNestedSearch(pathname: string, search: string) {
     return true;
   }
 
-  if (pathname === "/panel/terminy" && (searchParams.get("groupId") || searchParams.get("slotId"))) {
-    return true;
-  }
-
   return false;
 }
 
@@ -85,6 +81,10 @@ function getPanelFallbackPath(pathname: string, search: string) {
     return "/panel/grupy";
   }
 
+  if (pathname === "/panel/szkolenia/utworz" && searchParams.get("returnToGroupId")) {
+    return `/panel/grupy/${searchParams.get("returnToGroupId")}`;
+  }
+
   if (pathname === "/panel/szkolenia/utworz" || pathname.startsWith("/panel/szkolenia/")) {
     return "/panel/szkolenia";
   }
@@ -98,10 +98,6 @@ function getPanelFallbackPath(pathname: string, search: string) {
     }
 
     return "/panel/wydarzenia-spolecznosci";
-  }
-
-  if (pathname === "/panel/terminy" && (searchParams.get("groupId") || searchParams.get("slotId"))) {
-    return "/panel/terminy";
   }
 
   if (pathname === "/panel/relacje") {

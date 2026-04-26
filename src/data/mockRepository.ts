@@ -2,9 +2,7 @@ import type {
   AppRole,
   AppSettings,
   AppUser,
-  AvailabilityInput,
   CommunityOrganizerProfileUpdateInput,
-  AvailabilitySlot,
   DecisionStatus,
   DemoStore,
   EmandarBrandStatus,
@@ -22,25 +20,18 @@ import type {
   GroupUpdateInput,
   NotificationRecord,
   NotificationSettingsUpdateInput,
-  OrganizerCalendarFeedInput,
   OrganizerParticipantProfileInput,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
-  OrganizerTrainingDraftDecisionInput,
-  OrganizerTrainingDraftInput,
-  OrganizerTrainingDraftUpdateInput,
   ParticipantGroupEventManagementInput,
   ParticipantRegistrationInput,
   ParticipantOnboardingInput,
   ParticipantProfile,
   ParticipantProfileUpdateInput,
   PhotoMode,
-  TrainerCalendarFeedInput,
   TrainerOrganizerRelation,
   TrainerProfile,
   TrainerProfileUpdateInput,
-  TrainerSharedSlotInput,
-  TrainerSharedSlotUpdateInput,
   TrainingEvent,
   TrainingEventBrandStatusUpdateInput,
   TrainingEventCollaborationUpdateInput,
@@ -83,13 +74,6 @@ type PersistedCollectionKey =
   | "eventParticipants"
   | "relations"
   | "trainingEvents"
-  | "availabilitySlots"
-  | "trainerSharedSlots"
-  | "trainerCalendarFeeds"
-  | "organizerCalendarFeeds"
-  | "trainerOrganizerCalendarFeeds"
-  | "trainerExternalBusyMonths"
-  | "organizerExternalBusyMonths"
   | "enrollmentRequests"
   | "notifications"
   | "appSettings";
@@ -97,6 +81,7 @@ type PersistedCollectionsPatch = Partial<Pick<DemoStore, PersistedCollectionKey>
 
 const authSessionStorageKey = "emandar:mock-auth-session";
 const smsSessionStorageKey = "emandar:mock-sms-session";
+const verifiedPhonePreAuthStorageKey = "emandar:mock-verified-phone-preauth";
 const pollIntervalMs = 5000;
 const persistedCollectionKeys: PersistedCollectionKey[] = [
   "users",
@@ -108,13 +93,6 @@ const persistedCollectionKeys: PersistedCollectionKey[] = [
   "eventParticipants",
   "relations",
   "trainingEvents",
-  "availabilitySlots",
-  "trainerSharedSlots",
-  "trainerCalendarFeeds",
-  "organizerCalendarFeeds",
-  "trainerOrganizerCalendarFeeds",
-  "trainerExternalBusyMonths",
-  "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
   "appSettings",
@@ -132,6 +110,23 @@ const publicListeners = new Map<number, (patch: StorePatch) => void>();
 const privateListeners = new Map<number, (patch: StorePatch) => void>();
 const userProfileListeners = new Map<number, { userId: string; callback: (user: AppUser | null) => void }>();
 const authListeners = new Map<number, (userId: string | null) => void>();
+
+export type VerifiedPhonePreAuthState = {
+  phone: string;
+  verifiedAt: string;
+  seedTrainerId?: string;
+};
+
+export type ConfirmSmsCodeResult =
+  | {
+      status: "existing-account";
+      userId: string;
+      phone: string;
+    }
+  | {
+      status: "missing-account";
+      phone: string;
+    };
 
 class MockVersionConflictError extends Error {
   snapshot: { store: DemoStore; version: number };
@@ -520,6 +515,10 @@ function isPhoneOnlyDisplayName(value: string | null | undefined, phone: string)
   return Boolean(normalizedValue) && normalizedValue === normalizedPhone;
 }
 
+function isSamePhone(left: string | null | undefined, right: string | null | undefined) {
+  return normalizePhoneLookupKey(left ?? "") === normalizePhoneLookupKey(right ?? "");
+}
+
 function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoStore {
   const base = createEmptyStore();
 
@@ -536,19 +535,6 @@ function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoS
     relations: cloneValue(raw?.relations ?? base.relations),
     trainingEvents: cloneValue(raw?.trainingEvents ?? base.trainingEvents),
     publicTrainingEvents: cloneValue(raw?.publicTrainingEvents ?? base.publicTrainingEvents),
-    availabilitySlots: cloneValue(raw?.availabilitySlots ?? base.availabilitySlots),
-    trainerSharedSlots: cloneValue(raw?.trainerSharedSlots ?? base.trainerSharedSlots),
-    trainerCalendarFeeds: cloneValue(raw?.trainerCalendarFeeds ?? base.trainerCalendarFeeds),
-    organizerCalendarFeeds: cloneValue(raw?.organizerCalendarFeeds ?? base.organizerCalendarFeeds),
-    organizerExternalBusyMonths: cloneValue(
-      raw?.organizerExternalBusyMonths ?? base.organizerExternalBusyMonths,
-    ),
-    trainerOrganizerCalendarFeeds: cloneValue(
-      raw?.trainerOrganizerCalendarFeeds ?? base.trainerOrganizerCalendarFeeds,
-    ),
-    trainerExternalBusyMonths: cloneValue(
-      raw?.trainerExternalBusyMonths ?? base.trainerExternalBusyMonths,
-    ),
     enrollmentRequests: cloneValue(raw?.enrollmentRequests ?? base.enrollmentRequests),
     notifications: cloneValue(raw?.notifications ?? base.notifications),
     appSettings: {
@@ -577,6 +563,78 @@ function getCurrentSmsSession() {
     smsSessionStorageKey,
     null,
   );
+}
+
+function getVerifiedPhonePreAuthState() {
+  return readStorageJson<VerifiedPhonePreAuthState | null>(
+    verifiedPhonePreAuthStorageKey,
+    null,
+  );
+}
+
+function setVerifiedPhonePreAuthState(state: VerifiedPhonePreAuthState) {
+  writeStorageJson(verifiedPhonePreAuthStorageKey, state);
+}
+
+function clearVerifiedPhonePreAuthState() {
+  removeStorageValue(verifiedPhonePreAuthStorageKey);
+}
+
+function clearVerifiedPhonePreAuthStateForPhone(phone: string) {
+  const state = getVerifiedPhonePreAuthState();
+  if (state && isSamePhone(state.phone, phone)) {
+    clearVerifiedPhonePreAuthState();
+  }
+}
+
+function getMatchingVerifiedPhonePreAuthState(phone: string) {
+  const state = getVerifiedPhonePreAuthState();
+  if (!state || !isSamePhone(state.phone, phone)) {
+    return null;
+  }
+
+  return state;
+}
+
+function applyVerifiedPhoneToUser(
+  user: AppUser,
+  phone: string,
+  verifiedAt: string,
+  seedTrainerId?: string,
+) {
+  user.phone = phone;
+  user.phoneVerifiedAt = verifiedAt;
+  user.authProvider = "phone";
+  ensureRole(user, "participant");
+  if (!user.participantProfileId) {
+    user.participantProfileId = buildParticipantProfileId(phone);
+  }
+  if (seedTrainerId) {
+    user.selectedTrainerIds = Array.from(new Set([...(user.selectedTrainerIds ?? []), seedTrainerId]));
+  }
+}
+
+function createPhoneParticipantUser(
+  phone: string,
+  verifiedAt: string,
+  seedTrainerId?: string,
+): AppUser {
+  const participantProfileId = buildParticipantProfileId(phone);
+
+  return {
+    id: `user-${participantProfileId}`,
+    role: "participant",
+    roles: ["participant"],
+    primaryRole: "participant",
+    displayName: phone,
+    phone,
+    status: "active",
+    participantProfileId,
+    phoneVerifiedAt: verifiedAt,
+    createdAt: nowIso(),
+    selectedTrainerIds: seedTrainerId ? [seedTrainerId] : [],
+    authProvider: "phone",
+  };
 }
 
 async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number }> {
@@ -1199,13 +1257,6 @@ export function createEmptyStore(): DemoStore {
     relations: [],
     trainingEvents: [],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    organizerExternalBusyMonths: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: {
@@ -1229,6 +1280,11 @@ export function subscribeAuthState(onAuthState: (userId: string | null) => void)
 export function getCurrentSessionPhone() {
   const store = getCachedStore();
   return getCurrentStoreUser(store)?.phone ?? "";
+}
+
+export function getVerifiedPhonePreAuth() {
+  const state = getVerifiedPhonePreAuthState();
+  return state ? cloneValue(state) : null;
 }
 
 export async function requestSmsCode(phone: string) {
@@ -1260,49 +1316,43 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
     throw new Error("Kod SMS jest nieprawidłowy.");
   }
 
-  const result = await mutateStore((store) => {
-    let user = store.users.find((item) => item.phone === phone) ?? null;
+  const verifiedAt = nowIso();
+  const store = await ensureStoreLoaded();
+  const existingUser = store.users.find((item) => isSamePhone(item.phone, phone)) ?? null;
 
-    if (!user) {
-      const participantProfileId = buildParticipantProfileId(phone);
-      user = {
-        id: `user-${participantProfileId}`,
-        role: "participant",
-        roles: ["participant"],
-        primaryRole: "participant",
-        displayName: phone,
-        phone,
-        status: "active",
-        participantProfileId,
-        phoneVerifiedAt: nowIso(),
-        createdAt: nowIso(),
-        selectedTrainerIds: seedTrainerId ? [seedTrainerId] : [],
-        authProvider: "phone",
-      };
-      store.users.push(user);
-    } else {
-      user.phone = phone;
-      user.phoneVerifiedAt = nowIso();
-      user.authProvider = "phone";
-      ensureRole(user, "participant");
-      if (!user.participantProfileId) {
-        user.participantProfileId = buildParticipantProfileId(phone);
-      }
-      if (seedTrainerId) {
-        user.selectedTrainerIds = Array.from(new Set([...(user.selectedTrainerIds ?? []), seedTrainerId]));
-      }
-    }
+  removeStorageValue(smsSessionStorageKey);
 
-    upsertParticipantProfileFromUser(store, user);
+  if (!existingUser) {
+    setVerifiedPhonePreAuthState({
+      phone,
+      verifiedAt,
+      seedTrainerId,
+    });
 
     return {
+      status: "missing-account",
+      phone,
+    } satisfies ConfirmSmsCodeResult;
+  }
+
+  const result = await mutateStore((draft) => {
+    const user = draft.users.find((item) => item.id === existingUser.id);
+    if (!user) {
+      throw new Error("Nie znaleziono użytkownika.");
+    }
+
+    applyVerifiedPhoneToUser(user, phone, verifiedAt, seedTrainerId);
+    upsertParticipantProfileFromUser(draft, user);
+
+    return {
+      status: "existing-account" as const,
       userId: user.id,
       phone,
     };
   });
 
+  clearVerifiedPhonePreAuthStateForPhone(phone);
   setCurrentSessionUserId(result.userId);
-  removeStorageValue(smsSessionStorageKey);
   emitAuthListeners();
   emitStoreListeners();
 
@@ -1362,8 +1412,41 @@ export async function fetchAppUser(userId: string) {
 export async function ensurePhoneParticipantProfile(input?: {
   seedTrainerId?: string;
 }) {
+  let sessionUserIdToSet: string | null = null;
+  let usedVerifiedPhoneState: VerifiedPhonePreAuthState | null = null;
+
   const result = await mutateStore((store) => {
-    const currentUser = getActorOrThrow(store);
+    let currentUser = getCurrentStoreUser(store);
+
+    if (!currentUser) {
+      const verifiedPhoneState = getVerifiedPhonePreAuthState();
+      if (!verifiedPhoneState) {
+        throw new Error("Najpierw potwierdź numer telefonu.");
+      }
+
+      usedVerifiedPhoneState = verifiedPhoneState;
+      currentUser =
+        store.users.find((item) => isSamePhone(item.phone, verifiedPhoneState.phone)) ?? null;
+
+      if (!currentUser) {
+        currentUser = createPhoneParticipantUser(
+          verifiedPhoneState.phone,
+          verifiedPhoneState.verifiedAt,
+          verifiedPhoneState.seedTrainerId,
+        );
+        store.users.push(currentUser);
+      } else {
+        applyVerifiedPhoneToUser(
+          currentUser,
+          verifiedPhoneState.phone,
+          verifiedPhoneState.verifiedAt,
+          verifiedPhoneState.seedTrainerId,
+        );
+      }
+
+      sessionUserIdToSet = currentUser.id;
+    }
+
     const accountCreated = !currentUser.participantProfileId;
 
     ensureRole(currentUser, "participant");
@@ -1384,6 +1467,16 @@ export async function ensurePhoneParticipantProfile(input?: {
       accountCreated,
     };
   });
+
+  if (usedVerifiedPhoneState) {
+    clearVerifiedPhonePreAuthStateForPhone(usedVerifiedPhoneState.phone);
+  }
+
+  if (sessionUserIdToSet) {
+    setCurrentSessionUserId(sessionUserIdToSet);
+    emitAuthListeners();
+    emitStoreListeners();
+  }
 
   return result;
 }
@@ -2274,218 +2367,10 @@ export async function finalizeEventRoster(eventId: string, actor: AppUser) {
   });
 }
 
-export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId =
-      actor.role === "trainer" ? requireTrainerProfileId(store, actor) : input.trainerId;
-
-    store.availabilitySlots.unshift({
-      id: createId("availability"),
-      trainerId,
-      trainerUserId: findTrainer(store, trainerId)?.userId ?? actor.id,
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
-      location: input.location.trim(),
-      notes: input.notes.trim(),
-      visibility: "approved-organizers",
-      visibleToOrganizerIds: [],
-    });
-  });
-}
-
-export async function addTrainerCalendarFeed(input: TrainerCalendarFeedInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(store, actor);
-    store.trainerCalendarFeeds.unshift({
-      id: createId("trainer-feed"),
-      trainerId,
-      trainerUserId: actor.id,
-      provider: input.provider,
-      url: input.url.trim(),
-      enabled: true,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
-  });
-}
-
-export async function updateTrainerCalendarFeedEnabled(
-  feedId: string,
-  enabled: boolean,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    const feed = store.trainerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu kalendarza.");
-    }
-
-    if (feed.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego feedu.");
-    }
-
-    feed.enabled = enabled;
-    feed.updatedAt = nowIso();
-  });
-}
-
-export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    const feed = store.trainerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu kalendarza.");
-    }
-
-    if (feed.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz usunąć tego feedu.");
-    }
-
-    store.trainerCalendarFeeds = store.trainerCalendarFeeds.filter((item) => item.id !== feedId);
-  });
-}
-
-export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(store, actor);
-    store.trainerCalendarFeeds = store.trainerCalendarFeeds.map((feed) =>
-      feed.trainerId === trainerId
-        ? {
-            ...feed,
-            updatedAt: nowIso(),
-            syncRequestedAt: nowIso(),
-          }
-        : feed,
-    );
-  });
-}
-
-export async function addTrainerSharedSlot(input: TrainerSharedSlotInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(store, actor);
-    store.trainerSharedSlots.unshift({
-      id: createId("shared-slot"),
-      trainerId,
-      trainerUserId: actor.id,
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
-      location: input.location.trim(),
-      notes: input.notes.trim(),
-      source: input.source ?? "manual",
-      status: "active",
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
-  });
-}
-
-export async function updateTrainerSharedSlot(input: TrainerSharedSlotUpdateInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const slot = store.trainerSharedSlots.find((item) => item.id === input.slotId);
-    if (!slot) {
-      throw new Error("Nie znaleziono slotu.");
-    }
-
-    if (slot.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego slotu.");
-    }
-
-    slot.startsAt = input.startsAt;
-    slot.endsAt = input.endsAt;
-    slot.location = input.location.trim();
-    slot.notes = input.notes.trim();
-    slot.updatedAt = nowIso();
-  });
-}
-
-export async function archiveTrainerSharedSlot(slotId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    const slot = store.trainerSharedSlots.find((item) => item.id === slotId);
-    if (!slot) {
-      throw new Error("Nie znaleziono slotu.");
-    }
-
-    if (slot.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz archiwizować tego slotu.");
-    }
-
-    slot.status = "archived";
-    slot.updatedAt = nowIso();
-  });
-}
-
-export async function addOrganizerCalendarFeed(input: OrganizerCalendarFeedInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const organizerId = requireOrganizerProfileId(actor);
-    store.organizerCalendarFeeds.unshift({
-      id: createId("organizer-feed"),
-      organizerId,
-      organizerUserId: actor.id,
-      provider: input.provider,
-      url: input.url.trim(),
-      enabled: true,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
-  });
-}
-
-export async function updateOrganizerCalendarFeedEnabled(
-  feedId: string,
-  enabled: boolean,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    const feed = store.organizerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu organizatora.");
-    }
-
-    if (feed.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego feedu.");
-    }
-
-    feed.enabled = enabled;
-    feed.updatedAt = nowIso();
-  });
-}
-
-export async function removeOrganizerCalendarFeed(feedId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    const feed = store.organizerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu organizatora.");
-    }
-
-    if (feed.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz usunąć tego feedu.");
-    }
-
-    store.organizerCalendarFeeds = store.organizerCalendarFeeds.filter((item) => item.id !== feedId);
-  });
-}
-
-export async function syncOwnOrganizerCalendarFeeds(actor: AppUser) {
-  await mutateStore((store) => {
-    const organizerId = requireOrganizerProfileId(actor);
-    store.organizerCalendarFeeds = store.organizerCalendarFeeds.map((feed) =>
-      feed.organizerId === organizerId
-        ? {
-            ...feed,
-            updatedAt: nowIso(),
-            syncRequestedAt: nowIso(),
-          }
-        : feed,
-    );
-  });
-}
-
 function createEventBase(
   store: DemoStore,
   actor: AppUser,
-  input:
-    | TrainingEventInput
-    | OrganizerTrainingDraftInput
-    | OrganizerTrainingDraftUpdateInput,
+  input: TrainingEventInput,
 ) {
   const trainerId =
     "trainerId" in input && input.trainerId ? input.trainerId : actor.trainerProfileId ?? null;
@@ -2510,7 +2395,7 @@ function createEventBase(
     location: input.location.trim(),
     tags: cloneValue(input.tags ?? []),
     capacity: input.capacity,
-    isPublished: "isPublished" in input ? Boolean(input.isPublished) : false,
+    isPublished: Boolean(input.isPublished),
     imageHint: isCommunityBrandStatus(input.brandStatus ?? "official")
       ? "community event"
       : "training event",
@@ -2518,197 +2403,6 @@ function createEventBase(
     status: input.status ?? "active",
     minimumParticipants: input.minimumParticipants ?? 1,
   };
-}
-
-export async function createOrganizerTrainingDraft(
-  input: OrganizerTrainingDraftInput,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    ensureOrganizerFunctionsActive(actor);
-    const group = store.groups.find((item) => item.id === input.groupId);
-    if (!group) {
-      throw new Error("Nie znaleziono grupy.");
-    }
-
-    const base = createEventBase(store, actor, input);
-    store.trainingEvents.unshift({
-      id: createId("event"),
-      ...base,
-      groupId: group.id,
-      groupName: group.name,
-      eventImages: cloneValue(input.eventImages ?? []),
-      useEventImageAsCover: input.useEventImageAsCover === true,
-      eventTypeSystem: input.eventTypeSystem ?? group.defaultEventType,
-      assignedCount: 0,
-      reserveCount: 0,
-      enrolledCount: 0,
-      workflowStatus: "draft-requested",
-      publishAutomaticallyAfterTrainerApproval: input.publishAutomaticallyAfterTrainerApproval,
-      requiresOrganizerApproval: false,
-      eligibleGroupPriorities: cloneValue(input.eligibleGroupPriorities ?? ["stali", "regularni"]),
-      confirmationLeadTimeDays: input.confirmationLeadTimeDays ?? group.defaultConfirmationLeadTimeDays,
-      trainerCollaborationStatus: "pending",
-      organizerCollaborationStatus: "accepted",
-      sharedSlotId: input.sharedSlotId,
-      createdByRole: "organizer",
-      publicationApprovalStatus: isCommunityBrandStatus(base.brandStatus) ? "pending" : undefined,
-      enrollmentPhotoRequirement: "optional",
-      joinAudienceSetting: "default",
-    });
-  });
-}
-
-export async function updateOrganizerTrainingDraft(
-  input: OrganizerTrainingDraftUpdateInput,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    if (actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
-
-    const event = store.trainingEvents.find((item) => item.id === input.eventId);
-    if (!event) {
-      throw new Error("Nie znaleziono draftu.");
-    }
-
-    if (event.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego draftu.");
-    }
-
-    const group = store.groups.find((item) => item.id === input.groupId);
-    if (!group) {
-      throw new Error("Nie znaleziono grupy.");
-    }
-
-    const base = createEventBase(store, actor, input);
-    Object.assign(event, {
-      ...base,
-      groupId: group.id,
-      groupName: group.name,
-      eventImages: cloneValue(input.eventImages ?? []),
-      useEventImageAsCover: input.useEventImageAsCover === true,
-      eventTypeSystem: input.eventTypeSystem ?? group.defaultEventType,
-      sharedSlotId: input.sharedSlotId,
-      eligibleGroupPriorities: cloneValue(input.eligibleGroupPriorities ?? event.eligibleGroupPriorities ?? []),
-      confirmationLeadTimeDays:
-        input.confirmationLeadTimeDays ?? event.confirmationLeadTimeDays ?? group.defaultConfirmationLeadTimeDays,
-      joinAudienceSetting: event.joinAudienceSetting ?? "default",
-    });
-  });
-}
-
-export async function withdrawOrganizerTrainingDraft(eventId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    if (actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
-
-    const event = store.trainingEvents.find((item) => item.id === eventId);
-    if (!event) {
-      throw new Error("Nie znaleziono wydarzenia.");
-    }
-
-    if (event.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz wycofać tego draftu.");
-    }
-
-    event.workflowStatus = "withdrawn";
-    event.withdrawnAt = nowIso();
-    event.withdrawnByUserId = actor.id;
-    event.isPublished = false;
-  });
-}
-
-export async function decideOrganizerTrainingDraft(
-  input: OrganizerTrainingDraftDecisionInput,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    const event = store.trainingEvents.find((item) => item.id === input.eventId);
-    if (!event) {
-      throw new Error("Nie znaleziono wydarzenia.");
-    }
-
-    if (event.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zdecydować o tym drafcie.");
-    }
-
-    event.trainerCollaborationStatus = input.decision;
-    event.trainerDecidedAt = nowIso();
-    event.trainerDecidedByUserId = actor.id;
-    event.trainerDecisionReason = input.message?.trim();
-    event.workflowStatus = input.decision === "accepted" ? "trainer-accepted" : "trainer-rejected";
-    if (input.decision === "accepted") {
-      event.isPublished = !isCommunityBrandStatus(event.brandStatus);
-    }
-  });
-}
-
-export async function resetTrainerOrganizerCalendarFeedToken(
-  relationId: string,
-  actor: AppUser,
-) {
-  return mutateStore((store) => {
-    const relation = store.relations.find((item) => item.id === relationId);
-    if (!relation) {
-      throw new Error("Nie znaleziono relacji.");
-    }
-
-    if (
-      relation.organizerUserId !== actor.id &&
-      relation.trainerUserId !== actor.id &&
-      actor.role !== "admin"
-    ) {
-      throw new Error("Nie możesz zresetować tokenu tej relacji.");
-    }
-
-    const token = createId("feed");
-    const publicFeedUrl = `${window.location.origin}${getBasePath()}api/ical/trainer-organizer/${token}.ics`;
-    const existing = store.trainerOrganizerCalendarFeeds.find((item) => item.id === relation.id);
-    if (existing) {
-      existing.token = token;
-      existing.publicFeedUrl = publicFeedUrl;
-      existing.updatedAt = nowIso();
-    } else {
-      store.trainerOrganizerCalendarFeeds.unshift({
-        id: relation.id,
-        relationId: relation.id,
-        trainerId: relation.trainerId,
-        organizerId: relation.organizerId,
-        trainerUserId: relation.trainerUserId ?? "",
-        organizerUserId: relation.organizerUserId ?? "",
-        token,
-        publicFeedUrl,
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      });
-    }
-
-    return {
-      ok: true as const,
-      token,
-    };
-  });
-}
-
-export async function getTrainerOrganizerGoogleCalendarSubscribeUrl(
-  relationId: string,
-  actor: AppUser,
-) {
-  const store = await ensureStoreLoaded();
-  const feed = store.trainerOrganizerCalendarFeeds.find((item) => item.id === relationId);
-  if (!feed) {
-    await resetTrainerOrganizerCalendarFeedToken(relationId, actor);
-    const refreshedStore = await ensureStoreLoaded();
-    return (
-      refreshedStore.trainerOrganizerCalendarFeeds.find((item) => item.id === relationId)?.publicFeedUrl ??
-      ""
-    );
-  }
-
-  return feed.publicFeedUrl ?? "";
 }
 
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {
@@ -2738,6 +2432,7 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
     const nextEvent: TrainingEvent = {
       id: createId("event"),
       ...base,
+      title: base.title || group?.name || "",
       organizerId: group?.organizerId ?? base.organizerId,
       organizerUserId:
         group?.organizerId
@@ -2810,6 +2505,19 @@ export async function uploadCommunityEventImages(files: File[]) {
 
 export async function registerParticipant(input: ParticipantRegistrationInput) {
   const avatarUrl = await maybeReadFile(input.avatarFile);
+  const normalizedPhone = input.phone.trim();
+  const hasSession = Boolean(getCurrentSessionUserId());
+
+  if (!hasSession) {
+    const verifiedPhoneState = getMatchingVerifiedPhonePreAuthState(normalizedPhone);
+    if (!verifiedPhoneState) {
+      throw new Error("Najpierw potwierdź numer telefonu.");
+    }
+
+    await ensurePhoneParticipantProfile({
+      seedTrainerId: verifiedPhoneState.seedTrainerId,
+    });
+  }
 
   await mutateStore((store) => {
     const actor = getActorOrThrow(store);
@@ -2821,7 +2529,7 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
 
     actor.displayName = input.displayName.trim();
     actor.notes = input.notes.trim();
-    actor.phone = input.phone.trim();
+    actor.phone = normalizedPhone;
     actor.phoneVerifiedAt = actor.phoneVerifiedAt ?? nowIso();
     actor.participantOnboardingCompletedAt = nowIso();
     actor.trainingDataConsentAccepted = true;
@@ -2859,6 +2567,8 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
       }
     }
   });
+
+  clearVerifiedPhonePreAuthStateForPhone(normalizedPhone);
 }
 
 export async function connectOrganizerToTrainerWithCode(

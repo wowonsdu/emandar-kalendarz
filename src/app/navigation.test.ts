@@ -230,7 +230,6 @@ describe("navigation sections", () => {
       "Widok Publiczny",
       "Moja Przestrzeń",
       "Moderator",
-      "Organizator",
     ]);
     expect(sections[2].items[0]).toEqual(
       expect.objectContaining({
@@ -256,7 +255,6 @@ describe("navigation sections", () => {
     expect(sections.map((section) => section.title)).toEqual([
       "Widok Publiczny",
       "Moja Przestrzeń",
-      "Organizator",
     ]);
   });
 
@@ -277,7 +275,6 @@ describe("navigation sections", () => {
       "Widok Publiczny",
       "Moja Przestrzeń",
       "Moderator",
-      "Organizator",
       "Trener",
       "Admin",
     ]);

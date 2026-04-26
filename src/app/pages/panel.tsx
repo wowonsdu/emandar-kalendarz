@@ -47,17 +47,7 @@ import {
   type ParticipantPendingEnrollmentRequestRecord,
 } from "@/app/dashboard";
 import { CommunityEventCard } from "@/app/components/community-event-card";
-import {
-  OrganizerCalendarFeedsPanel,
-  OrganizerGoogleCalendarExportPanel,
-  OrganizerMatchedSlotsPanel,
-  OrganizerTrainingDraftEditorPanel,
-  OrganizerTrainingDraftListPanel,
-  type OrganizerMatchedSlotView,
-  type OrganizerTrainingDraftFormValues,
-  type OrganizerTrainingDraftListItem,
-  TrainerAvailabilityWorkspace,
-} from "@/app/components/panel";
+import { saveOrganizerProfiles } from "@/app/pages/organizer-profile-flow";
 import { AvatarMedia } from "@/app/components/avatar-media";
 import {
   Collapsible,
@@ -82,7 +72,6 @@ import {
   aggregateEventCapacityStats,
   buildPhoneHref,
   canApproveEnrollmentRequest,
-  buildTrainerFreeDaySlices,
   canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
@@ -143,10 +132,8 @@ import type {
   PhotoMode,
   TrainerProfile,
   TrainerOrganizerRelation,
-  TrainerFreeDaySliceBucket,
   TrainingEventImage,
   TrainingJoinAudienceSetting,
-  TrainerCalendarFeedProvider,
   TrainingEvent,
   TrainingEventScheduleDay,
   TrainingEventStatus,
@@ -176,34 +163,6 @@ function formatDateTime(date: string) {
     minute: "2-digit",
   }).format(new Date(date));
 }
-
-function formatDurationHours(hours: number) {
-  if (Number.isInteger(hours)) {
-    return `${hours} h`;
-  }
-
-  return `${hours.toFixed(1).replace(".", ",")} h`;
-}
-
-function getFreeSliceBucketLabel(bucket: TrainerFreeDaySliceBucket) {
-  switch (bucket) {
-    case "2-days":
-      return "2 dni";
-    case "3-days":
-      return "3 dni";
-    case "4-plus-days":
-      return "Wiecej niz 3 dni";
-    default:
-      return "1 dzien";
-  }
-}
-
-const FREE_SLICE_BUCKETS = [
-  "1-day",
-  "2-days",
-  "3-days",
-  "4-plus-days",
-] as const satisfies TrainerFreeDaySliceBucket[];
 
 const PROFILE_AVATAR_ASPECT_RATIO = 4 / 5;
 
@@ -335,59 +294,6 @@ function buildAvatarCropSettings(draft: AvatarCropDraft): AvatarCropSettings | u
   };
 }
 
-function getAvailabilityHorizonEnd() {
-  const end = new Date();
-  end.setUTCMinutes(0, 0, 0);
-  end.setUTCFullYear(end.getUTCFullYear() + 3);
-  return end.toISOString();
-}
-
-function createOrganizerDraftFormValuesFromSlot(
-  slot: OrganizerMatchedSlotView,
-): OrganizerTrainingDraftFormValues {
-  return {
-    groupId: "",
-    sharedSlotId: slot.id,
-    title: `${slot.trainerName} · ${slot.location}`,
-    summary: "",
-    description: "",
-    type: "Warsztat stacjonarny",
-    location: slot.location,
-    capacity: 20,
-    minimumParticipants: 10,
-    status: "active",
-    publishAutomaticallyAfterTrainerApproval: false,
-    tagsText: "",
-    scheduleDays: [
-      {
-        startsAt: slot.startsAt,
-        endsAt: slot.endsAt,
-      },
-    ],
-  };
-}
-
-function createOrganizerDraftFormValuesFromEvent(
-  event: TrainingEvent,
-): OrganizerTrainingDraftFormValues {
-  return {
-    groupId: event.groupId ?? "",
-    sharedSlotId: event.sharedSlotId ?? "",
-    title: event.title,
-    summary: event.summary,
-    description: event.description,
-    type: event.type,
-    location: event.location,
-    capacity: event.capacity,
-    minimumParticipants: resolveMinimumParticipants(event),
-    status: resolveTrainingEventStatus(event.status),
-    publishAutomaticallyAfterTrainerApproval:
-      event.publishAutomaticallyAfterTrainerApproval === true,
-    tagsText: (event.tags ?? []).join(", "),
-    scheduleDays: getTrainingEventScheduleDays(event),
-  };
-}
-
 type GroupFormState = {
   name: string;
   trainerId: string;
@@ -512,6 +418,60 @@ function createEmptyTrainingEventFormState(): TrainingEventFormState {
     confirmationLeadTimeDays: "5",
     joinAudience: "new-people",
     isPublished: true,
+  };
+}
+
+export function getGroupTrainingCreatePath(groupId: string) {
+  const params = new URLSearchParams({
+    groupId,
+    returnToGroupId: groupId,
+  });
+
+  return `/panel/szkolenia/utworz?${params.toString()}`;
+}
+
+export function getLatestGroupTrainingCopy(
+  events: TrainingEvent[],
+  groupId: string,
+) {
+  const latestGroupEvent = sortEventsByDate(
+    events.filter(
+      (event) =>
+        event.groupId === groupId &&
+        !isCommunityBrandStatus(event.brandStatus) &&
+        !isTrainingEventArchived(event),
+    ),
+  ).at(-1);
+
+  return {
+    summary: latestGroupEvent?.summary ?? "",
+    description: latestGroupEvent?.description ?? "",
+  };
+}
+
+export function applyOfficialGroupDefaultsToTrainingForm(
+  previous: TrainingEventFormState,
+  group: Group | null,
+  events: TrainingEvent[],
+): TrainingEventFormState {
+  if (!group) {
+    return previous;
+  }
+
+  const latestGroupCopy = getLatestGroupTrainingCopy(events, group.id);
+
+  return {
+    ...previous,
+    groupId: group.id,
+    trainerId: group.trainerId,
+    summary: latestGroupCopy.summary,
+    description: latestGroupCopy.description,
+    location: group.defaultLocation ?? "",
+    capacity:
+      typeof group.defaultCapacity === "number" ? String(group.defaultCapacity) : previous.capacity,
+    confirmationLeadTimeDays: String(group.defaultConfirmationLeadTimeDays ?? 5),
+    joinAudience: group.defaultJoinAudience ?? previous.joinAudience,
+    tags: group.defaultTags?.length ? group.defaultTags.join(", ") : "",
   };
 }
 
@@ -656,56 +616,6 @@ function getParticipantConfirmationLabel(profile?: ParticipantProfile | null) {
   }
 
   return profile.confirmationStatus === "confirmed" ? "Potwierdzony" : "Niepotwierdzony";
-}
-
-const ANNUAL_PLANNING_INTERVALS = [4, 6, 8, 10, 12] as const;
-
-function buildTrainerTravelWarningForSlot(
-  slot: OrganizerMatchedSlotView,
-  events: TrainingEvent[],
-) {
-  const relevantEvents = events
-    .filter(
-      (event) =>
-        event.trainerId === slot.trainerId &&
-        !isTrainingEventArchived(event) &&
-        resolveTrainingEventWorkflowStatus(event) !== "draft-requested",
-    )
-    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
-  const previousEvent = [...relevantEvents]
-    .filter((event) => new Date(event.endsAt).getTime() <= new Date(slot.startsAt).getTime())
-    .sort((left, right) => new Date(right.endsAt).getTime() - new Date(left.endsAt).getTime())[0];
-  const nextEvent = relevantEvents
-    .filter((event) => new Date(event.startsAt).getTime() >= new Date(slot.endsAt).getTime())
-    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime())[0];
-
-  const warnings: string[] = [];
-
-  if (previousEvent) {
-    const gapHours =
-      Math.round(
-        ((new Date(slot.startsAt).getTime() - new Date(previousEvent.endsAt).getTime()) /
-          (1000 * 60 * 60)) *
-          10,
-      ) / 10;
-    warnings.push(
-      `Poprzednie szkolenie: ${previousEvent.location} do ${formatDateTime(previousEvent.endsAt)}. Przerwa: ${gapHours} h.`,
-    );
-  }
-
-  if (nextEvent) {
-    const gapHours =
-      Math.round(
-        ((new Date(nextEvent.startsAt).getTime() - new Date(slot.endsAt).getTime()) /
-          (1000 * 60 * 60)) *
-          10,
-      ) / 10;
-    warnings.push(
-      `Następne szkolenie: ${nextEvent.location} od ${formatDateTime(nextEvent.startsAt)}. Przerwa: ${gapHours} h.`,
-    );
-  }
-
-  return warnings.join(" ");
 }
 
 function resolveBrandStatus(
@@ -6744,8 +6654,6 @@ export function GroupsPage() {
   const navigate = useNavigate();
   const { groupId } = useParams();
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
-  const [planningIntervalWeeks, setPlanningIntervalWeeks] =
-    useState<(typeof ANNUAL_PLANNING_INTERVALS)[number]>(8);
   const [groupForm, setGroupForm] = useState<GroupFormState>(createEmptyGroupFormState());
   const [memberForm, setMemberForm] = useState<GroupMemberFormState>(
     createEmptyGroupMemberFormState(),
@@ -6991,117 +6899,12 @@ export function GroupsPage() {
   }, [organizerManagedProfiles, selectedMemberProfile]);
   const shouldShowMemberDetails =
     Boolean(selectedMemberProfile) || hasCompleteParticipantPhone(memberForm.phone);
-  const sharedSlotsById = useMemo(
-    () => new Map((store.trainerSharedSlots ?? []).map((slot) => [slot.id, slot])),
-    [store.trainerSharedSlots],
-  );
-  const selectedGroupMatchedSlots = useMemo(() => {
-    if (!selectedGroup || !organizerProfile || !canManageGroups) {
-      return [] as OrganizerMatchedSlotView[];
-    }
-
-    return (store.trainerOrganizerCalendarFeeds ?? [])
-      .filter(
-        (feed) =>
-          feed.organizerId === organizerProfile.id &&
-          feed.trainerId === selectedGroup.trainerId &&
-          feed.enabled,
-      )
-      .flatMap((feed) =>
-        (feed.matchedSharedSlotIds ?? []).map((slotId) => {
-          const slot = sharedSlotsById.get(slotId);
-          if (!slot || slot.status === "archived" || slot.archivedAt) {
-            return null;
-          }
-
-          const trainer = trainersById.get(slot.trainerId);
-          const baseSlot = {
-            ...slot,
-            trainerName: trainer?.displayName ?? "Przekazujący Wiedzę",
-            relation: undefined,
-            googleFeedUrl: feed.publicFeedUrl,
-          } satisfies OrganizerMatchedSlotView;
-
-          return {
-            ...baseSlot,
-            travelWarning: buildTrainerTravelWarningForSlot(baseSlot, store.trainingEvents ?? []),
-          } satisfies OrganizerMatchedSlotView;
-        }),
-      )
-      .filter(
-        (slot): slot is OrganizerMatchedSlotView =>
-          Boolean(slot) && new Date(slot.startsAt).getTime() > Date.now(),
-      )
-      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
-  }, [
-    canManageGroups,
-    organizerProfile,
-    selectedGroup,
-    sharedSlotsById,
-    store.trainerOrganizerCalendarFeeds,
-    store.trainingEvents,
-    trainersById,
-  ]);
   const selectedGroupIsOwnedByCurrentUser = Boolean(
     selectedGroup && organizerProfile && selectedGroup.organizerId === organizerProfile.id,
   );
   const selectedGroupParticipantMembership = selectedGroup
     ? participantGroupMembershipsByGroupId.get(selectedGroup.id) ?? null
     : null;
-  const annualPlanningSuggestions = useMemo(() => {
-    if (!selectedGroup || selectedGroupMatchedSlots.length === 0) {
-      return [];
-    }
-
-    const intervalMs = planningIntervalWeeks * 7 * 24 * 60 * 60 * 1000;
-    const oneDayMs = 24 * 60 * 60 * 1000;
-    const futureSlots = selectedGroupMatchedSlots.filter(
-      (slot) => new Date(slot.startsAt).getTime() > Date.now(),
-    );
-
-    if (futureSlots.length === 0) {
-      return [];
-    }
-
-    const usedIds = new Set<string>();
-    const suggestions: Array<
-      OrganizerMatchedSlotView & { suggestedGapDays: number; targetStartsAt: string }
-    > = [];
-    let previousAnchorTime =
-      selectedGroupEvents.length > 0
-        ? new Date(selectedGroupEvents[selectedGroupEvents.length - 1].startsAt).getTime()
-        : Date.now();
-
-    for (let index = 0; index < 6; index += 1) {
-      const targetTime = previousAnchorTime + intervalMs;
-      const minimumAllowedTime = previousAnchorTime + intervalMs * 0.6;
-      const candidate = futureSlots
-        .filter(
-          (slot) =>
-            !usedIds.has(slot.id) && new Date(slot.startsAt).getTime() >= minimumAllowedTime,
-        )
-        .sort((left, right) => {
-          const leftDiff = Math.abs(new Date(left.startsAt).getTime() - targetTime);
-          const rightDiff = Math.abs(new Date(right.startsAt).getTime() - targetTime);
-          return leftDiff - rightDiff;
-        })[0];
-
-      if (!candidate) {
-        break;
-      }
-
-      const candidateTime = new Date(candidate.startsAt).getTime();
-      suggestions.push({
-        ...candidate,
-        suggestedGapDays: Math.round((candidateTime - previousAnchorTime) / oneDayMs),
-        targetStartsAt: new Date(targetTime).toISOString(),
-      });
-      usedIds.add(candidate.id);
-      previousAnchorTime = candidateTime;
-    }
-
-    return suggestions;
-  }, [planningIntervalWeeks, selectedGroup, selectedGroupEvents, selectedGroupMatchedSlots]);
 
   useEffect(() => {
     if (!hasOrganizerGroupScope && groupScope !== "all") {
@@ -8024,86 +7827,16 @@ export function GroupsPage() {
                     Archiwizuj
                   </button>
                   <Link
-                    to="/panel/terminy"
+                    to={getGroupTrainingCreatePath(selectedGroup.id)}
+                    state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
                     className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
                   >
                     <CalendarDays size={16} />
-                    Utwórz draft dla grupy
+                    Utwórz wydarzenie
                   </Link>
                 </div>
               ) : null}
             </article>
-
-            {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
-              <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-                <SectionBlockHeading
-                  title="Planowanie Roczne"
-                  description="System dobiera najlepsze przyszłe sloty dla tej grupy na bazie wspólnych terminów organizatora i trenera oraz docelowego interwału w tygodniach."
-                />
-                <div className="mt-6 flex flex-wrap gap-2">
-                  {ANNUAL_PLANNING_INTERVALS.map((interval) => (
-                    <button
-                      key={interval}
-                      type="button"
-                      onClick={() => setPlanningIntervalWeeks(interval)}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                        planningIntervalWeeks === interval
-                          ? "bg-brand-navy text-white"
-                          : "border border-brand-line text-brand-navy"
-                      }`}
-                    >
-                      co {interval} tyg.
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-6 space-y-3">
-                  {annualPlanningSuggestions.length === 0 ? (
-                    <EmptyPanelState
-                      title="Brak sugestii"
-                      description="Dla tej grupy nie ma jeszcze wystarczającej puli przyszłych zmatchowanych slotów, żeby zaproponować plan roczny."
-                    />
-                  ) : (
-                    annualPlanningSuggestions.map((slot, index) => (
-                      <article
-                        key={slot.id}
-                        className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div className="space-y-2">
-                            <p className="text-lg font-semibold text-brand-navy">
-                              Sugestia {index + 1} · {formatDate(slot.startsAt)}
-                            </p>
-                            <p className="text-sm text-brand-muted">
-                              Cel: {formatDate(slot.targetStartsAt)} · faktyczny slot{" "}
-                              {formatShortTime(slot.startsAt)} - {formatShortTime(slot.endsAt)}
-                            </p>
-                            <p className="text-sm text-brand-muted">{slot.location}</p>
-                            <p className="text-xs uppercase tracking-[0.18em] text-brand-sky-deep">
-                              przerwa {slot.suggestedGapDays} dni od poprzedniego wydarzenia
-                            </p>
-                            {slot.travelWarning ? (
-                              <p className="text-sm text-amber-900">{slot.travelWarning}</p>
-                            ) : null}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              navigate(
-                                `/panel/terminy?groupId=${selectedGroup.id}&slotId=${slot.id}`,
-                              )
-                            }
-                            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-                          >
-                            <CalendarDays size={16} />
-                            Otwórz draft
-                          </button>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </article>
-            ) : null}
 
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
@@ -8402,14 +8135,26 @@ export function GroupsPage() {
                 description={
                   isParticipantGroupViewer
                     ? "Tutaj widać szkolenia przypięte do tej grupy. Szczegóły uczestnictwa sprawdzisz z poziomu listy szkoleń."
-                    : "Tutaj widać wszystkie szkolenia i drafty przypięte do tej grupy."
+                    : "Tutaj widać wszystkie szkolenia przypięte do tej grupy i możesz szybko dodawać kolejne terminy."
                 }
               />
+              {canManageGroups && selectedGroupIsOwnedByCurrentUser && selectedGroup.status === "active" ? (
+                <div className="mt-6">
+                  <Link
+                    to={getGroupTrainingCreatePath(selectedGroup.id)}
+                    state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
+                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                  >
+                    <CalendarDays size={16} />
+                    Utwórz wydarzenie
+                  </Link>
+                </div>
+              ) : null}
               <div className="mt-6 space-y-3">
                 {selectedGroupEvents.length === 0 ? (
                   <EmptyPanelState
                     title="Brak wydarzeń"
-                    description="Po utworzeniu draftu albo szkolenia z poziomu terminów wydarzenia pojawią się tutaj automatycznie."
+                    description="Po utworzeniu szkolenia dla tej grupy wydarzenia pojawią się tutaj automatycznie."
                   />
                 ) : (
                   selectedGroupEvents.map((event) =>
@@ -8469,770 +8214,9 @@ export function GroupsPage() {
   );
 }
 
-export function AvailabilityPage() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const {
-    addOrganizerCalendarFeed,
-    addTrainerCalendarFeed,
-    addTrainerSharedSlot,
-    createOrganizerTrainingDraft,
-    currentUser,
-    decideOrganizerTrainingDraft,
-    removeOrganizerCalendarFeed,
-    removeTrainerCalendarFeed,
-    store,
-    syncOwnOrganizerCalendarFeeds,
-    syncOwnTrainerCalendarFeeds,
-    updateOrganizerCalendarFeedEnabled,
-    updateOrganizerTrainingDraft,
-    updateTrainerCalendarFeedEnabled,
-    updateTrainerSharedSlot,
-    archiveTrainerSharedSlot,
-    withdrawOrganizerTrainingDraft,
-  } = useAppState();
-  const [organizerFeedForm, setOrganizerFeedForm] = useState({
-    provider: "google" as TrainerCalendarFeedProvider,
-    url: "",
-  });
-  const [syncingTrainerFeeds, setSyncingTrainerFeeds] = useState(false);
-  const [syncingOrganizerFeeds, setSyncingOrganizerFeeds] = useState(false);
-  const [activeFreeSliceBucket, setActiveFreeSliceBucket] = useState<
-    "all" | TrainerFreeDaySliceBucket
-  >("all");
-  const [draftEditorMode, setDraftEditorMode] = useState<"create" | "edit" | null>(null);
-  const [draftFormValues, setDraftFormValues] = useState<OrganizerTrainingDraftFormValues | null>(
-    null,
-  );
-  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
-  const [savingDraft, setSavingDraft] = useState(false);
-  const [withdrawingDraftId, setWithdrawingDraftId] = useState<string | null>(null);
-
-  if (!currentUser) {
-    return null;
-  }
-
-  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
-  const organizerProfile = store.organizers.find(
-    (item) => item.userId === currentUser.id,
-  );
-  const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-  const hasTrainerAvailabilityScope =
-    hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile) && !isCommunityTrainer;
-  const hasOrganizerAvailabilityScope =
-    canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
-
-  const ownCalendarFeeds = useMemo(
-    () =>
-      (trainerProfile
-        ? (store.trainerCalendarFeeds ?? []).filter((feed) => feed.trainerId === trainerProfile.id)
-        : []
-      ).sort(
-        (left, right) =>
-          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
-      ),
-    [store.trainerCalendarFeeds, trainerProfile],
-  );
-  const ownSharedSlots = useMemo(
-    () =>
-      (trainerProfile
-        ? (store.trainerSharedSlots ?? []).filter((slot) => slot.trainerId === trainerProfile.id)
-        : []
-      ).sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()),
-    [store.trainerSharedSlots, trainerProfile],
-  );
-  const trainerDrafts = useMemo(
-    () =>
-      sortEventsByDate(
-        (store.trainingEvents ?? []).filter(
-          (event) =>
-            event.trainerId === trainerProfile?.id &&
-            resolveTrainingEventWorkflowStatus(event) === "draft-requested",
-        ),
-      ),
-    [store.trainingEvents, trainerProfile?.id],
-  );
-  const organizerFeeds = useMemo(
-    () =>
-      (organizerProfile
-        ? (store.organizerCalendarFeeds ?? []).filter(
-            (feed) => feed.organizerId === organizerProfile.id,
-          )
-        : []
-      ).sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
-    [organizerProfile, store.organizerCalendarFeeds],
-  );
-  const organizerRelationFeeds = useMemo(
-    () =>
-      (organizerProfile
-        ? (store.trainerOrganizerCalendarFeeds ?? []).filter(
-            (feed) => feed.organizerId === organizerProfile.id && feed.enabled,
-          )
-        : []
-      ).sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
-    [organizerProfile, store.trainerOrganizerCalendarFeeds],
-  );
-
-  useEffect(() => {
-    if (!hasTrainerAvailabilityScope) {
-      return;
-    }
-
-    void syncOwnTrainerCalendarFeeds().catch(() => {});
-  }, [hasTrainerAvailabilityScope, syncOwnTrainerCalendarFeeds]);
-  useEffect(() => {
-    if (!hasOrganizerAvailabilityScope) {
-      return;
-    }
-
-    void syncOwnOrganizerCalendarFeeds().catch(() => {});
-  }, [hasOrganizerAvailabilityScope, syncOwnOrganizerCalendarFeeds]);
-
-  const ownBusyIntervals = useMemo(() => {
-    if (!trainerProfile) {
-      return [];
-    }
-
-    return [
-      ...store.trainingEvents
-        .filter(
-          (event) =>
-            event.trainerId === trainerProfile.id &&
-            !isTrainingEventArchived(event) &&
-            !["draft-requested", "trainer-rejected", "withdrawn"].includes(
-              resolveTrainingEventWorkflowStatus(event),
-            ) &&
-            resolveTrainingEventStatus(event.status) !== "cancelled",
-        )
-        .flatMap((event) =>
-          getTrainingEventScheduleDays(event).map((day) => ({
-            startsAt: day.startsAt,
-            endsAt: day.endsAt,
-            source: "emandar" as const,
-          })),
-        ),
-      ...(store.trainerExternalBusyMonths ?? [])
-        .filter((month) => month.trainerId === trainerProfile.id)
-        .flatMap((month) => month.intervals),
-    ];
-  }, [
-    store.trainerExternalBusyMonths,
-    store.trainingEvents,
-    trainerProfile,
-  ]);
-  const freeDaySlices = useMemo(() => {
-    if (!trainerProfile || ownCalendarFeeds.length === 0) {
-      return [];
-    }
-
-    return buildTrainerFreeDaySlices({
-      busyIntervals: ownBusyIntervals,
-      rangeStart: new Date().toISOString(),
-      rangeEnd: getAvailabilityHorizonEnd(),
-      minimumDurationHours: 1,
-    }).slice(0, 240);
-  }, [ownBusyIntervals, ownCalendarFeeds.length, trainerProfile]);
-  const freeDaySlicesByBucket = useMemo(
-    () =>
-      FREE_SLICE_BUCKETS.reduce<Record<TrainerFreeDaySliceBucket, typeof freeDaySlices>>(
-        (accumulator, bucket) => {
-          accumulator[bucket] = freeDaySlices.filter((slice) => slice.spanBucket === bucket);
-          return accumulator;
-        },
-        {
-          "1-day": [],
-          "2-days": [],
-          "3-days": [],
-          "4-plus-days": [],
-        },
-      ),
-    [freeDaySlices],
-  );
-  const enabledFeedCount = ownCalendarFeeds.filter((feed) => feed.enabled).length;
-  const approvedRelationsById = useMemo(
-    () =>
-      new Map(
-        (store.relations ?? [])
-          .filter((relation) => relation.status === "approved")
-          .map((relation) => [relation.id, relation]),
-      ),
-    [store.relations],
-  );
-  const trainerById = useMemo(
-    () => new Map((store.trainers ?? []).map((trainer) => [trainer.id, trainer])),
-    [store.trainers],
-  );
-  const organizerMatchedSlots = useMemo(() => {
-    const sharedSlotsById = new Map((store.trainerSharedSlots ?? []).map((slot) => [slot.id, slot]));
-
-    return organizerRelationFeeds
-      .flatMap((feed) =>
-        (feed.matchedSharedSlotIds ?? []).map((slotId) => {
-          const slot = sharedSlotsById.get(slotId);
-
-          if (!slot || slot.status === "archived" || slot.archivedAt) {
-            return null;
-          }
-
-          const trainer = trainerById.get(slot.trainerId);
-          const relation = approvedRelationsById.get(feed.relationId);
-          const baseSlot = {
-            ...slot,
-            trainerName: trainer?.displayName ?? "Przekazujący Wiedzę",
-            relation,
-            googleFeedUrl: feed.publicFeedUrl,
-          } satisfies OrganizerMatchedSlotView;
-
-          return {
-            ...baseSlot,
-            travelWarning: buildTrainerTravelWarningForSlot(baseSlot, store.trainingEvents ?? []),
-          } satisfies OrganizerMatchedSlotView;
-        }),
-      )
-      .filter((slot): slot is OrganizerMatchedSlotView => Boolean(slot))
-      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
-  }, [
-    approvedRelationsById,
-    organizerRelationFeeds,
-    store.trainerSharedSlots,
-    store.trainingEvents,
-    trainerById,
-  ]);
-  const organizerGroupMemberCounts = useMemo(
-    () =>
-      (store.groupMembers ?? []).reduce<Record<string, number>>((accumulator, member) => {
-        if (member.membershipStatus !== "active") {
-          return accumulator;
-        }
-
-        accumulator[member.groupId] = (accumulator[member.groupId] ?? 0) + 1;
-        return accumulator;
-      }, {}),
-    [store.groupMembers],
-  );
-  const organizerGroups = useMemo(
-    () =>
-      (store.groups ?? [])
-        .filter(
-          (group) =>
-            group.organizerId === organizerProfile?.id &&
-            group.status === "active" &&
-            approvedRelationsById.has(`${group.trainerId}__${group.organizerId}`),
-        )
-        .map((group) => ({
-          id: group.id,
-          name: group.name,
-          trainerId: group.trainerId,
-          trainerName: trainerById.get(group.trainerId)?.displayName,
-          activeMembersCount: organizerGroupMemberCounts[group.id] ?? 0,
-        }))
-        .sort((left, right) => left.name.localeCompare(right.name, "pl")),
-    [
-      approvedRelationsById,
-      organizerGroupMemberCounts,
-      organizerProfile?.id,
-      store.groups,
-      trainerById,
-    ],
-  );
-  const organizerDrafts = useMemo(() => {
-    const matchedSlotsById = new Map(organizerMatchedSlots.map((slot) => [slot.id, slot]));
-
-    return sortEventsByDate(
-      (store.trainingEvents ?? [])
-        .filter((event) => event.organizerId === organizerProfile?.id && Boolean(event.sharedSlotId))
-        .map((event) => ({
-          ...event,
-          trainerName: trainerById.get(event.trainerId ?? "")?.displayName,
-          slot: event.sharedSlotId ? matchedSlotsById.get(event.sharedSlotId) ?? null : null,
-        })),
-    ) as OrganizerTrainingDraftListItem[];
-  }, [organizerMatchedSlots, organizerProfile?.id, store.trainingEvents, trainerById]);
-  const visibleFreeSliceBuckets = useMemo(() => {
-    if (activeFreeSliceBucket !== "all") {
-      return [activeFreeSliceBucket];
-    }
-
-    return FREE_SLICE_BUCKETS.filter(
-      (bucket) => (freeDaySlicesByBucket[bucket] ?? []).length > 0,
-    );
-  }, [activeFreeSliceBucket, freeDaySlicesByBucket]);
-
-  useEffect(() => {
-    if (!hasOrganizerAvailabilityScope || !organizerProfile) {
-      return;
-    }
-
-    const params = new URLSearchParams(location.search);
-    const slotId = params.get("slotId");
-
-    if (!slotId) {
-      return;
-    }
-
-    const slot = organizerMatchedSlots.find((item) => item.id === slotId);
-    if (!slot) {
-      return;
-    }
-
-    const requestedGroupId = params.get("groupId");
-    const matchingGroups = organizerGroups.filter((group) => group.trainerId === slot.trainerId);
-    const resolvedGroupId =
-      requestedGroupId && matchingGroups.some((group) => group.id === requestedGroupId)
-        ? requestedGroupId
-        : matchingGroups.length === 1
-          ? matchingGroups[0].id
-          : "";
-
-    setDraftEditorMode("create");
-    setEditingDraftId(null);
-    setDraftFormValues({
-      ...createOrganizerDraftFormValuesFromSlot(slot),
-      groupId: resolvedGroupId,
-    });
-    void navigate("/panel/terminy", { replace: true });
-  }, [
-    hasOrganizerAvailabilityScope,
-    location.search,
-    navigate,
-    organizerGroups,
-    organizerMatchedSlots,
-    organizerProfile,
-  ]);
-
-  async function handleSyncTrainerFeeds() {
-    try {
-      setSyncingTrainerFeeds(true);
-      await syncOwnTrainerCalendarFeeds();
-      toast.success("Feedy iCal zostaly zsynchronizowane.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac kalendarzy.",
-      );
-    } finally {
-      setSyncingTrainerFeeds(false);
-    }
-  }
-
-  async function handleSyncOrganizerFeeds() {
-    try {
-      setSyncingOrganizerFeeds(true);
-      await syncOwnOrganizerCalendarFeeds();
-      toast.success("Feedy organizatora zostaly zsynchronizowane.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac feedow organizatora.",
-      );
-    } finally {
-      setSyncingOrganizerFeeds(false);
-    }
-  }
-
-  async function handleCopyLink(value: string, label = "Skopiowano link.") {
-    if (!value) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success(label);
-    } catch {
-      toast.error("Nie udało się skopiować linku.");
-    }
-  }
-
-  async function handleAddTrainerFeed(
-    input: { provider: TrainerCalendarFeedProvider; url: string },
-  ) {
-    try {
-      await addTrainerCalendarFeed(input);
-      toast.success("Dodano feed iCal.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu iCal.");
-    }
-  }
-
-  async function handleAddOrganizerFeed(
-    input: { provider: TrainerCalendarFeedProvider; url: string },
-  ) {
-    try {
-      await addOrganizerCalendarFeed(input);
-      setOrganizerFeedForm((current) => ({
-        ...current,
-        url: "",
-      }));
-      toast.success("Dodano feed organizatora.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu.");
-    }
-  }
-
-  async function handleCreateDraft(values: OrganizerTrainingDraftFormValues) {
-    if (!values.groupId) {
-      toast.error("Wybierz grupę dla draftu.");
-      return;
-    }
-
-    try {
-      setSavingDraft(true);
-      await createOrganizerTrainingDraft({
-        groupId: values.groupId,
-        sharedSlotId: values.sharedSlotId,
-        title: values.title,
-        summary: values.summary,
-        description: values.description,
-        type: values.type,
-        location: values.location,
-        capacity: values.capacity,
-        minimumParticipants: values.minimumParticipants,
-        status: values.status,
-        publishAutomaticallyAfterTrainerApproval: values.publishAutomaticallyAfterTrainerApproval,
-        tags: parseEventTags(values.tagsText),
-        scheduleDays: values.scheduleDays,
-      });
-      toast.success("Utworzono draft szkolenia.");
-      setDraftEditorMode(null);
-      setDraftFormValues(null);
-      setEditingDraftId(null);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie utworzyc draftu.");
-    } finally {
-      setSavingDraft(false);
-    }
-  }
-
-  async function handleUpdateDraft(values: OrganizerTrainingDraftFormValues) {
-    if (!editingDraftId) {
-      return;
-    }
-
-    if (!values.groupId) {
-      toast.error("Wybierz grupę dla draftu.");
-      return;
-    }
-
-    try {
-      setSavingDraft(true);
-      await updateOrganizerTrainingDraft({
-        eventId: editingDraftId,
-        groupId: values.groupId,
-        sharedSlotId: values.sharedSlotId,
-        title: values.title,
-        summary: values.summary,
-        description: values.description,
-        type: values.type,
-        location: values.location,
-        capacity: values.capacity,
-        minimumParticipants: values.minimumParticipants,
-        status: values.status,
-        publishAutomaticallyAfterTrainerApproval: values.publishAutomaticallyAfterTrainerApproval,
-        tags: parseEventTags(values.tagsText),
-        scheduleDays: values.scheduleDays,
-      });
-      toast.success("Zapisano draft szkolenia.");
-      setDraftEditorMode(null);
-      setDraftFormValues(null);
-      setEditingDraftId(null);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie zapisac draftu.");
-    } finally {
-      setSavingDraft(false);
-    }
-  }
-
-  async function handleWithdrawDraft(eventId: string) {
-    try {
-      setWithdrawingDraftId(eventId);
-      await withdrawOrganizerTrainingDraft(eventId);
-      toast.success("Wycofano draft szkolenia.");
-      if (editingDraftId === eventId) {
-        setDraftEditorMode(null);
-        setDraftFormValues(null);
-        setEditingDraftId(null);
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie wycofac draftu.");
-    } finally {
-      setWithdrawingDraftId(null);
-    }
-  }
-
-  return (
-    <PanelSection
-      eyebrow="Terminy"
-      title="Terminy i feedy"
-      description="Jeden ekran zbiera terminy i feedy dla wszystkich warstw, które masz odblokowane. Wyższy poziom nie ukrywa już niższych workflowów."
-    >
-      {hasTrainerAvailabilityScope && (
-        <div className="space-y-6">
-          <TrainerAvailabilityWorkspace
-            currentUserRole="trainer"
-            feeds={ownCalendarFeeds}
-            sharedSlots={ownSharedSlots}
-            drafts={trainerDrafts}
-            syncingFeeds={syncingTrainerFeeds}
-            onSyncFeeds={() => void handleSyncTrainerFeeds()}
-            onAddFeed={(input) => handleAddTrainerFeed(input)}
-            onToggleFeedEnabled={(feedId, enabled) =>
-              updateTrainerCalendarFeedEnabled(feedId, enabled)
-            }
-            onRemoveFeed={(feedId) => removeTrainerCalendarFeed(feedId)}
-            onCreateSlot={(input) => addTrainerSharedSlot(input)}
-            onUpdateSlot={(input) => updateTrainerSharedSlot(input)}
-            onArchiveSlot={(slotId) => archiveTrainerSharedSlot(slotId)}
-            onAcceptDraft={(draft) =>
-              decideOrganizerTrainingDraft({
-                eventId: draft.id,
-                decision: "accepted",
-              }).then(() => toast.success("Zaakceptowano draft szkolenia."))
-            }
-            onRejectDraft={(draft, reason) =>
-              decideOrganizerTrainingDraft({
-                eventId: draft.id,
-                decision: "rejected",
-                message: reason,
-              }).then(() => toast.success("Odrzucono draft szkolenia."))
-            }
-          />
-
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <SectionBlockHeading
-              title="Wolne przedzialy z prywatnego kalendarza"
-              description="To warstwa pomocnicza dla trenera. Zrodlowe wydarzenia iCal pozostaja ukryte, a tutaj widac tylko przyszle wolne okna do publikacji jako sloty."
-            />
-            <div className="mt-6 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setActiveFreeSliceBucket("all")}
-                className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                  activeFreeSliceBucket === "all"
-                    ? "bg-brand-navy text-white"
-                    : "border border-brand-line text-brand-navy"
-                }`}
-              >
-                Wszystkie ({freeDaySlices.length})
-              </button>
-              {FREE_SLICE_BUCKETS.map((bucket) => (
-                <button
-                  key={bucket}
-                  type="button"
-                  onClick={() => setActiveFreeSliceBucket(bucket)}
-                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                    activeFreeSliceBucket === bucket
-                      ? "bg-brand-navy text-white"
-                      : "border border-brand-line text-brand-navy"
-                  }`}
-                >
-                  {getFreeSliceBucketLabel(bucket)} ({freeDaySlicesByBucket[bucket].length})
-                </button>
-              ))}
-            </div>
-
-            {enabledFeedCount === 0 ? (
-              <div className="mt-6">
-                <EmptyPanelState
-                  title="Brak aktywnego feedu"
-                  description="Aktywuj przynajmniej jeden prywatny feed iCal, aby zobaczyc przyszle wolne przedzialy."
-                />
-              </div>
-            ) : freeDaySlices.length === 0 ? (
-              <div className="mt-6">
-                <EmptyPanelState
-                  title="Brak wolnych przedzialow"
-                  description="W aktualnym horyzoncie nie ma jeszcze wolnych dziennych okien spelniajacych minimum jednej godziny."
-                />
-              </div>
-            ) : (
-              <div className="mt-6 space-y-6">
-                {visibleFreeSliceBuckets.map((bucket) => (
-                  <section key={bucket}>
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="text-lg font-semibold text-brand-navy">
-                        {getFreeSliceBucketLabel(bucket)}
-                      </h4>
-                      <p className="text-sm text-brand-muted">
-                        {freeDaySlicesByBucket[bucket].length} przedzialow
-                      </p>
-                    </div>
-                    <div className="mt-3 space-y-3">
-                      {freeDaySlicesByBucket[bucket].map((slice) => (
-                        <article
-                          key={`${slice.startsAt}-${slice.endsAt}`}
-                          className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <p className="text-lg font-semibold text-brand-navy">
-                                {formatDate(slice.startsAt)}
-                              </p>
-                              <p className="mt-1 text-brand-muted">
-                                {formatShortTime(slice.startsAt)} - {formatShortTime(slice.endsAt)}
-                              </p>
-                            </div>
-                            <div className="text-right text-sm text-brand-muted">
-                              <p>{formatDurationHours(slice.durationHours)}</p>
-                              <p className="mt-1">
-                                Luka: {slice.spanDays} {slice.spanDays === 1 ? "dzien" : "dni"}
-                              </p>
-                            </div>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            )}
-          </article>
-        </div>
-      )}
-
-      {hasOrganizerAvailabilityScope && organizerProfile && (
-        <div className="space-y-6">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-            <OrganizerCalendarFeedsPanel
-              feeds={organizerFeeds}
-              draft={organizerFeedForm}
-              onDraftChange={setOrganizerFeedForm}
-              onCreateFeed={(input) => void handleAddOrganizerFeed(input)}
-              onToggleEnabled={(feedId, enabled) =>
-                updateOrganizerCalendarFeedEnabled(feedId, enabled)
-              }
-              onRemoveFeed={(feedId) => removeOrganizerCalendarFeed(feedId)}
-              onSync={() => void handleSyncOrganizerFeeds()}
-              syncing={syncingOrganizerFeeds}
-            />
-            <OrganizerMatchedSlotsPanel
-              slots={organizerMatchedSlots}
-              onCreateDraft={(slotId) => {
-                const slot = organizerMatchedSlots.find((item) => item.id === slotId);
-                if (!slot) {
-                  return;
-                }
-
-                const matchingGroups = organizerGroups.filter(
-                  (group) => group.trainerId === slot.trainerId,
-                );
-                setDraftEditorMode("create");
-                setEditingDraftId(null);
-                setDraftFormValues({
-                  ...createOrganizerDraftFormValuesFromSlot(slot),
-                  groupId: matchingGroups.length === 1 ? matchingGroups[0].id : "",
-                });
-              }}
-              onCopyFeedLink={(feedUrl) => void handleCopyLink(feedUrl, "Skopiowano adres feedu.")}
-            />
-          </div>
-
-          {draftFormValues && (
-            <OrganizerTrainingDraftEditorPanel
-              mode={draftEditorMode ?? "create"}
-              values={draftFormValues}
-              availableSlots={organizerMatchedSlots}
-              availableGroups={organizerGroups}
-              onChange={setDraftFormValues}
-              onSubmit={(values) =>
-                draftEditorMode === "edit"
-                  ? void handleUpdateDraft(values)
-                  : void handleCreateDraft(values)
-              }
-              onCancel={() => {
-                setDraftEditorMode(null);
-                setDraftFormValues(null);
-                setEditingDraftId(null);
-              }}
-              onWithdraw={
-                draftEditorMode === "edit" && editingDraftId
-                  ? (_values) => void handleWithdrawDraft(editingDraftId)
-                  : undefined
-              }
-              submitting={savingDraft}
-              withdrawing={Boolean(editingDraftId && withdrawingDraftId === editingDraftId)}
-            />
-          )}
-
-          <OrganizerTrainingDraftListPanel
-            drafts={organizerDrafts}
-            onEdit={(draft) => {
-              if (resolveTrainingEventWorkflowStatus(draft) !== "draft-requested") {
-                toast.error("Edytować można tylko draft oczekujący na decyzję trenera.");
-                return;
-              }
-
-              setDraftEditorMode("edit");
-              setEditingDraftId(draft.id);
-              setDraftFormValues(createOrganizerDraftFormValuesFromEvent(draft));
-            }}
-            onWithdraw={(draft) => void handleWithdrawDraft(draft.id)}
-          />
-
-          {organizerRelationFeeds.length > 0 && (
-            <div className="grid gap-4 xl:grid-cols-2">
-              {organizerRelationFeeds.map((feed) => {
-                const trainerName =
-                  trainerById.get(feed.trainerId)?.displayName ?? "Przekazujący Wiedzę";
-
-                return (
-                  <OrganizerGoogleCalendarExportPanel
-                    key={feed.id}
-                    title={`Google Calendar · ${trainerName}`}
-                    description="Subskrybuj dopasowany feed tej relacji, aby widzieć tylko sloty zgodne z Twoim kalendarzem."
-                    feedUrl={feed.publicFeedUrl ?? ""}
-                    onCopyLink={(subscribeUrl) =>
-                      void handleCopyLink(subscribeUrl, "Skopiowano link do Google Calendar.")
-                    }
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {currentUser.role === "admin" && (
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <SectionBlockHeading
-            title="Nowy model terminow"
-            description="Admin widzi tu stan techniczny wdrozenia nowego flow slotow, feedow i draftow."
-          />
-          <div className="mt-6 grid gap-4 md:grid-cols-4">
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Sloty trenerow</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {store.trainerSharedSlots?.length ?? 0}
-              </p>
-            </div>
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Feedy organizatorow</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {store.organizerCalendarFeeds?.length ?? 0}
-              </p>
-            </div>
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Feedy relacji</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {store.trainerOrganizerCalendarFeeds?.length ?? 0}
-              </p>
-            </div>
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Drafty szkoleń</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {
-                  (store.trainingEvents ?? []).filter(
-                    (event) => Boolean(event.sharedSlotId),
-                  ).length
-                }
-              </p>
-            </div>
-          </div>
-        </article>
-      )}
-    </PanelSection>
-  );
-}
-
 export function EventsPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const {
     createTrainingEvent,
     currentUser,
@@ -9405,6 +8389,8 @@ export function EventsPage() {
   const [trainerEventForm, setTrainerEventForm] = useState<TrainingEventFormState>(
     createEmptyTrainingEventFormState(),
   );
+  const scheduleStartInputRef = useRef<HTMLInputElement | null>(null);
+  const hasFocusedGroupCreatorScheduleRef = useRef(false);
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [uploadingCreatorImages, setUploadingCreatorImages] = useState(false);
   const [savingEventId, setSavingEventId] = useState<string | null>(null);
@@ -9442,6 +8428,12 @@ export function EventsPage() {
   ]);
   const selectedOfficialGroup =
     availableOfficialGroups.find((group) => group.id === trainerEventForm.groupId) ?? null;
+  const creatorSearchParams = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
+  const requestedOfficialGroupId = creatorSearchParams.get("groupId") ?? "";
+  const returnToGroupId = creatorSearchParams.get("returnToGroupId") ?? "";
   const selectedOfficialGroupTrainerName = selectedOfficialGroup
     ? store.trainers.find((trainer) => trainer.id === selectedOfficialGroup.trainerId)?.displayName ??
       "Przekazujący Wiedzę"
@@ -9478,28 +8470,9 @@ export function EventsPage() {
   function applyOfficialGroupToTrainingForm(groupId: string) {
     const nextGroup = availableOfficialGroups.find((group) => group.id === groupId) ?? null;
 
-    setTrainerEventForm((previous) => ({
-      ...previous,
-      groupId,
-      trainerId: nextGroup?.trainerId ?? previous.trainerId,
-      location:
-        nextGroup?.defaultLocation && previous.location !== nextGroup.defaultLocation
-          ? nextGroup.defaultLocation
-          : previous.location,
-      capacity:
-        typeof nextGroup?.defaultCapacity === "number"
-          ? String(nextGroup.defaultCapacity)
-          : previous.capacity,
-      confirmationLeadTimeDays:
-        typeof nextGroup?.defaultConfirmationLeadTimeDays === "number"
-          ? String(nextGroup.defaultConfirmationLeadTimeDays)
-          : previous.confirmationLeadTimeDays,
-      joinAudience: nextGroup?.defaultJoinAudience ?? previous.joinAudience,
-      tags:
-        nextGroup?.defaultTags && nextGroup.defaultTags.length > 0
-          ? nextGroup.defaultTags.join(", ")
-          : previous.tags,
-    }));
+    setTrainerEventForm((previous) =>
+      applyOfficialGroupDefaultsToTrainingForm(previous, nextGroup, store.trainingEvents),
+    );
   }
 
   useEffect(() => {
@@ -9530,6 +8503,7 @@ export function EventsPage() {
     }
 
     const nextGroupId =
+      availableOfficialGroups.find((group) => group.id === requestedOfficialGroupId)?.id ??
       availableOfficialGroups.find((group) => group.id === trainerEventForm.groupId)?.id ??
       availableOfficialGroups[0]?.id ??
       "";
@@ -9543,8 +8517,28 @@ export function EventsPage() {
     availableOfficialGroups,
     hasOfficialManagementScope,
     isCommunitySection,
+    requestedOfficialGroupId,
     trainerEventForm.groupId,
   ]);
+
+  useEffect(() => {
+    if (!isOfficialCreatorView || !returnToGroupId) {
+      hasFocusedGroupCreatorScheduleRef.current = false;
+      return;
+    }
+
+    if (
+      hasFocusedGroupCreatorScheduleRef.current ||
+      trainerEventForm.groupId !== returnToGroupId
+    ) {
+      return;
+    }
+
+    hasFocusedGroupCreatorScheduleRef.current = true;
+    window.requestAnimationFrame(() => {
+      scheduleStartInputRef.current?.focus();
+    });
+  }, [isOfficialCreatorView, returnToGroupId, trainerEventForm.groupId]);
 
   if (isOfficialCreatorView && !canCreateOfficialTraining) {
     return <Navigate to="/panel/szkolenia" replace />;
@@ -9672,6 +8666,24 @@ export function EventsPage() {
               setCreatingEvent(true);
 
               try {
+                const officialCapacity = Math.max(
+                  1,
+                  Number(trainerEventForm.capacity) || selectedOfficialGroup?.defaultCapacity || 20,
+                );
+                const officialMinimumParticipants = Math.max(
+                  1,
+                  Number(trainerEventForm.minimumParticipants) || officialCapacity,
+                );
+                const officialConfirmationLeadTimeDays = Math.max(
+                  0,
+                  Number(trainerEventForm.confirmationLeadTimeDays) ||
+                    selectedOfficialGroup?.defaultConfirmationLeadTimeDays ||
+                    5,
+                );
+                const officialLocation =
+                  trainerEventForm.location.trim() || selectedOfficialGroup?.defaultLocation || "";
+                const officialType = trainerEventForm.type.trim() || "Warsztat stacjonarny";
+
                 await createTrainingEvent({
                   groupId:
                     !isCommunitySection && trainerEventForm.groupId
@@ -9695,12 +8707,18 @@ export function EventsPage() {
                   ),
                   type: isCommunitySection
                     ? "Wydarzenie społeczności"
-                    : trainerEventForm.type,
+                    : officialType,
                   status: trainerEventForm.status,
-                  location: trainerEventForm.location,
-                  capacity: Number(trainerEventForm.capacity),
-                  minimumParticipants: Number(trainerEventForm.minimumParticipants),
-                  confirmationLeadTimeDays: Number(trainerEventForm.confirmationLeadTimeDays),
+                  location: isCommunitySection ? trainerEventForm.location : officialLocation,
+                  capacity: isCommunitySection
+                    ? Number(trainerEventForm.capacity)
+                    : officialCapacity,
+                  minimumParticipants: isCommunitySection
+                    ? Number(trainerEventForm.minimumParticipants)
+                    : officialMinimumParticipants,
+                  confirmationLeadTimeDays: isCommunitySection
+                    ? Number(trainerEventForm.confirmationLeadTimeDays)
+                    : officialConfirmationLeadTimeDays,
                   isPublished: isCommunitySection ? false : trainerEventForm.isPublished,
                   brandStatus: isCommunitySection ? "supported" : undefined,
                   joinAudienceSetting:
@@ -9721,39 +8739,22 @@ export function EventsPage() {
                     ? "Wydarzenie zostało wysłane do moderacji."
                     : "Szkolenie zostało dodane.",
                 );
+                if (!isCommunitySection && returnToGroupId) {
+                  navigate(`/panel/grupy/${returnToGroupId}`);
+                  return;
+                }
+
                 setTrainerEventForm((previous) => ({
                   ...createEmptyTrainingEventFormState(),
-                  groupId:
-                    !isCommunitySection &&
-                    hasOfficialManagementScope
-                      ? previous.groupId
-                      : "",
-                  trainerId:
-                    !isCommunitySection && selectedOfficialGroup
-                      ? selectedOfficialGroup.trainerId
-                      : !isCommunitySection && isOrganizerManager
-                        ? availableTrainers[0]?.id ?? ""
-                      : previous.trainerId,
-                  location:
-                    !isCommunitySection && selectedOfficialGroup?.defaultLocation
-                      ? selectedOfficialGroup.defaultLocation
-                      : "",
-                  capacity:
-                    !isCommunitySection &&
-                    typeof selectedOfficialGroup?.defaultCapacity === "number"
-                      ? String(selectedOfficialGroup.defaultCapacity)
-                      : "20",
-                  confirmationLeadTimeDays:
-                    !isCommunitySection &&
-                    typeof selectedOfficialGroup?.defaultConfirmationLeadTimeDays === "number"
-                      ? String(selectedOfficialGroup.defaultConfirmationLeadTimeDays)
-                      : "5",
-                  tags:
-                    !isCommunitySection &&
-                    selectedOfficialGroup?.defaultTags &&
-                    selectedOfficialGroup.defaultTags.length > 0
-                      ? selectedOfficialGroup.defaultTags.join(", ")
-                      : "",
+                  ...(isCommunitySection
+                    ? {}
+                    : applyOfficialGroupDefaultsToTrainingForm(
+                        createEmptyTrainingEventFormState(),
+                        selectedOfficialGroup,
+                        store.trainingEvents,
+                      )),
+                  summary: isCommunitySection ? "" : previous.summary,
+                  description: isCommunitySection ? "" : previous.description,
                   isPublished: !isCommunitySection,
                   selfManagedByTrainer: false,
                 }));
@@ -9832,7 +8833,7 @@ export function EventsPage() {
                   ) : null}
 
                   <p className="mt-4 text-sm text-brand-muted">
-                    Wybierz jedną z istniejących rezerwacji tej grupy albo ustaw nową datę niżej.
+                    Formularz startuje z trenerem i ustawieniami tej grupy. Datę oraz godziny ustawisz niżej.
                   </p>
                 </div>
               )}
@@ -9868,7 +8869,6 @@ export function EventsPage() {
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
                   <input
-                    required
                     value={trainerEventForm.type}
                     onChange={(event) =>
                       setTrainerEventForm((previous) => ({
@@ -9904,7 +8904,7 @@ export function EventsPage() {
                   {isCommunitySection ? "Lokalizacja" : "Nagłówek miejsca"}
                 </span>
                 <input
-                  required
+                  required={isCommunitySection}
                   value={trainerEventForm.location}
                   onChange={(event) =>
                     setTrainerEventForm((previous) => ({
@@ -9939,10 +8939,10 @@ export function EventsPage() {
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunitySection
                     ? "Krótka informacja o wydarzeniu"
-                    : "Krótka informacja od organizatora"}
+                    : "Krótka informacja od organizatora (opcjonalnie)"}
                 </span>
                 <textarea
-                  required
+                  required={isCommunitySection}
                   rows={3}
                   maxLength={180}
                   value={trainerEventForm.summary}
@@ -9960,10 +8960,10 @@ export function EventsPage() {
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunitySection
                     ? "Informacja do prośby o dołączenie"
-                    : "Dłuższy opis na widoku szczegółowym"}
+                    : "Dłuższy opis na widoku szczegółowym (opcjonalnie)"}
                 </span>
                 <textarea
-                  required
+                  required={isCommunitySection}
                   rows={6}
                   value={trainerEventForm.description}
                   onChange={(event) =>
@@ -10056,6 +9056,7 @@ export function EventsPage() {
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Pierwszy dzień szkolenia</span>
                 <input
+                  ref={scheduleStartInputRef}
                   required
                   type="date"
                   value={trainerEventForm.firstDayDate}
@@ -10072,7 +9073,6 @@ export function EventsPage() {
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
                 <input
-                  required
                   min={1}
                   type="number"
                   value={trainerEventForm.scheduleDays.length}
@@ -10160,7 +9160,6 @@ export function EventsPage() {
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Limit miejsc</span>
                 <input
-                  required
                   min={1}
                   type="number"
                   value={trainerEventForm.capacity}
@@ -10198,7 +9197,6 @@ export function EventsPage() {
                   SMS potwierdzenia udziału
                 </span>
                 <input
-                  required
                   min={0}
                   type="number"
                   value={trainerEventForm.confirmationLeadTimeDays}
@@ -13309,17 +12307,12 @@ export function ProfileSettingsPage() {
     setSaving(true);
 
     try {
-      await Promise.all([
-        updateOrganizerProfile({
-          ...organizerForm,
-          contactName: organizerForm.contactName.trim() || organizerForm.displayName.trim(),
-        }),
-        updateCommunityOrganizerProfile({
-          ...communityOrganizerForm,
-          contactName:
-            communityOrganizerForm.contactName.trim() || communityOrganizerForm.displayName.trim(),
-        }),
-      ]);
+      await saveOrganizerProfiles({
+        officialProfile: organizerForm,
+        communityProfile: communityOrganizerForm,
+        updateOrganizerProfile,
+        updateCommunityOrganizerProfile,
+      });
       toast.success("Profile organizatora zostały zapisane.");
     } catch (error) {
       toast.error(

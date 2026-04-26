@@ -12,6 +12,8 @@ import {
   EnrollmentRequestManagementActions,
   EnrollmentRequestDecisionButtons,
   EnrollmentRequestSlimRow,
+  getGroupTrainingCreatePath,
+  getLatestGroupTrainingCopy,
   OrganizerRelationsHubSection,
   splitGroupsByArchivedStatus,
   splitEnrollmentRequestsByIntent,
@@ -172,13 +174,6 @@ function createStore(overrides: Partial<DemoStore> = {}): DemoStore {
     relations: [],
     trainingEvents: [],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    organizerExternalBusyMonths: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: {
@@ -661,6 +656,12 @@ describe("buildEnrollmentRequestTransferOptions", () => {
           location: "Łódź",
           startsAt: "2099-04-12T10:00:00.000Z",
           endsAt: "2099-04-12T12:00:00.000Z",
+          scheduleDays: [
+            {
+              startsAt: "2099-04-12T10:00:00.000Z",
+              endsAt: "2099-04-12T12:00:00.000Z",
+            },
+          ],
           enrolledCount: 3,
           capacity: 10,
           isPublished: true,
@@ -724,6 +725,12 @@ describe("buildEnrollmentRequestTransferOptions", () => {
           isPublished: true,
           startsAt: "2099-04-12T10:00:00.000Z",
           endsAt: "2099-04-12T12:00:00.000Z",
+          scheduleDays: [
+            {
+              startsAt: "2099-04-12T10:00:00.000Z",
+              endsAt: "2099-04-12T12:00:00.000Z",
+            },
+          ],
           location: "Łosice",
         }),
         createTrainingEvent({
@@ -737,6 +744,12 @@ describe("buildEnrollmentRequestTransferOptions", () => {
           isPublished: true,
           startsAt: "2099-04-13T10:00:00.000Z",
           endsAt: "2099-04-13T12:00:00.000Z",
+          scheduleDays: [
+            {
+              startsAt: "2099-04-13T10:00:00.000Z",
+              endsAt: "2099-04-13T12:00:00.000Z",
+            },
+          ],
         }),
       ],
     });
@@ -766,6 +779,52 @@ describe("splitGroupsByArchivedStatus", () => {
 
     expect(result.active.map((group) => group.id)).toEqual(["group-active"]);
     expect(result.archived.map((group) => group.id)).toEqual(["group-archived"]);
+  });
+});
+
+describe("group training creator helpers", () => {
+  it("builds a direct group creator path without the legacy terminy route", () => {
+    expect(getGroupTrainingCreatePath("group-1")).toBe(
+      "/panel/szkolenia/utworz?groupId=group-1&returnToGroupId=group-1",
+    );
+  });
+
+  it("prefills summary and description from the latest official group training", () => {
+    const copy = getLatestGroupTrainingCopy(
+      [
+        createTrainingEvent({
+          id: "event-old",
+          groupId: "group-1",
+          brandStatus: "official",
+          startsAt: "2026-04-10T10:00:00.000Z",
+          endsAt: "2026-04-10T12:00:00.000Z",
+          summary: "Starszy opis",
+          description: "Starszy długi opis",
+        }),
+        createTrainingEvent({
+          id: "event-new",
+          groupId: "group-1",
+          brandStatus: "official",
+          startsAt: "2026-05-10T10:00:00.000Z",
+          endsAt: "2026-05-10T12:00:00.000Z",
+          summary: "Najnowszy opis",
+          description: "Najnowszy długi opis",
+        }),
+        createTrainingEvent({
+          id: "event-community",
+          groupId: "group-1",
+          brandStatus: "supported",
+          summary: "Community",
+          description: "Community",
+        }),
+      ],
+      "group-1",
+    );
+
+    expect(copy).toEqual({
+      summary: "Najnowszy opis",
+      description: "Najnowszy długi opis",
+    });
   });
 });
 

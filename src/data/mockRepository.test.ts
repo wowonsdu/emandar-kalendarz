@@ -74,13 +74,6 @@ function createStore(
     relations: [],
     trainingEvents: [createEvent(eventOverrides)],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    organizerExternalBusyMonths: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: {
@@ -125,9 +118,10 @@ function createOrganizerStore(
   return store;
 }
 
-function mockSession(userId: string) {
-  const storage = new Map<string, string>();
-  storage.set("emandar:mock-auth-session", JSON.stringify({ userId }));
+function mockBrowserStorage(
+  initialEntries: Record<string, string> = {},
+) {
+  const storage = new Map<string, string>(Object.entries(initialEntries));
 
   vi.stubGlobal("window", {
     location: {
@@ -144,6 +138,14 @@ function mockSession(userId: string) {
     },
     setInterval: globalThis.setInterval.bind(globalThis),
     clearInterval: globalThis.clearInterval.bind(globalThis),
+  });
+
+  return storage;
+}
+
+function mockSession(userId: string) {
+  return mockBrowserStorage({
+    "emandar:mock-auth-session": JSON.stringify({ userId }),
   });
 }
 
@@ -748,6 +750,141 @@ describe("ensurePhoneParticipantProfile", () => {
     expect(updatedStore.users[0]).toMatchObject({
       id: actorId,
       participantProfileId,
+    });
+  });
+});
+
+describe("phone pre-auth registration flow", () => {
+  it("logs in an existing user after SMS confirmation without creating another account", async () => {
+    const storage = mockBrowserStorage();
+    const store = createStore(
+      {},
+      {
+        id: "user-existing",
+        role: "participant",
+        roles: ["participant"],
+        primaryRole: "participant",
+        displayName: "Anna Test",
+        phone: "+48 500 600 700",
+        status: "active",
+      },
+    );
+    mockStoreFetch(store);
+
+    const { confirmSmsCode, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 500 600 700");
+
+    await expect(confirmSmsCode("+48 500 600 700", "123456")).resolves.toEqual({
+      status: "existing-account",
+      userId: "user-existing",
+      phone: "+48 500 600 700",
+    });
+
+    expect(storage.get("emandar:mock-auth-session")).toBe(
+      JSON.stringify({ userId: "user-existing" }),
+    );
+    expect(storage.has("emandar:mock-verified-phone-preauth")).toBe(false);
+  });
+
+  it("stores a verified phone without creating a user or session when the account is missing", async () => {
+    const storage = mockBrowserStorage();
+    const store = createStore();
+    store.users = [];
+    const mockedApi = mockStoreFetch(store);
+
+    const { confirmSmsCode, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 501 602 703");
+
+    await expect(confirmSmsCode("+48 501 602 703", "123456")).resolves.toEqual({
+      status: "missing-account",
+      phone: "+48 501 602 703",
+    });
+
+    expect(storage.has("emandar:mock-auth-session")).toBe(false);
+    expect(storage.get("emandar:mock-verified-phone-preauth")).toContain("+48 501 602 703");
+    expect(mockedApi.getStore().users).toHaveLength(0);
+  });
+
+  it("creates the account only on participant registration and signs the user in", async () => {
+    const storage = mockBrowserStorage();
+    const store = createStore();
+    store.users = [];
+    const mockedApi = mockStoreFetch(store);
+
+    const { confirmSmsCode, registerParticipant, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 511 622 733");
+
+    await expect(confirmSmsCode("+48 511 622 733", "123456")).resolves.toEqual({
+      status: "missing-account",
+      phone: "+48 511 622 733",
+    });
+
+    expect(mockedApi.getStore().users).toHaveLength(0);
+
+    await expect(
+      registerParticipant({
+        displayName: "Kasia Test",
+        phone: "+48 511 622 733",
+        notes: "Kilka słów o sobie",
+        avatarFile: null,
+        trainingDataConsentAccepted: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.users).toHaveLength(1);
+    expect(updatedStore.users[0]).toMatchObject({
+      displayName: "Kasia Test",
+      phone: "+48 511 622 733",
+      participantProfileId: "participant-48511622733",
+    });
+    expect(storage.get("emandar:mock-auth-session")).toBe(
+      JSON.stringify({ userId: updatedStore.users[0]?.id }),
+    );
+    expect(storage.has("emandar:mock-verified-phone-preauth")).toBe(false);
+  });
+
+  it("links an existing participant profile instead of duplicating it during registration", async () => {
+    const store = createStore();
+    store.users = [];
+    store.participantProfiles = [
+      {
+        id: "participant-48522633744",
+        linkedUserId: null,
+        displayName: "Profil z grupy",
+        firstName: "Profil",
+        lastName: "Z grupy",
+        phone: "+48 522 633 744",
+        phoneLookupKey: "48522633744",
+        confirmationStatus: "unconfirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+        managerOrganizerIds: ["organizer-1"],
+        managerOrganizerUserIds: ["user-organizer-1"],
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+    mockBrowserStorage();
+
+    const { confirmSmsCode, registerParticipant, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 522 633 744");
+    await confirmSmsCode("+48 522 633 744", "123456");
+
+    await registerParticipant({
+      displayName: "Maria Nowa",
+      phone: "+48 522 633 744",
+      notes: "Opis uczestniczki",
+      avatarFile: null,
+      trainingDataConsentAccepted: true,
+    });
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.users).toHaveLength(1);
+    expect(updatedStore.participantProfiles).toHaveLength(1);
+    expect(updatedStore.participantProfiles[0]).toMatchObject({
+      id: "participant-48522633744",
+      linkedUserId: updatedStore.users[0]?.id,
+      displayName: "Maria Nowa",
     });
   });
 });
@@ -2249,5 +2386,50 @@ describe("group event roster defaults", () => {
 
     stopUserProfile();
     stopAuth();
+  });
+
+  it("creates an official group training without requiring summary or description", async () => {
+    const { createTrainingEvent } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const mockedApi = mockStoreFetch(createOrganizerStore(actor));
+
+    await expect(
+      createTrainingEvent(
+        {
+          trainerId: "trainer-1",
+          groupId: "group-1",
+          summary: "",
+          description: "",
+          type: "Szkolenie",
+          eventTypeSystem: "training",
+          scheduleDays: [
+            {
+              startsAt: "2099-06-10T08:00:00.000Z",
+              endsAt: "2099-06-10T14:00:00.000Z",
+            },
+          ],
+          location: "",
+          capacity: 20,
+          minimumParticipants: 10,
+          confirmationLeadTimeDays: 7,
+          isPublished: true,
+          brandStatus: "official",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(mockedApi.getStore().trainingEvents[0]).toMatchObject({
+      groupId: "group-1",
+      summary: "",
+      description: "",
+      title: "Grupa oddechowa",
+    });
   });
 });

@@ -179,13 +179,6 @@ function createStore(overrides: Partial<DemoStore> = {}): DemoStore {
     relations: [],
     trainingEvents: [],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
-    organizerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: {

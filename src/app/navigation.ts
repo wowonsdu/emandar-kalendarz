@@ -125,14 +125,6 @@ export function buildAuthenticatedNavigationSections(
       ],
     });
   }
-
-  if (hasInheritedRole(user, "organizer")) {
-    sections.push({
-      title: "Organizator",
-      items: [{ to: "/panel/terminy", label: "Terminy", icon: CalendarDays }],
-    });
-  }
-
   if (hasInheritedRole(user, "trainer") && !isCommunityTrainer) {
     sections.push({
       title: "Trener",

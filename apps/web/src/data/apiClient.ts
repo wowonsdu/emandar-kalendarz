@@ -136,7 +136,11 @@ async function fetchFirst<T>(path: string, init?: RequestInit): Promise<T> {
         },
       });
       if (!response.ok) {
-        lastError = new Error(`${path}-${response.status}`);
+        const error = new Error(`${path}-${response.status}`);
+        if (response.status !== 404) {
+          throw error;
+        }
+        lastError = error;
         continue;
       }
       return (await response.json()) as T;
@@ -403,15 +407,17 @@ export async function ensurePhoneParticipantProfileForFlow(seedTrainerId?: strin
 }
 
 export async function registerParticipant(input: ParticipantRegistrationInput) {
-  let avatarUrl: string | undefined;
-  if (input.avatarFile) {
-    avatarUrl = (await uploadImage(input.avatarFile, "avatar")).url;
-  }
   const verified = readVerifiedPhoneState();
   const result = await runCommand("registerParticipant", [
-    { ...stripFileFields(input as unknown as Record<string, unknown>), avatarUrl, phone: verified?.phone ?? input.phone },
+    { ...stripFileFields(input as unknown as Record<string, unknown>), phone: verified?.phone ?? input.phone },
   ]);
   writeVerifiedPhoneState(null);
+
+  if (input.avatarFile) {
+    const avatarUrl = (await uploadImage(input.avatarFile, "avatar")).url;
+    await runCommand("updateParticipantProfile", [{ avatarUrl }]);
+  }
+
   return result;
 }
 

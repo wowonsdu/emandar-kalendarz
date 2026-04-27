@@ -27,6 +27,19 @@ type PrioritizedParticipantRecord = {
   participantDisplayName: string;
 };
 
+type CapabilityUser =
+  | {
+      id?: string;
+      role?: AppRole;
+      roles?: AppRole[];
+      primaryRole?: AppRole;
+      trainerProfileId?: string;
+      organizerProfileId?: string;
+      organizerFunctionsBlockedAt?: string;
+    }
+  | null
+  | undefined;
+
 export const GROUP_MEMBER_PRIORITY_ORDER: Record<GroupMemberPriority, number> = {
   stali: 0,
   regularni: 1,
@@ -239,10 +252,7 @@ export function isTrainingEventArchived(
 }
 
 export function resolveTrainerCollaborationStatus(
-  event: Pick<
-    TrainingEvent,
-    "brandStatus" | "trainerCollaborationStatus"
-  >,
+  event: Pick<TrainingEvent, "trainerCollaborationStatus">,
 ): EventCollaborationStatus {
   if (event.trainerCollaborationStatus) {
     return event.trainerCollaborationStatus;
@@ -252,10 +262,8 @@ export function resolveTrainerCollaborationStatus(
 }
 
 export function resolveOrganizerCollaborationStatus(
-  event: Pick<
-    TrainingEvent,
-    "brandStatus" | "organizerId" | "organizerCollaborationStatus" | "selfManagedByTrainer"
-  >,
+  event: Pick<TrainingEvent, "organizerId" | "organizerCollaborationStatus" | "selfManagedByTrainer"> &
+    Partial<Pick<TrainingEvent, "brandStatus">>,
 ): EventCollaborationStatus {
   if (event.organizerCollaborationStatus) {
     return event.organizerCollaborationStatus;
@@ -273,7 +281,8 @@ export function resolveOrganizerCollaborationStatus(
 }
 
 export function isSelfManagedTrainingEvent(
-  event: Pick<TrainingEvent, "brandStatus" | "selfManagedByTrainer" | "organizerId">,
+  event: Pick<TrainingEvent, "selfManagedByTrainer" | "organizerId"> &
+    Partial<Pick<TrainingEvent, "brandStatus">>,
 ) {
   return isCommunityBrandStatus(event.brandStatus) || event.selfManagedByTrainer || !event.organizerId;
 }
@@ -286,6 +295,7 @@ export function isTrainingEventCollaborationAccepted(
     | "trainerCollaborationStatus"
     | "organizerCollaborationStatus"
     | "selfManagedByTrainer"
+    | "trainerId"
   >,
 ) {
   if (isSelfManagedTrainingEvent(event)) {
@@ -357,18 +367,14 @@ export function canManageTrainingEvent(
     | "organizerCollaborationStatus"
     | "trainerId"
   >,
-  actor: Pick<
-    AppUser,
-    | "id"
-    | "role"
-    | "roles"
-    | "primaryRole"
-    | "trainerProfileId"
-    | "organizerProfileId"
-    | "organizerFunctionsBlockedAt"
-  >,
+  actor: CapabilityUser,
 ) {
-  if (actor.role === "admin") {
+  if (!actor) {
+    return false;
+  }
+  const actorRole = actor.role ?? getHighestRole(actor);
+
+  if (actorRole === "admin") {
     return true;
   }
 
@@ -377,9 +383,9 @@ export function canManageTrainingEvent(
   }
 
   const canUseTrainerLayer =
-    getRoleHierarchyLevel(actor.role) >= getRoleHierarchyLevel("trainer");
+    getRoleHierarchyLevel(actorRole) >= getRoleHierarchyLevel("trainer");
   const canUseOrganizerLayer =
-    getRoleHierarchyLevel(actor.role) >= getRoleHierarchyLevel("organizer");
+    getRoleHierarchyLevel(actorRole) >= getRoleHierarchyLevel("organizer");
 
   if (canUseTrainerLayer && actor.trainerProfileId === event.trainerId) {
     return (
@@ -424,16 +430,14 @@ export function canApproveEnrollmentRequest(
     | "selfManagedByTrainer"
     | "trainerId"
   >,
-  actor: Pick<
-    AppUser,
-    | "id"
-    | "role"
-    | "trainerProfileId"
-    | "organizerProfileId"
-    | "organizerFunctionsBlockedAt"
-  >,
+  actor: CapabilityUser,
 ) {
-  if (actor.role === "admin") {
+  if (!actor) {
+    return false;
+  }
+  const actorRole = actor.role ?? getHighestRole(actor);
+
+  if (actorRole === "admin") {
     return !isTrainingEventArchived(event);
   }
 
@@ -490,33 +494,30 @@ export function canDecideTrainingEventCollaboration(
     | "trainerCollaborationStatus"
     | "trainerId"
   >,
-  actor: Pick<
-    AppUser,
-    | "role"
-    | "roles"
-    | "primaryRole"
-    | "trainerProfileId"
-    | "organizerProfileId"
-    | "organizerFunctionsBlockedAt"
-  >,
+  actor: CapabilityUser,
 ) {
+  if (!actor) {
+    return false;
+  }
+  const actorRole = actor.role ?? getHighestRole(actor);
+
   if (isTrainingEventArchived(event)) {
     return false;
   }
 
-  if (actor.role === "admin") {
+  if (actorRole === "admin") {
     return true;
   }
 
   if (
-    getRoleHierarchyLevel(actor.role) >= getRoleHierarchyLevel("trainer") &&
+    getRoleHierarchyLevel(actorRole) >= getRoleHierarchyLevel("trainer") &&
     actor.trainerProfileId === event.trainerId
   ) {
     return resolveTrainerCollaborationStatus(event) === "pending";
   }
 
   if (
-    getRoleHierarchyLevel(actor.role) >= getRoleHierarchyLevel("organizer") &&
+    getRoleHierarchyLevel(actorRole) >= getRoleHierarchyLevel("organizer") &&
     actor.organizerProfileId === event.organizerId &&
     !isOrganizerFunctionsBlocked(actor)
   ) {
@@ -781,7 +782,7 @@ export function getRoleHierarchyLevel(role: AppRole) {
 }
 
 export function getHighestRole(
-  user: Pick<AppUser, "role" | "roles" | "primaryRole"> | null | undefined,
+  user: CapabilityUser,
 ) {
   if (!user) {
     return "participant" as const;
@@ -791,7 +792,10 @@ export function getHighestRole(
     user.role,
     user.primaryRole,
     ...(Array.isArray(user.roles) ? user.roles : []),
-  ].filter((role): role is HierarchicalRole => Boolean(role) && isHierarchicalRole(role));
+  ].filter(
+    (role): role is HierarchicalRole =>
+      Boolean(role) && isHierarchicalRole(role as AppRole),
+  );
 
   return candidates.reduce<HierarchicalRole>((highest, role) => {
     return getRoleHierarchyLevel(role) > getRoleHierarchyLevel(highest) ? role : highest;
@@ -799,7 +803,7 @@ export function getHighestRole(
 }
 
 export function hasInheritedRole(
-  user: Pick<AppUser, "role" | "roles" | "primaryRole"> | null | undefined,
+  user: CapabilityUser,
   role: AppRole,
 ) {
   if (role === "moderator") {
@@ -872,7 +876,7 @@ export function getTrainingJoinAudienceLabel(value: TrainingJoinAudience | null 
 }
 
 export function hasRole(
-  user: Pick<AppUser, "role" | "roles" | "primaryRole"> | null | undefined,
+  user: CapabilityUser,
   role: AppRole,
 ) {
   if (!user) {
@@ -887,7 +891,7 @@ export function hasRole(
 }
 
 export function hasModeratorAccess(
-  user: Pick<AppUser, "role" | "roles" | "primaryRole"> | null | undefined,
+  user: CapabilityUser,
 ) {
   return hasRole(user, "admin") || hasRole(user, "moderator");
 }
@@ -899,10 +903,7 @@ export function isOrganizerFunctionsBlocked(
 }
 
 export function canUseOrganizerFunctions(
-  user:
-    | Pick<AppUser, "role" | "roles" | "primaryRole" | "organizerFunctionsBlockedAt">
-    | null
-    | undefined,
+  user: CapabilityUser,
 ) {
   return hasInheritedRole(user, "organizer") && !isOrganizerFunctionsBlocked(user);
 }

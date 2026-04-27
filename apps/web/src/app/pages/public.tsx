@@ -33,7 +33,7 @@ import {
   getCurrentSessionPhone,
   getVerifiedPhonePreAuth,
   requestSmsCode,
-} from "@/data/mockRepository";
+} from "@/data/apiClient";
 import {
   getParticipantEnrollmentViewRecords,
 } from "@/app/dashboard";
@@ -174,6 +174,7 @@ function hasCompletedParticipantRegistration(user: AppUser | null) {
 }
 
 const demoLoginPassword = "kocham";
+const isDemoLoginEnabled = import.meta.env.DEV;
 
 const demoLoginSections = [
   {
@@ -1021,6 +1022,7 @@ export function CalendarPage() {
     <EventFeedSection
       eyebrow="Szkolenia Emandar"
       title="Spotkania z Przekazującymi wiedzę"
+      description="Kalendarz oficjalnych szkoleń będzie uzupełniany przez zespół Emandar."
       emptyTitle="Brak opublikowanych szkoleń"
       emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
       events={events}
@@ -1311,7 +1313,7 @@ export function EventDetailsPage() {
       setConfirmationResult(result);
       setSmsVerified(false);
       setIsSmsDialogOpen(true);
-      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
+      toast.success(code ? `Kod testowy został wysłany. Użyj ${code}.` : "Kod SMS został wysłany.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
@@ -2380,7 +2382,7 @@ function SmsLoginScreen() {
       setVerificationCode("");
       setConfirmationResult(result);
       setIsSmsDialogOpen(true);
-      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
+      toast.success(code ? `Kod testowy został wysłany. Użyj ${code}.` : "Kod SMS został wysłany.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",
@@ -2496,18 +2498,20 @@ function SmsLoginScreen() {
 
           <div id="login-phone-recaptcha" className="sr-only" />
 
-          <div className="mt-8 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted sm:p-5">
-            <div className="flex items-center gap-2 font-semibold text-brand-navy">
-              <ShieldCheck size={16} />
-              Konta demo
+          {isDemoLoginEnabled ? (
+            <div className="mt-8 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted sm:p-5">
+              <div className="flex items-center gap-2 font-semibold text-brand-navy">
+                <ShieldCheck size={16} />
+                Konta testowe
+              </div>
+              <p className="mt-2">
+                Lokalne konta testowe są dostępne tylko w trybie deweloperskim.
+              </p>
             </div>
-            <p className="mt-2">
-              Istniejące konta mailowe zostają tylko dla demo. Poniżej nadal możesz
-              wejść nimi jednym kliknięciem.
-            </p>
-          </div>
+          ) : null}
         </div>
 
+        {isDemoLoginEnabled ? (
         <aside className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:rounded-[2.5rem] sm:p-6">
           <div className="flex items-center gap-2 text-brand-navy">
             <Sparkles size={18} />
@@ -2549,6 +2553,7 @@ function SmsLoginScreen() {
             ))}
           </div>
         </aside>
+        ) : null}
       </div>
 
       <SmsConfirmationDialog
@@ -2754,7 +2759,7 @@ function SmsRegisterScreen() {
       setVerificationCode("");
       setConfirmationResult(result);
       setIsSmsDialogOpen(true);
-      toast.success(`Kod demo został wysłany. Użyj ${code}.`);
+      toast.success(code ? `Kod testowy został wysłany. Użyj ${code}.` : "Kod SMS został wysłany.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się wysłać kodu SMS.",

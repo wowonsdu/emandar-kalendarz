@@ -234,14 +234,14 @@ export function getParticipantGroupEventRecords(
 ): ParticipantGroupEventRecord[] {
   return [...(store.eventParticipants ?? [])]
     .filter((eventParticipant) => eventParticipant.participantProfileId === participantProfileId)
-    .map((eventParticipant) => {
+    .map<ParticipantGroupEventRecord | null>((eventParticipant) => {
       const event = store.trainingEvents.find((item) => item.id === eventParticipant.eventId);
       if (!event) {
         return null;
       }
 
       return {
-        kind: "roster",
+        kind: "roster" as const,
         eventParticipant,
         event,
         trainer: store.trainers.find((item) => item.id === event.trainerId),
@@ -250,7 +250,7 @@ export function getParticipantGroupEventRecords(
           : null,
         group: event.groupId ? store.groups?.find((item) => item.id === event.groupId) ?? null : null,
         isArchived: isParticipantGroupEventArchived(eventParticipant, event, now),
-      };
+      } satisfies ParticipantGroupEventRecord;
     })
     .filter((item): item is ParticipantGroupEventRecord => Boolean(item))
     .sort(
@@ -303,14 +303,14 @@ export function getParticipantPendingEnrollmentRequestRecords(
 
       return true;
     })
-    .map((request) => {
+    .map<ParticipantPendingEnrollmentRequestRecord | null>((request) => {
       const event = store.trainingEvents.find((item) => item.id === request.eventId);
       if (!event) {
         return null;
       }
 
       return {
-        kind: "request",
+        kind: "request" as const,
         request,
         event,
         trainer: store.trainers.find((item) => item.id === event.trainerId),
@@ -320,7 +320,7 @@ export function getParticipantPendingEnrollmentRequestRecords(
         group: getParticipantEnrollmentRecordGroup(event, store),
         isArchived: isParticipantPendingEnrollmentArchived(request, event, now),
         displayStatus: request.finalStatus,
-      };
+      } satisfies ParticipantPendingEnrollmentRequestRecord;
     })
     .filter((item): item is ParticipantPendingEnrollmentRequestRecord => Boolean(item))
     .sort(

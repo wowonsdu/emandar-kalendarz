@@ -30,7 +30,9 @@ DATABASE_URL=postgres://emandar_prod:change-me@127.0.0.1:5432/emandar_prod pnpm 
 DATABASE_URL=postgres://emandar_prod:change-me@127.0.0.1:5432/emandar_prod pnpm --filter @emandar/api db:seed
 ```
 
-The seed source is `apps/web/public/mock-data/seed-store.json`.
+The seed source is `apps/web/public/mock-data/seed-store.json`. The production seed importer filters it to admin plus visible trainer profiles/users only. It does not import organizers, participants, groups, events, relations, enrollments, rosters, or notifications. Use `pnpm --filter @emandar/api db:seed -- --full-demo` only for a disposable demo database.
+
+Production SMS auth requires `SMSAPI_TOKEN` and optionally `SMSAPI_FROM`. Keep `SMSAPI_TEST_MODE=true` for smoke environments; set `SMSAPI_TEST_MODE=false` only after sender and billing are verified.
 
 ## Production Shape
 
@@ -45,8 +47,18 @@ The seed source is `apps/web/public/mock-data/seed-store.json`.
 Before replacing live files, create timestamped backups of:
 
 - `/opt/panel.ceo/emandar`
+- PostgreSQL database: `pg_dump --format=custom --file=/opt/panel.ceo/emandar-backup-YYYYMMDD-HHMMSS.dump "$DATABASE_URL"`
+- Upload directory: `/opt/panel.ceo/emandar-data/uploads`
 - `/opt/panel.ceo/emandar-data/runtime-store.json` if it still exists from the mock era
 
 Deploy static web build from `apps/web/dist/`. Deploy the API build plus root workspace files needed for production install, copy `apps/web/public/mock-data/seed-store.json` to `/opt/panel.ceo/emandar-api/seed-store.json`, then run migrations and seed import.
 
 Use `deploy/emandar-api.env.example`, `deploy/emandar-api.service`, and `deploy/nginx-emandar.conf.example` as the server-side templates. Always inspect the existing `panel.ceo` Nginx config first, back up the edited config, run `nginx -t`, reload only after it passes, and verify the target route plus a neighboring route.
+
+Rollback order:
+
+1. Stop or roll back the systemd API service if the API is unhealthy.
+2. Restore `/opt/panel.ceo/emandar` from the timestamped web backup.
+3. Restore uploads from the timestamped upload backup if file writes were part of the failed release.
+4. Restore PostgreSQL from the `pg_dump` backup only if migrations or data writes must be undone.
+5. Run `nginx -t`, reload Nginx, and verify `/emandar/`, `/emandar/api/health`, and the current hashed asset URL.

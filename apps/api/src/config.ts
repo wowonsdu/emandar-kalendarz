@@ -10,14 +10,20 @@ function numberFromEnv(value: string | undefined, fallback: number) {
 }
 
 export type ApiConfig = {
+  allowLegacyStoreApi: boolean;
   basePath: string;
   databaseUrl?: string;
-  demoSmsCode: string;
   host: string;
   port: number;
   publicAppUrl: string;
   seedStorePath: string;
   sessionSecret: string;
+  smsapiFrom?: string;
+  smsapiTestMode: boolean;
+  smsapiToken?: string;
+  smsCodeTtlSeconds: number;
+  storagePublicPath: string;
+  uploadStoragePath: string;
   useMemoryStore: boolean;
 };
 
@@ -34,11 +40,13 @@ export function readConfig(): ApiConfig {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   const basePath = normalizeBasePath(process.env.BASE_PATH || "/emandar");
   const databaseUrl = process.env.DATABASE_URL?.trim() || undefined;
+  const useMemoryStore = process.env.EMANDAR_USE_MEMORY_STORE === "true" || !databaseUrl;
+  const smsapiTestMode = process.env.SMSAPI_TEST_MODE !== "false";
 
   return {
+    allowLegacyStoreApi: process.env.ALLOW_LEGACY_STORE_API === "true" || useMemoryStore,
     basePath,
     databaseUrl,
-    demoSmsCode: process.env.DEMO_SMS_CODE || "123456",
     host: process.env.HOST || "127.0.0.1",
     port: numberFromEnv(process.env.PORT, 4174),
     publicAppUrl: process.env.PUBLIC_APP_URL || "https://panel.ceo/emandar",
@@ -46,6 +54,12 @@ export function readConfig(): ApiConfig {
       process.env.SEED_STORE_PATH ||
       path.resolve(moduleDir, "../../web/public/mock-data/seed-store.json"),
     sessionSecret: process.env.SESSION_SECRET || "dev-only-change-me",
-    useMemoryStore: process.env.EMANDAR_USE_MEMORY_STORE === "true" || !databaseUrl,
+    smsapiFrom: process.env.SMSAPI_FROM?.trim() || undefined,
+    smsapiTestMode,
+    smsapiToken: process.env.SMSAPI_TOKEN?.trim() || undefined,
+    smsCodeTtlSeconds: numberFromEnv(process.env.SMS_CODE_TTL_SECONDS, 300),
+    storagePublicPath: normalizeBasePath(process.env.UPLOADS_PUBLIC_PATH || "/emandar/uploads"),
+    uploadStoragePath: process.env.UPLOAD_STORAGE_PATH || "/opt/panel.ceo/emandar-data/uploads",
+    useMemoryStore,
   };
 }

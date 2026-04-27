@@ -7,11 +7,11 @@
     "build": "vite build",
     "build:raw": "node ./scripts/build-raw-dist.mjs",
     "dev": "vite --host 0.0.0.0",
-    "lint": "tsc --noEmit --noCheck",
+    "lint": "tsc --noEmit",
     "mock:reset": "node ./scripts/mock-reset.mjs",
     "mock:seed:from-runtime": "node ./scripts/mock-seed-from-runtime.mjs",
     "test": "vitest run src",
-    "typecheck": "tsc --noEmit --noCheck"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@emandar/shared": "workspace:*",

@@ -1,11 +1,13 @@
 import { readConfig, type ApiConfig } from "./config.js";
 import { MemoryStoreRepository } from "./store/memory-store.js";
 import { PgStoreRepository } from "./store/pg-store.js";
-import { readSeedStore } from "./store/seed.js";
+import { readProductionSeedStore, readSeedStore } from "./store/seed.js";
 import type { StoreRepository } from "./store/types.js";
 
 export async function createStoreFromConfig(config: ApiConfig = readConfig()): Promise<StoreRepository> {
-  const seedStore = await readSeedStore(config.seedStorePath);
+  const seedStore = config.useMemoryStore
+    ? await readSeedStore(config.seedStorePath)
+    : await readProductionSeedStore(config.seedStorePath);
 
   if (config.useMemoryStore) {
     return new MemoryStoreRepository(seedStore);

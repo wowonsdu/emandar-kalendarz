@@ -277,6 +277,33 @@ async function fetchJsonOrNull<T>(url: string) {
   }
 }
 
+async function fetchApiSessionJson(url: string) {
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+
+    if (!response.ok) {
+      return { kind: "missing" as const };
+    }
+
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      return { kind: "invalid" as const };
+    }
+
+    const payload = (await response.json()) as { userId?: string | null };
+    return {
+      kind: "session" as const,
+      userId: payload.userId ?? null,
+    };
+  } catch {
+    return { kind: "missing" as const };
+  }
+}
+
 async function postJsonOrNull<T>(url: string, payload: unknown) {
   try {
     const response = await fetch(url, {
@@ -330,9 +357,12 @@ async function postToFirstApi<T>(path: string, payload: unknown) {
 
 async function fetchCurrentApiSession() {
   for (const url of resolveApiUrls("auth/session")) {
-    const payload = await fetchJsonOrNull<{ userId: string | null }>(url);
-    if (payload && "userId" in payload) {
-      return payload.userId ?? null;
+    const payload = await fetchApiSessionJson(url);
+    if (payload.kind === "session") {
+      return payload.userId;
+    }
+    if (payload.kind === "invalid") {
+      return null;
     }
   }
 
@@ -1409,7 +1439,6 @@ export function createEmptyStore(): DemoStore {
 export function subscribeAuthState(onAuthState: (userId: string | null) => void): Unsubscribe {
   const listenerId = nextListenerId++;
   authListeners.set(listenerId, onAuthState);
-  onAuthState(getCurrentSessionUserId());
 
   void fetchCurrentApiSession().then((userId) => {
     if (!authListeners.has(listenerId)) {

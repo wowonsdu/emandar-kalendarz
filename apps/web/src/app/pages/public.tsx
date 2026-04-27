@@ -2340,7 +2340,6 @@ function SmsConfirmationDialog({
 function SmsLoginScreen() {
   const {
     authReady,
-    currentUser,
     ensurePhoneParticipantProfileForFlow,
     getPublicSignedInPath,
     signIn,
@@ -2362,10 +2361,6 @@ function SmsLoginScreen() {
       recaptchaRef.current = null;
     };
   }, []);
-
-  if (currentUser) {
-    return <Navigate to={getPublicSignedInPath()} replace />;
-  }
 
   async function handleSendCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

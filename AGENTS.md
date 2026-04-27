@@ -1,15 +1,16 @@
 # Local Runbook
 
-- This branch runs on the built-in mock JSON backend under `public/mock-data` and `public/api/mock`.
-- `public/mock-data/seed-store.json` is the repo-tracked bootstrap seed only.
-- Runtime app state must persist in a separate simulated database file, not back into the seed:
-  - local dev: `.local-state/emandar/runtime-store.json`
-  - production: `/opt/panel.ceo/emandar-data/runtime-store.json`
-- Normal browsing, editing, moderation, deletes, and config changes must write only to the runtime store.
-- Use `npm run mock:reset` only when an explicit reseed is requested. That command overwrites local runtime state from the current seed.
-- When promoting current local runtime back into `public/mock-data/seed-store.json`, use `npm run mock:seed:from-runtime`.
+- This repo is now a pnpm/Turbo monorepo:
+  - web: `apps/web`
+  - API: `apps/api`
+  - shared contracts: `packages/shared`
+- The repo-tracked bootstrap seed lives at `apps/web/public/mock-data/seed-store.json`.
+- Runtime production state must live in PostgreSQL behind `apps/api`; do not write production state back into the seed.
+- The legacy mock helpers remain only for explicit local reseeds/export work:
+  - Use `pnpm mock:reset` only when an explicit reseed is requested.
+  - Use `pnpm mock:seed:from-runtime` only when promoting a local mock runtime back into the seed.
 - That export must preserve seeded trainer profiles and trainer-linked user records from the current seed, so demo reseeds do not overwrite trainer bios, avatars, sort order, or other curated trainer data.
-- Use `npm run dev` for local work, `npm test` for unit tests, and `npm run build` before deploy.
+- Use `pnpm dev` for local work, `pnpm test` for unit tests, `pnpm typecheck` for workspace type checks, and `pnpm build` before deploy.
 
 ## Project Context
 
@@ -43,14 +44,16 @@
 
 - Preferred public web target for this repo is `https://panel.ceo/emandar/`.
 - Live files for that path are served from `/opt/panel.ceo/emandar` on `root@51.68.143.29`.
-- Persistent mock runtime data for that app must live outside the deployed build at `/opt/panel.ceo/emandar-data/runtime-store.json`.
+- The API is served under `/emandar/api` and should run as a systemd service on a local port behind the existing reverse proxy.
+- PostgreSQL runtime data must live in the production database, not in deployed web files.
+- If the legacy mock runtime still exists at `/opt/panel.ceo/emandar-data/runtime-store.json`, back it up before cutover.
 - Before replacing live files, create a timestamped backup next to the app directory, for example `/opt/panel.ceo/emandar-backup-YYYYMMDD-HHMMSS`.
-- Standard deploy flow for the static frontend:
-  1. Run `npm run build`
-  2. Copy `dist/` to `root@51.68.143.29:/opt/panel.ceo/emandar/` with `rsync -az --delete`
-  3. Never overwrite or delete `/opt/panel.ceo/emandar-data/runtime-store.json` during deploy
-  4. If a full reseed is explicitly requested, overwrite the runtime store from the current seed and then continue configuration through the browser
-  5. Verify `https://panel.ceo/emandar/` and the current hashed asset URL both return `200`
+- Standard deploy flow:
+  1. Run `pnpm build`
+  2. Copy `apps/web/dist/` to `root@51.68.143.29:/opt/panel.ceo/emandar/` with `rsync -az --delete`
+  3. Deploy the API build under `/opt/panel.ceo/emandar-api`, configure `/etc/emandar-api.env`, run migrations, and seed PostgreSQL from the current seed when needed
+  4. Never overwrite or delete `/opt/panel.ceo/emandar-data/runtime-store.json` unless an explicit legacy mock cleanup/cutover is requested
+  5. Verify `https://panel.ceo/emandar/`, `https://panel.ceo/emandar/api/health`, and the current hashed asset URL all return `200`
 
 ## Backend reference
 

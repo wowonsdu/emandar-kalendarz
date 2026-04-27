@@ -1,0 +1,16 @@
+[Unit]
+Description=Emandar API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/panel.ceo/emandar-api
+EnvironmentFile=/etc/emandar-api.env
+ExecStart=/usr/bin/node /opt/panel.ceo/emandar-api/apps/api/dist/server.js
+Restart=always
+RestartSec=5
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target

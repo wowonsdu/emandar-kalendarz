@@ -162,7 +162,7 @@ export function PublicLayout() {
   }, [isMobileMenuOpen]);
 
   return (
-    <div className="min-h-screen overflow-x-clip bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
+    <div className="flex min-h-screen flex-col overflow-x-clip bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div
           className={buildStandardHeaderInnerClassName(
@@ -237,7 +237,7 @@ export function PublicLayout() {
         </div>
       </header>
 
-      <main className="overflow-x-clip">
+      <main className="flex-1 overflow-x-clip">
         <Outlet />
       </main>
 

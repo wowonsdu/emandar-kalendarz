@@ -5,6 +5,7 @@ export type RelationStatus = "pending" | "approved" | "rejected" | "detached";
 export type DecisionStatus = "pending" | "accepted" | "rejected";
 export type EnrollmentFinalStatus =
   | "pending"
+  | "partial"
   | "accepted"
   | "rejected";
 export type EnrollmentIntent = "participating";
@@ -194,7 +195,7 @@ export interface Group {
   defaultCapacity?: number;
   defaultTags?: string[];
   defaultConfirmationLeadTimeDays: number;
-  defaultJoinAudience: TrainingJoinAudience;
+  defaultJoinAudience?: TrainingJoinAudience;
   createdAt: string;
   updatedAt?: string;
   archivedAt?: string;
@@ -253,7 +254,7 @@ export interface TrainingEvent {
   eventTypeSystem?: GroupEventType | null;
   startsAt: string;
   endsAt: string;
-  scheduleDays: TrainingEventScheduleDay[];
+  scheduleDays?: TrainingEventScheduleDay[];
   location: string;
   tags?: string[];
   capacity: number;
@@ -261,7 +262,7 @@ export interface TrainingEvent {
   reserveCount?: number;
   enrolledCount: number;
   isPublished: boolean;
-  imageHint: string;
+  imageHint?: string;
   brandStatus: EmandarBrandStatus;
   status?: TrainingEventStatus;
   workflowStatus?: TrainingEventWorkflowStatus;
@@ -476,7 +477,7 @@ export interface GroupInput {
   defaultCapacity?: number;
   defaultTags?: string[];
   defaultConfirmationLeadTimeDays: number;
-  defaultJoinAudience: TrainingJoinAudience;
+  defaultJoinAudience?: TrainingJoinAudience;
 }
 
 export interface GroupUpdateInput {

@@ -113,6 +113,7 @@ import {
   sortTrainerProfiles,
 } from "@/domain/utils";
 import type {
+  AppRole,
   AppUser,
   AvatarCropSettings,
   DecisionStatus,
@@ -2187,17 +2188,17 @@ export function buildParticipantOfficialEnrollmentSections(
 
   return [
     {
-      key: "pending",
+      key: "pending" as const,
       title: "Oczekujące",
       records: buckets.pending,
     },
     {
-      key: "reserve",
+      key: "reserve" as const,
       title: "Lista rezerwowych",
       records: buckets.reserve,
     },
     {
-      key: "participating",
+      key: "participating" as const,
       title: "Uczestniczę",
       records: buckets.participating,
     },
@@ -6530,7 +6531,7 @@ function RelationsHubContent() {
               availableTrainers={availableOrganizerTrainers}
               organizerFunctionsAreBlocked={organizerFunctionsAreBlocked}
               onConnectTrainer={(trainerId, trainerAuthorizationCode) =>
-                connectOrganizerToTrainerWithCode(trainerAuthorizationCode, trainerId)
+                connectOrganizerToTrainerWithCode(trainerAuthorizationCode, trainerId).then(() => undefined)
               }
               onDetachRelation={(relationId) => detachRelation(relationId)}
               trainerNamesById={trainerNamesById}
@@ -12605,7 +12606,7 @@ export function UserManagementPage() {
     >
       <div className="space-y-4">
         {users.map((user) => {
-          const userRoles = Array.from(new Set(["participant", ...(user.roles ?? [])])).sort(
+          const userRoles = Array.from(new Set<AppRole>(["participant", ...(user.roles ?? [])])).sort(
             (left, right) => getRoleLabel(left).localeCompare(getRoleLabel(right), "pl"),
           );
           const organizerProfile = store.organizers.find((item) => item.userId === user.id);

@@ -59,7 +59,7 @@ import {
   updateTrainerProfile as updateTrainerProfileAction,
   updateUserNotificationSettings as updateUserNotificationSettingsAction,
   uploadCommunityEventImages as uploadCommunityEventImagesAction,
-} from "@/data/mockRepository";
+} from "@/data/apiClient";
 import type {
   AppSettings,
   AppRole,

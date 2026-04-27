@@ -199,6 +199,7 @@ export class PgStoreRepository implements StoreRepository {
 
   private async syncRolesWithClient(client: Pick<Pool, "query">, users: unknown[] | JsonRecord) {
     await client.query("delete from roles");
+    await client.query("delete from user_roles");
     const rows = Array.isArray(users) ? users : [];
 
     for (const user of rows) {
@@ -226,6 +227,7 @@ export class PgStoreRepository implements StoreRepository {
 
       for (const role of roles) {
         await client.query("insert into roles (user_id, role) values ($1, $2)", [userId, role]);
+        await client.query("insert into user_roles (user_id, role) values ($1, $2)", [userId, role]);
       }
     }
   }

@@ -801,7 +801,7 @@ function buildPersistedCollectionsPatch(
       return;
     }
 
-    patch[collectionKey] = cloneValue(nextStore[collectionKey]);
+    (patch as Record<string, unknown>)[collectionKey] = cloneValue(nextStore[collectionKey]);
   });
 
   return patch;
@@ -2652,7 +2652,10 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
           selfManagedByTrainer: false,
         }),
       selfManagedByTrainer: false,
-      createdByRole: actor.role,
+      createdByRole:
+        actor.role === "trainer" || actor.role === "organizer" || actor.role === "participant"
+          ? actor.role
+          : "trainer",
       publicationApprovalStatus: isCommunityBrandStatus(base.brandStatus)
         ? input.isPublished
           ? "pending"

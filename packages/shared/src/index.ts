@@ -67,6 +67,57 @@ export const smsConfirmSchema = z.object({
   seedTrainerId: z.string().optional(),
 });
 
+export const commandRequestSchema = z.object({
+  args: z.array(z.unknown()).default([]),
+});
+
+export const publicEnrollmentRequestSchema = z.object({
+  eventId: z.string().min(1),
+  intent: z.string().optional(),
+  imieNazwisko: z.string().min(1),
+  telefon: z.string().min(1),
+  polecenieOdKogo: z.string().default(""),
+  wiadomosc: z.string().default(""),
+  photoUploadId: z.string().optional(),
+});
+
+export const uploadRequestSchema = z.object({
+  filename: z.string().min(1),
+  contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+  dataBase64: z.string().min(1),
+  purpose: z.enum(["avatar", "enrollment-photo", "event-image"]).default("event-image"),
+});
+
+export const uploadResponseSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  storagePath: z.string(),
+  width: z.number().int().nonnegative().default(0),
+  height: z.number().int().nonnegative().default(0),
+});
+
+export const authSessionResponseSchema = z.object({
+  userId: z.string().nullable(),
+});
+
+export const smsRequestResponseSchema = z.object({
+  normalizedPhone: z.string(),
+  code: z.string().optional(),
+});
+
+export const smsConfirmResponseSchema = z.union([
+  z.object({
+    status: z.literal("existing-account"),
+    userId: z.string(),
+    phone: z.string(),
+  }),
+  z.object({
+    status: z.literal("missing-account"),
+    phone: z.string(),
+    verifiedAt: z.string().optional(),
+  }),
+]);
+
 export const roleSchema = z.enum(["participant", "moderator", "organizer", "trainer", "admin"]);
 export type AppRole = z.infer<typeof roleSchema>;
 

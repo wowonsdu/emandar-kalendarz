@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "db:migrate": "tsx src/cli/migrate.ts",
     "db:seed": "tsx src/cli/seed.ts",
-    "dev": "tsx watch src/server.ts",
+    "dev": "pnpm --filter @emandar/shared build && tsx watch src/server.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/server.js",
     "test": "vitest run",

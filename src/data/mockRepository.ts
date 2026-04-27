@@ -50,6 +50,7 @@ import {
   canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
   getRoleHierarchyLevel,
+  hasInheritedRole,
   hasModeratorAccess,
   isCommunityBrandStatus,
   isOfficialGroupTrainingEvent,
@@ -385,9 +386,11 @@ function syncParticipantProfileGroupMembership(
     profile.activeGroupIds = (profile.activeGroupIds ?? []).filter((item) => item !== group.id);
   }
 
-  profile.managerOrganizerIds = Array.from(
-    new Set([...(profile.managerOrganizerIds ?? []), group.organizerId]),
-  );
+  if (group.organizerId) {
+    profile.managerOrganizerIds = Array.from(
+      new Set([...(profile.managerOrganizerIds ?? []), group.organizerId]),
+    );
+  }
   if (group.organizerUserId) {
     profile.managerOrganizerUserIds = Array.from(
       new Set([...(profile.managerOrganizerUserIds ?? []), group.organizerUserId]),
@@ -1019,7 +1022,9 @@ function rebuildParticipantDerivedFields(store: DemoStore) {
       ...profile,
       groupIds: members.map((item) => item.groupId),
       activeGroupIds: members.map((item) => item.groupId),
-      managerOrganizerIds: Array.from(new Set(members.map((item) => item.organizerId))),
+      managerOrganizerIds: Array.from(
+        new Set(members.map((item) => item.organizerId).filter(Boolean) as string[]),
+      ),
       managerOrganizerUserIds: Array.from(
         new Set(members.map((item) => item.organizerUserId).filter(Boolean) as string[]),
       ),
@@ -1235,6 +1240,54 @@ function requireOrganizerProfileId(user: Pick<AppUser, "organizerProfileId">) {
   }
 
   return user.organizerProfileId;
+}
+
+function canManageGroupAsTrainer(
+  store: DemoStore,
+  group: Pick<Group, "trainerId">,
+  actor: Pick<AppUser, "id" | "role" | "roles" | "primaryRole" | "trainerProfileId">,
+) {
+  if (!hasInheritedRole(actor, "trainer")) {
+    return false;
+  }
+
+  try {
+    return requireTrainerProfileId(store, actor) === group.trainerId;
+  } catch {
+    return false;
+  }
+}
+
+function canManageGroupAsOrganizer(
+  group: Pick<Group, "organizerUserId">,
+  actor: Pick<AppUser, "id">,
+) {
+  return Boolean(group.organizerUserId && group.organizerUserId === actor.id);
+}
+
+function ensureGroupManagementAccess(
+  store: DemoStore,
+  group: Pick<Group, "organizerUserId" | "trainerId">,
+  actor: Pick<
+    AppUser,
+    "id" | "role" | "roles" | "primaryRole" | "trainerProfileId" | "organizerFunctionsBlockedAt"
+  >,
+  errorMessage: string,
+) {
+  if (hasRoleOrAdmin(actor, "admin")) {
+    return;
+  }
+
+  if (canManageGroupAsTrainer(store, group, actor)) {
+    return;
+  }
+
+  if (canManageGroupAsOrganizer(group, actor)) {
+    ensureOrganizerFunctionsActive(actor);
+    return;
+  }
+
+  throw new Error(errorMessage);
 }
 
 function asParticipantPriority(value: string | undefined): GroupMemberPriority {
@@ -1954,18 +2007,26 @@ export async function detachRelation(
 
 export async function createGroup(input: GroupInput, actor: AppUser) {
   return mutateStore((store) => {
-    ensureOrganizerFunctionsActive(actor);
-    const organizerId = requireOrganizerProfileId(actor);
-    if (!canOrganizerAccessTrainer(organizerId, input.trainerId, store.relations)) {
-      throw new Error("Najpierw potrzebujesz aktywnego połączenia z tym trenerem.");
+    const organizerId = actor.organizerProfileId ?? "";
+    const canCreateAsTrainer = canManageGroupAsTrainer(store, { trainerId: input.trainerId }, actor);
+    const canCreateAsOrganizer =
+      Boolean(organizerId) &&
+      canUseOrganizerFunctions(actor) &&
+      canOrganizerAccessTrainer(organizerId, input.trainerId, store.relations);
+
+    if (!canCreateAsTrainer && !canCreateAsOrganizer) {
+      throw new Error(
+        "Możesz utworzyć własną grupę trenera albo grupę dla trenera z aktywnej relacji organizatora.",
+      );
     }
+
     const groupId = createId("group");
 
     store.groups.unshift({
       id: groupId,
       name: input.name.trim(),
-      organizerId,
-      organizerUserId: actor.id,
+      organizerId: canCreateAsOrganizer ? organizerId : "",
+      organizerUserId: canCreateAsOrganizer ? actor.id : undefined,
       trainerId: input.trainerId,
       trainerUserId: findTrainer(store, input.trainerId)?.userId ?? undefined,
       status: "active",
@@ -1993,13 +2054,7 @@ export async function updateGroup(input: GroupUpdateInput, actor: AppUser) {
       throw new Error("Nie znaleziono grupy.");
     }
 
-    if (group.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz edytować tej grupy.");
-    }
-
-    if (group.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz edytować tej grupy.");
 
     group.name = input.name.trim();
     group.notes = input.notes?.trim();
@@ -2020,13 +2075,7 @@ export async function archiveGroup(groupId: string, actor: AppUser) {
       throw new Error("Nie znaleziono grupy.");
     }
 
-    if (group.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz archiwizować tej grupy.");
-    }
-
-    if (group.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz archiwizować tej grupy.");
 
     group.status = "archived";
     group.archivedAt = nowIso();
@@ -2086,13 +2135,7 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
       throw new Error("Nie znaleziono grupy.");
     }
 
-    if (group.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz dodawać członków do tej grupy.");
-    }
-
-    if (group.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz dodawać członków do tej grupy.");
 
     let participantProfileId = input.participantProfileId?.trim() || undefined;
     let profile = participantProfileId
@@ -2127,7 +2170,7 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
           confirmationStatus: "unconfirmed",
           status: "active",
           createdAt: nowIso(),
-          createdByOrganizerId: group.organizerId,
+          createdByOrganizerId: group.organizerId || null,
           createdByUserId: actor.id,
         });
         profile = store.participantProfiles[0];
@@ -2195,13 +2238,12 @@ export async function updateGroupMember(input: GroupMemberUpdateInput, actor: Ap
       throw new Error("Nie znaleziono członka grupy.");
     }
 
-    if (member.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz edytować tego członka.");
+    const group = store.groups.find((item) => item.id === member.groupId);
+    if (!group) {
+      throw new Error("Nie znaleziono grupy.");
     }
 
-    if (member.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz edytować tego członka.");
 
     member.priority = asParticipantPriority(input.priority);
     member.notes = input.notes?.trim();
@@ -2216,13 +2258,12 @@ export async function removeGroupMember(memberId: string, actor: AppUser) {
       throw new Error("Nie znaleziono członka grupy.");
     }
 
-    if (member.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz usunąć tego członka.");
+    const group = store.groups.find((item) => item.id === member.groupId);
+    if (!group) {
+      throw new Error("Nie znaleziono grupy.");
     }
 
-    if (member.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz usunąć tego członka.");
 
     member.membershipStatus = "removed";
     member.removedAt = nowIso();

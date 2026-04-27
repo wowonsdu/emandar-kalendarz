@@ -610,6 +610,38 @@ export function splitGroupsByArchivedStatus(groups: Group[]) {
   };
 }
 
+export function getManagedGroupsForUser(input: {
+  currentUser: Pick<AppUser, "role" | "roles" | "primaryRole">;
+  groups: Group[];
+  organizerProfileId?: string | null;
+  trainerProfileId?: string | null;
+}) {
+  const managedGroupIds = new Set<string>();
+  const managedGroups: Group[] = [];
+
+  for (const group of input.groups) {
+    const isOrganizerOwned =
+      Boolean(input.organizerProfileId) && group.organizerId === input.organizerProfileId;
+    const isTrainerOwned =
+      hasInheritedRole(input.currentUser, "trainer") &&
+      Boolean(input.trainerProfileId) &&
+      group.trainerId === input.trainerProfileId;
+
+    if (!isOrganizerOwned && !isTrainerOwned) {
+      continue;
+    }
+
+    if (managedGroupIds.has(group.id)) {
+      continue;
+    }
+
+    managedGroupIds.add(group.id);
+    managedGroups.push(group);
+  }
+
+  return sortGroupsByStatusAndName(managedGroups);
+}
+
 function getParticipantConfirmationLabel(profile?: ParticipantProfile | null) {
   if (!profile) {
     return "Brak profilu";
@@ -6678,6 +6710,7 @@ export function GroupsPage() {
   }
 
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser.id);
+  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
   const hasActiveOrganizerAccess = Boolean(
     organizerProfile &&
       (store.relations ?? []).some(
@@ -6685,8 +6718,11 @@ export function GroupsPage() {
           relation.organizerId === organizerProfile.id && relation.status === "approved",
       ),
   );
-  const canManageGroups =
+  const canManageOrganizerGroups =
     Boolean(organizerProfile) && hasActiveOrganizerAccess && canUseOrganizerFunctions(currentUser);
+  const canManageTrainerGroups =
+    hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile);
+  const canManageGroups = canManageOrganizerGroups || canManageTrainerGroups;
   const trainersById = useMemo(
     () => new Map((store.trainers ?? []).map((trainer) => [trainer.id, trainer])),
     [store.trainers],
@@ -6765,14 +6801,15 @@ export function GroupsPage() {
     },
     [store.trainingEvents],
   );
-  const ownedGroups = useMemo(
+  const managedGroups = useMemo(
     () =>
-      organizerProfile
-        ? sortGroupsByStatusAndName(
-            (store.groups ?? []).filter((group) => group.organizerId === organizerProfile.id),
-          )
-        : [],
-    [organizerProfile, store.groups],
+      getManagedGroupsForUser({
+        currentUser,
+        groups: store.groups ?? [],
+        organizerProfileId: organizerProfile?.id,
+        trainerProfileId: trainerProfile?.id,
+      }),
+    [currentUser, organizerProfile?.id, store.groups, trainerProfile?.id],
   );
   const joinedGroups = useMemo(
     () =>
@@ -6783,17 +6820,18 @@ export function GroupsPage() {
       ),
     [participantGroupMembershipsByGroupId, store.groups],
   );
-  const hasOrganizerGroupScope =
-    Boolean(organizerProfile) &&
-    (ownedGroups.length > 0 || hasInheritedRole(currentUser, "organizer"));
-  const isParticipantGroupViewer = !hasOrganizerGroupScope || groupScope === "all";
+  const hasManagedGroupScope =
+    managedGroups.length > 0 ||
+    (Boolean(organizerProfile) && hasInheritedRole(currentUser, "organizer")) ||
+    (Boolean(trainerProfile) && hasInheritedRole(currentUser, "trainer"));
+  const isParticipantGroupViewer = !hasManagedGroupScope || groupScope === "all";
   const visibleGroups = useMemo(() => {
     if (isParticipantGroupViewer) {
       return joinedGroups;
     }
 
-    return ownedGroups;
-  }, [isParticipantGroupViewer, joinedGroups, ownedGroups]);
+    return managedGroups;
+  }, [isParticipantGroupViewer, joinedGroups, managedGroups]);
   const { active: activeVisibleGroups, archived: archivedVisibleGroups } = useMemo(
     () => splitGroupsByArchivedStatus(visibleGroups),
     [visibleGroups],
@@ -6854,33 +6892,50 @@ export function GroupsPage() {
     [selectedGroupEvents],
   );
   const availableTrainers = useMemo(() => {
-    if (!organizerProfile) {
-      return [];
+    const nextTrainers = new Map<string, TrainerProfile>();
+
+    if (canManageTrainerGroups && trainerProfile) {
+      nextTrainers.set(trainerProfile.id, trainerProfile);
     }
 
-    return (store.relations ?? [])
-      .filter(
-        (relation) =>
-          relation.organizerId === organizerProfile.id && relation.status === "approved",
-      )
-      .map((relation) => trainersById.get(relation.trainerId))
-      .filter((trainer): trainer is TrainerProfile => Boolean(trainer))
-      .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
-  }, [organizerProfile, store.relations, trainersById]);
+    if (canManageOrganizerGroups && organizerProfile) {
+      for (const relation of store.relations ?? []) {
+        if (relation.organizerId !== organizerProfile.id || relation.status !== "approved") {
+          continue;
+        }
+
+        const trainer = trainersById.get(relation.trainerId);
+        if (trainer) {
+          nextTrainers.set(trainer.id, trainer);
+        }
+      }
+    }
+
+    return sortTrainerProfiles([...nextTrainers.values()]);
+  }, [
+    canManageOrganizerGroups,
+    canManageTrainerGroups,
+    organizerProfile,
+    store.relations,
+    trainerProfile,
+    trainersById,
+  ]);
   const canCreateGroups = canManageGroups && availableTrainers.length > 0;
-  const organizerManagedProfiles = useMemo(() => {
-    if (!organizerProfile || !canManageGroups) {
+  const managedParticipantProfiles = useMemo(() => {
+    if (!canManageGroups) {
       return [];
     }
 
     return (store.participantProfiles ?? [])
       .filter(
         (profile) =>
-          profile.createdByOrganizerId === organizerProfile.id ||
-          profile.managerOrganizerIds?.includes(organizerProfile.id),
+          (organizerProfile &&
+            (profile.createdByOrganizerId === organizerProfile.id ||
+              profile.managerOrganizerIds?.includes(organizerProfile.id))) ||
+          (trainerProfile && profile.managerTrainerIds?.includes(trainerProfile.id)),
         )
       .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
-  }, [canManageGroups, organizerProfile, store.participantProfiles]);
+  }, [canManageGroups, organizerProfile, store.participantProfiles, trainerProfile]);
   const selectedMemberProfile = useMemo(
     () =>
       memberForm.participantProfileId
@@ -6890,27 +6945,27 @@ export function GroupsPage() {
   );
   const memberProfileOptions = useMemo(() => {
     if (!selectedMemberProfile) {
-      return organizerManagedProfiles;
+      return managedParticipantProfiles;
     }
 
-    return organizerManagedProfiles.some((profile) => profile.id === selectedMemberProfile.id)
-      ? organizerManagedProfiles
-      : [selectedMemberProfile, ...organizerManagedProfiles];
-  }, [organizerManagedProfiles, selectedMemberProfile]);
+    return managedParticipantProfiles.some((profile) => profile.id === selectedMemberProfile.id)
+      ? managedParticipantProfiles
+      : [selectedMemberProfile, ...managedParticipantProfiles];
+  }, [managedParticipantProfiles, selectedMemberProfile]);
   const shouldShowMemberDetails =
     Boolean(selectedMemberProfile) || hasCompleteParticipantPhone(memberForm.phone);
-  const selectedGroupIsOwnedByCurrentUser = Boolean(
-    selectedGroup && organizerProfile && selectedGroup.organizerId === organizerProfile.id,
+  const selectedGroupIsManagedByCurrentUser = Boolean(
+    selectedGroup && managedGroups.some((group) => group.id === selectedGroup.id),
   );
   const selectedGroupParticipantMembership = selectedGroup
     ? participantGroupMembershipsByGroupId.get(selectedGroup.id) ?? null
     : null;
 
   useEffect(() => {
-    if (!hasOrganizerGroupScope && groupScope !== "all") {
+    if (!hasManagedGroupScope && groupScope !== "all") {
       setGroupScope("all");
     }
-  }, [groupScope, hasOrganizerGroupScope]);
+  }, [groupScope, hasManagedGroupScope]);
 
   useEffect(() => {
     if (!canCreateGroups || editingGroupId || groupForm.trainerId || availableTrainers.length === 0) {
@@ -7148,7 +7203,7 @@ export function GroupsPage() {
       <div className="divide-y divide-brand-line/70 border-y border-brand-line/70 bg-white sm:space-y-3 sm:divide-y-0 sm:border-y-0 sm:bg-transparent">
         {groups.map((group) => {
           const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-          const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);
+          const isOwnedGroup = managedGroups.some((managedGroup) => managedGroup.id === group.id);
 
           return (
             <GroupListSlimRow
@@ -7367,13 +7422,13 @@ export function GroupsPage() {
           ? undefined
           : isGroupDetailView
             ? isParticipantGroupViewer
-              ? "Widzisz tylko grupy, które sam utworzyłeś albo do których już należysz. Dane administracyjne są tu ukryte."
-              : "To nadrzędny kontekst dla wszystkich szkoleń Emandar w tej relacji trener-organizator."
+              ? "Widzisz grupę w perspektywie uczestnika. Dane administracyjne są tu ukryte."
+              : "To nadrzędny kontekst dla wszystkich szkoleń Emandar przypiętych do tej grupy."
             : isParticipantGroupViewer
               ? undefined
               : canManageGroups
                 ? undefined
-                : "To Twoje grupy organizatora. Bez aktywnego trenera pozostają dostępne w trybie podglądu."
+                : "To Twoje grupy. Obecnie masz do nich tylko dostęp podglądowy."
       }
       showLeadText={isCreateGroupRoute || isGroupDetailView}
       action={
@@ -7390,7 +7445,7 @@ export function GroupsPage() {
         ) : undefined
       }
     >
-      {!isGroupDetailView && !isCreateGroupRoute && hasOrganizerGroupScope ? (
+      {!isGroupDetailView && !isCreateGroupRoute && hasManagedGroupScope ? (
         <div className="flex justify-start">
           <EventScopeSwitch
             activeScope={groupScope}
@@ -7571,7 +7626,7 @@ export function GroupsPage() {
                 canCreateGroups
                   ? "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
                   : isParticipantGroupViewer
-                    ? "Nie należysz jeszcze do żadnej grupy i nie masz własnych grup organizatora."
+                    ? "Nie należysz jeszcze do żadnej grupy i nie masz jeszcze własnych grup."
                   : "Nie masz jeszcze żadnych przypisanych grup."
               }
             />
@@ -7598,7 +7653,7 @@ export function GroupsPage() {
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Edytuj grupę"
-                description="Zmieniasz ustawienia nadrzędne dla tej relacji trener-organizator."
+                description="Zmieniasz ustawienia nadrzędne tej grupy i jej przyszłych szkoleń."
               />
               <form onSubmit={handleSaveGroup} className="mt-6 grid gap-4 lg:grid-cols-2">
                 <label className="grid gap-2 lg:col-span-2">
@@ -7796,16 +7851,16 @@ export function GroupsPage() {
               ) : null}
               {isParticipantGroupViewer ? (
                 <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
-                  {selectedGroupIsOwnedByCurrentUser
-                    ? hasActiveOrganizerAccess
-                      ? "To Twoja grupa organizatora. Masz aktywny dostęp organizatora, więc możesz zarządzać nią bez zmiany perspektywy konta."
-                      : "To Twoja wcześniejsza grupa organizatora. Bez aktywnego trenera pozostaje dostępna tylko do podglądu."
+                  {selectedGroupIsManagedByCurrentUser
+                    ? canManageGroups
+                      ? "To Twoja grupa. W tym widoku oglądasz ją jak uczestnik, a pełne zarządzanie masz po przełączeniu na zakładkę Organizuję."
+                      : "To Twoja grupa, ale w tej chwili pozostaje dostępna tylko do podglądu."
                     : selectedGroupParticipantMembership
                       ? "Należysz do tej grupy jako uczestnik. Widzisz podgląd grupy i powiązane wydarzenia, bez ustawień administracyjnych."
                       : "Widzisz tę grupę w trybie podglądu."}
                 </div>
               ) : null}
-              {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+              {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                 <div className="mt-6 flex flex-wrap gap-3">
                   <button
                     type="button"
@@ -7847,7 +7902,7 @@ export function GroupsPage() {
                     : "Priorytet członka steruje tym, kto wpada automatycznie do rosteru wydarzenia i kto ma pierwszeństwo przy obsłudze listy."
                 }
               />
-              {canManageGroups && selectedGroupIsOwnedByCurrentUser && selectedGroup.status === "active" ? (
+              {canManageGroups && selectedGroupIsManagedByCurrentUser && selectedGroup.status === "active" ? (
                 <form onSubmit={handleAddMember} className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
                   <div className="grid min-w-0 gap-4 lg:col-span-2 lg:grid-cols-2">
                     <label className="grid min-w-0 gap-2">
@@ -8002,7 +8057,7 @@ export function GroupsPage() {
                                     </p>
                                   </div>
 
-                                  {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                  {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                                     <select
                                       value={draft.priority}
                                       onChange={(event) => {
@@ -8080,7 +8135,7 @@ export function GroupsPage() {
                                           </span>
                                         </div>
 
-                                        {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                        {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                                           <label className="grid gap-2">
                                             <span className="text-xs font-semibold text-brand-navy sm:text-sm">
                                               Notatka o uczestniku
@@ -8103,7 +8158,7 @@ export function GroupsPage() {
                                         ) : null}
                                       </div>
 
-                                      {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                      {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                                         <div className="flex items-start justify-start lg:justify-end">
                                           <button
                                             type="button"
@@ -8138,7 +8193,7 @@ export function GroupsPage() {
                     : "Tutaj widać wszystkie szkolenia przypięte do tej grupy i możesz szybko dodawać kolejne terminy."
                 }
               />
-              {canManageGroups && selectedGroupIsOwnedByCurrentUser && selectedGroup.status === "active" ? (
+              {canManageGroups && selectedGroupIsManagedByCurrentUser && selectedGroup.status === "active" ? (
                 <div className="mt-6">
                   <Link
                     to={getGroupTrainingCreatePath(selectedGroup.id)}

@@ -12,6 +12,7 @@ import {
   EnrollmentRequestManagementActions,
   EnrollmentRequestDecisionButtons,
   EnrollmentRequestSlimRow,
+  getManagedGroupsForUser,
   getGroupTrainingCreatePath,
   getLatestGroupTrainingCopy,
   OrganizerRelationsHubSection,
@@ -297,6 +298,47 @@ describe("EnrollmentRequestSlimRow", () => {
     );
 
     expect(markup).toContain("rounded-[1.75rem]");
+  });
+});
+
+describe("getManagedGroupsForUser", () => {
+  it("includes trainer-owned active and archived groups for a trainer account", () => {
+    const managedGroups = getManagedGroupsForUser({
+      currentUser: createUser({
+        role: "trainer",
+        roles: ["participant", "trainer"],
+        primaryRole: "trainer",
+      }),
+      groups: [
+        createGroup({
+          id: "group-archived",
+          trainerId: "trainer-5",
+          organizerId: "",
+          status: "archived",
+          name: "Archiwalna",
+        }),
+        createGroup({
+          id: "group-active",
+          trainerId: "trainer-5",
+          organizerId: "organizer-1",
+          status: "active",
+          name: "Aktywna",
+        }),
+        createGroup({
+          id: "group-foreign",
+          trainerId: "trainer-9",
+          organizerId: "organizer-1",
+          status: "active",
+          name: "Cudza",
+        }),
+      ],
+      trainerProfileId: "trainer-5",
+    });
+
+    expect(managedGroups.map((group) => group.id)).toEqual([
+      "group-active",
+      "group-archived",
+    ]);
   });
 });
 

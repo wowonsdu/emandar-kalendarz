@@ -118,6 +118,47 @@ function createOrganizerStore(
   return store;
 }
 
+function createTrainerOwnedStore(
+  actor: AppUser,
+  overrides: {
+    participantProfiles?: DemoStore["participantProfiles"];
+    groupMembers?: DemoStore["groupMembers"];
+  } = {},
+) {
+  const store = createStore({}, actor);
+  store.trainers = [
+    {
+      id: "trainer-1",
+      userId: actor.id,
+      slug: "krzysiu",
+      displayName: actor.displayName,
+      bio: "",
+      specialties: [],
+      locations: ["Warszawa"],
+      isVisible: true,
+      heroNote: "",
+      brandStatus: "official",
+    },
+  ];
+  store.groups = [
+    {
+      id: "group-1",
+      name: "Grupa oddechowa",
+      organizerId: "",
+      trainerId: "trainer-1",
+      trainerUserId: actor.id,
+      status: "active",
+      defaultEventType: "training",
+      defaultConfirmationLeadTimeDays: 7,
+      defaultJoinAudience: "new-people",
+      createdAt: "2026-04-01T10:00:00.000Z",
+    },
+  ];
+  store.participantProfiles = overrides.participantProfiles ?? [];
+  store.groupMembers = overrides.groupMembers ?? [];
+  return store;
+}
+
 function mockBrowserStorage(
   initialEntries: Record<string, string> = {},
 ) {
@@ -378,6 +419,93 @@ describe("publishTrainingEvent", () => {
 });
 
 describe("addGroupMember", () => {
+  it("lets a trainer create their own group without an organizer profile", async () => {
+    const { createGroup } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-trainer-1",
+      role: "trainer",
+      roles: ["participant", "trainer"],
+      primaryRole: "trainer",
+      displayName: "Krzysiu",
+      trainerProfileId: "trainer-1",
+    });
+    const store = createStore({}, actor);
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: actor.id,
+        slug: "krzysiu",
+        displayName: actor.displayName,
+        bio: "",
+        specialties: [],
+        locations: ["Warszawa"],
+        isVisible: true,
+        heroNote: "",
+        brandStatus: "official",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      createGroup(
+        {
+          name: "Nowa grupa trenera",
+          trainerId: "trainer-1",
+          defaultEventType: "training",
+          defaultConfirmationLeadTimeDays: 7,
+          defaultJoinAudience: "new-people",
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      groupId: expect.any(String),
+    });
+
+    expect(mockedApi.getStore().groups[0]).toMatchObject({
+      name: "Nowa grupa trenera",
+      trainerId: "trainer-1",
+      trainerUserId: actor.id,
+      organizerId: "",
+    });
+  });
+
+  it("lets a trainer update their own group", async () => {
+    const { updateGroup } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-trainer-1",
+      role: "trainer",
+      roles: ["participant", "trainer"],
+      primaryRole: "trainer",
+      displayName: "Krzysiu",
+      trainerProfileId: "trainer-1",
+    });
+    const mockedApi = mockStoreFetch(createTrainerOwnedStore(actor));
+
+    await expect(
+      updateGroup(
+        {
+          groupId: "group-1",
+          name: "Grupa po zmianie",
+          notes: "Opis",
+          defaultEventType: "training",
+          defaultCapacity: 24,
+          defaultTags: ["oddech"],
+          defaultConfirmationLeadTimeDays: 5,
+          defaultJoinAudience: "new-people",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(mockedApi.getStore().groups[0]).toMatchObject({
+      id: "group-1",
+      name: "Grupa po zmianie",
+      defaultCapacity: 24,
+      defaultConfirmationLeadTimeDays: 5,
+    });
+  });
+
   it("reuses an existing participant profile found by phone without overwriting referral source", async () => {
     const { addGroupMember } = await import("./mockRepository");
     const actor = createActor({
@@ -615,6 +743,44 @@ describe("addGroupMember", () => {
     });
     const futureOpenEvent = updatedStore.trainingEvents.find((item) => item.id === "event-future-open");
     expect(futureOpenEvent?.enrolledCount).toBe(0);
+  });
+
+  it("lets a trainer add members to their own group", async () => {
+    const { addGroupMember } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-trainer-1",
+      role: "trainer",
+      roles: ["participant", "trainer"],
+      primaryRole: "trainer",
+      displayName: "Krzysiu",
+      trainerProfileId: "trainer-1",
+    });
+    const mockedApi = mockStoreFetch(createTrainerOwnedStore(actor));
+
+    await expect(
+      addGroupMember(
+        {
+          groupId: "group-1",
+          displayName: "Karolina Zielinska",
+          phone: "+48 600 333 444",
+          referralSource: "Instagram",
+          notes: "Lubi soboty",
+          priority: "stali",
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      memberId: "group-1__participant-48600333444",
+      participantProfileId: "participant-48600333444",
+    });
+
+    expect(mockedApi.getStore().groupMembers?.[0]).toMatchObject({
+      groupId: "group-1",
+      trainerId: "trainer-1",
+      organizerId: "",
+      participantProfileId: "participant-48600333444",
+    });
   });
 });
 

@@ -156,6 +156,10 @@ function buildMockApiUrl(basePath: string, path: string) {
   return `${normalizeBasePath(basePath)}api/mock/${path}`.replace(/([^:]\/)\/+/g, "$1");
 }
 
+function buildApiUrl(basePath: string, path: string) {
+  return `${normalizeBasePath(basePath)}api/${path.replace(/^\/+/, "")}`.replace(/([^:]\/)\/+/g, "$1");
+}
+
 export function resolveMockApiUrls(
   path: string,
   options: { baseUrl?: string; pathname?: string } = {},
@@ -184,6 +188,26 @@ export function resolveMockApiUrls(
   return basePathCandidates.flatMap((basePath) =>
     pathCandidates.map((pathCandidate) => buildMockApiUrl(basePath, pathCandidate)),
   );
+}
+
+function resolveApiUrls(path: string, options: { baseUrl?: string; pathname?: string } = {}) {
+  const configuredBasePath = normalizeBasePath(options.baseUrl ?? getBasePath());
+  const pathname =
+    options.pathname ?? (typeof window !== "undefined" ? window.location.pathname : "");
+  const prefersEmandarBase =
+    configuredBasePath === "/" && pathname.startsWith("/emandar/");
+  const basePathCandidates = Array.from(
+    new Set(
+      [
+        prefersEmandarBase ? "/emandar/" : configuredBasePath,
+        configuredBasePath,
+        pathname.startsWith("/emandar/") ? "/emandar/" : null,
+        "/",
+      ].filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  return basePathCandidates.map((basePath) => buildApiUrl(basePath, path));
 }
 
 function canUseDomStorage() {
@@ -251,6 +275,68 @@ async function fetchJsonOrNull<T>(url: string) {
   } catch {
     return null;
   }
+}
+
+async function postJsonOrNull<T>(url: string, payload: unknown) {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+      credentials: "same-origin",
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function postToFirstApi<T>(path: string, payload: unknown) {
+  let lastError: unknown = null;
+
+  for (const url of resolveApiUrls(path)) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        credentials: "same-origin",
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        lastError = new Error(`api-${response.status}`);
+        continue;
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Nie udało się połączyć z API.");
+}
+
+async function fetchCurrentApiSession() {
+  for (const url of resolveApiUrls("auth/session")) {
+    const payload = await fetchJsonOrNull<{ userId: string | null }>(url);
+    if (payload && "userId" in payload) {
+      return payload.userId ?? null;
+    }
+  }
+
+  return getCurrentSessionUserId();
 }
 
 function createId(prefix: string) {
@@ -1325,6 +1411,20 @@ export function subscribeAuthState(onAuthState: (userId: string | null) => void)
   authListeners.set(listenerId, onAuthState);
   onAuthState(getCurrentSessionUserId());
 
+  void fetchCurrentApiSession().then((userId) => {
+    if (!authListeners.has(listenerId)) {
+      return;
+    }
+
+    if (userId !== getCurrentSessionUserId()) {
+      setCurrentSessionUserId(userId);
+      emitAuthListeners();
+      return;
+    }
+
+    onAuthState(userId);
+  });
+
   return () => {
     authListeners.delete(listenerId);
   };
@@ -1346,15 +1446,20 @@ export async function requestSmsCode(phone: string) {
     throw new Error("Podaj numer telefonu.");
   }
 
-  const code = "123456";
+  const response = await postToFirstApi<{ normalizedPhone: string; code: string }>(
+    "auth/sms/request",
+    { phone: normalizedPhone },
+  ).catch(() => null);
+  const responsePhone = response?.normalizedPhone || normalizedPhone;
+  const code = response?.code || "123456";
   writeStorageJson(smsSessionStorageKey, {
-    phone: normalizedPhone,
+    phone: responsePhone,
     code,
     requestedAt: nowIso(),
   });
 
   return {
-    normalizedPhone,
+    normalizedPhone: responsePhone,
     code,
   };
 }
@@ -1369,13 +1474,18 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
     throw new Error("Kod SMS jest nieprawidłowy.");
   }
 
+  const apiResult = await postToFirstApi<ConfirmSmsCodeResult>(
+    "auth/sms/confirm",
+    { phone, code: code.trim(), seedTrainerId },
+  ).catch(() => null);
+
   const verifiedAt = nowIso();
   const store = await ensureStoreLoaded();
   const existingUser = store.users.find((item) => isSamePhone(item.phone, phone)) ?? null;
 
   removeStorageValue(smsSessionStorageKey);
 
-  if (!existingUser) {
+  if (apiResult?.status === "missing-account" || !existingUser) {
     setVerifiedPhonePreAuthState({
       phone,
       verifiedAt,
@@ -1405,11 +1515,11 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
   });
 
   clearVerifiedPhonePreAuthStateForPhone(phone);
-  setCurrentSessionUserId(result.userId);
+  setCurrentSessionUserId(apiResult?.status === "existing-account" ? apiResult.userId : result.userId);
   emitAuthListeners();
   emitStoreListeners();
 
-  return result;
+  return apiResult?.status === "existing-account" ? apiResult : result;
 }
 
 export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsubscribe {
@@ -1576,6 +1686,13 @@ export async function signIn(email: string, password: string) {
 }
 
 export async function signOut() {
+  for (const url of resolveApiUrls("auth/logout")) {
+    const response = await postJsonOrNull<{ ok: boolean }>(url, {});
+    if (response?.ok) {
+      break;
+    }
+  }
+
   setCurrentSessionUserId(null);
   emitStoreListeners();
   emitAuthListeners();

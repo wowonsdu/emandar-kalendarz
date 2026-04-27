@@ -145,6 +145,9 @@ async function fetchFirst<T>(path: string, init?: RequestInit): Promise<T> {
       }
       return (await response.json()) as T;
     } catch (error) {
+      if (error instanceof Error && /-\d{3}$/.test(error.message) && !error.message.endsWith("-404")) {
+        throw error;
+      }
       lastError = error;
     }
   }
@@ -290,6 +293,19 @@ async function uploadImage(file: File, purpose: "avatar" | "enrollment-photo" | 
   return response;
 }
 
+async function uploadImageWithSessionRetry(file: File, purpose: "avatar" | "enrollment-photo" | "event-image") {
+  try {
+    return await uploadImage(file, purpose);
+  } catch (error) {
+    if (!(error instanceof Error) || (error.message !== "uploads-401" && error.message !== "uploads-403")) {
+      throw error;
+    }
+
+    await refreshAll();
+    return uploadImage(file, purpose);
+  }
+}
+
 export function subscribeAuthState(onAuthState: (userId: string | null) => void): Unsubscribe {
   const listenerId = nextListenerId++;
   authListeners.set(listenerId, onAuthState);
@@ -414,7 +430,7 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
   writeVerifiedPhoneState(null);
 
   if (input.avatarFile) {
-    const avatarUrl = (await uploadImage(input.avatarFile, "avatar")).url;
+    const avatarUrl = (await uploadImageWithSessionRetry(input.avatarFile, "avatar")).url;
     await runCommand("updateParticipantProfile", [{ avatarUrl }]);
   }
 

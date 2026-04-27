@@ -145,5 +145,96 @@ describe("apiClient registration uploads", () => {
     expect(postCalls[2]).toBe("/emandar/api/panel/command/updateParticipantProfile");
     expect(calls).toContain("/emandar/api/me");
   });
-});
 
+  it("refreshes the new session and retries avatar upload when the first upload is unauthorized", async () => {
+    const user = createUser();
+    const postCalls: string[] = [];
+    let uploadAttempt = 0;
+    const sessionStorage = createSessionStorage();
+    sessionStorage.setItem(
+      "emandar:verified-phone-preauth",
+      JSON.stringify({
+        phone: "+48500100201",
+        verifiedAt: "2026-04-28T00:00:00.000Z",
+      }),
+    );
+
+    vi.stubGlobal("window", {
+      location: { pathname: "/emandar/rejestracja" },
+      sessionStorage,
+      setInterval: vi.fn(),
+      clearInterval: vi.fn(),
+    });
+    vi.stubGlobal(
+      "FileReader",
+      class {
+        result = "data:image/png;base64,YXZhdGFy";
+        onerror: (() => void) | null = null;
+        onload: (() => void) | null = null;
+
+        readAsDataURL() {
+          this.onload?.();
+        }
+      },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const target = String(url);
+        if (init?.method === "POST") {
+          postCalls.push(target);
+        }
+        if (target.endsWith("/api/panel/command/registerParticipant")) {
+          return jsonResponse({ ok: true, result: { ok: true, userId: user.id, accountCreated: true } });
+        }
+        if (target.endsWith("/api/uploads")) {
+          uploadAttempt += 1;
+          if (uploadAttempt === 1) {
+            return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+          }
+          return jsonResponse({
+            id: "upload-avatar",
+            url: "/emandar/uploads/upload-avatar.png",
+            storagePath: "/tmp/upload-avatar.png",
+            width: 0,
+            height: 0,
+          });
+        }
+        if (target.endsWith("/api/panel/command/updateParticipantProfile")) {
+          return jsonResponse({ ok: true, result: { ok: true } });
+        }
+        if (target.endsWith("/api/public/bootstrap")) {
+          return jsonResponse({ trainers: [], publicTrainingEvents: [], appSettings: {} });
+        }
+        if (target.endsWith("/api/auth/session")) {
+          return jsonResponse({ userId: user.id });
+        }
+        if (target.endsWith("/api/me")) {
+          return jsonResponse({ user });
+        }
+        if (target.endsWith("/api/panel/bootstrap")) {
+          return jsonResponse(createPrivateStore(user));
+        }
+        return new Response("Not found", { status: 404 });
+      }),
+    );
+
+    const { registerParticipant } = await import("./apiClient");
+
+    await registerParticipant({
+      displayName: "Nowa Osoba",
+      phone: "+48500100201",
+      notes: "Opis",
+      avatarFile: { name: "avatar.png", type: "image/png" } as File,
+      trainingDataConsentAccepted: true,
+    });
+
+    expect(uploadAttempt).toBe(2);
+    expect(postCalls).toEqual([
+      "/emandar/api/panel/command/registerParticipant",
+      "/emandar/api/uploads",
+      "/emandar/api/uploads",
+      "/emandar/api/panel/command/updateParticipantProfile",
+    ]);
+  });
+});

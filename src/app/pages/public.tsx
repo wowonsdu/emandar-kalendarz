@@ -28,13 +28,21 @@ import type {
 } from "@/domain/types";
 import {
   confirmSmsCode,
+  type ConfirmSmsCodeResult,
   fetchAppUser,
   getCurrentSessionPhone,
+  getVerifiedPhonePreAuth,
   requestSmsCode,
 } from "@/data/mockRepository";
 import {
   getParticipantEnrollmentViewRecords,
 } from "@/app/dashboard";
+import {
+  buildRegistrationPath,
+  getInitialVerifiedRegistrationPhone,
+  resolveLoginSmsConfirmAction,
+  shouldResetVerifiedPhone,
+} from "./public-auth-flow";
 import {
   canManageTrainingEvent,
   buildPhoneHref,
@@ -73,12 +81,7 @@ import { useAppState } from "../providers/AppProviders";
 const emandarCalendarLogoUrl = `${import.meta.env.BASE_URL}brand-assets/emandar-logo.png`;
 
 type ConfirmationResult = {
-  confirm: (code: string) => Promise<{
-    user: {
-      uid: string;
-      phoneNumber: string | null;
-    };
-  }>;
+  confirm: (code: string) => Promise<ConfirmSmsCodeResult>;
 };
 
 class RecaptchaVerifier {
@@ -1330,7 +1333,7 @@ export function EventDetailsPage() {
 
     try {
       const result = await confirmationResult.confirm(verificationCode.trim());
-      const confirmedPhone = result.user.phoneNumber ?? form.telefon;
+      const confirmedPhone = result.phone;
       await ensurePhoneParticipantProfileForFlow(event.trainerId ?? undefined);
 
       setForm((current) => ({
@@ -2252,16 +2255,8 @@ async function createConfirmationResult(phone: string, seedTrainerId?: string) {
     normalizedPhone,
     code,
     result: {
-      confirm: async (submittedCode: string) => {
-        const confirmed = await confirmSmsCode(normalizedPhone, submittedCode, seedTrainerId);
-
-        return {
-          user: {
-            uid: confirmed.userId,
-            phoneNumber: confirmed.phone,
-          },
-        };
-      },
+      confirm: async (submittedCode: string) =>
+        confirmSmsCode(normalizedPhone, submittedCode, seedTrainerId),
     } satisfies ConfirmationResult,
   };
 }
@@ -2358,6 +2353,7 @@ function SmsLoginScreen() {
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
   const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
+  const [missingAccountPhone, setMissingAccountPhone] = useState<string | null>(null);
   const [quickLoginEmail, setQuickLoginEmail] = useState<string | null>(null);
 
   useEffect(() => {
@@ -2385,6 +2381,7 @@ function SmsLoginScreen() {
       const { code, result } = await createConfirmationResult(normalizedPhone);
 
       setPhone(normalizedPhone);
+      setMissingAccountPhone(null);
       setVerificationCode("");
       setConfirmationResult(result);
       setIsSmsDialogOpen(true);
@@ -2410,16 +2407,29 @@ function SmsLoginScreen() {
 
     try {
       const result = await confirmationResult.confirm(verificationCode.trim());
-      let appUser = await fetchAppUser(result.user.uid);
-      if (!appUser.participantProfileId) {
-        await ensurePhoneParticipantProfileForFlow();
-        appUser = await fetchAppUser(result.user.uid);
+      const nextAction = resolveLoginSmsConfirmAction(result, getPublicSignedInPath());
+
+      if (nextAction.kind === "sign-in") {
+        let appUser = await fetchAppUser(nextAction.userId);
+        if (!appUser.participantProfileId) {
+          await ensurePhoneParticipantProfileForFlow();
+          appUser = await fetchAppUser(nextAction.userId);
+        }
+
+        setMissingAccountPhone(null);
+        setVerificationCode("");
+        setConfirmationResult(null);
+        setIsSmsDialogOpen(false);
+        toast.success("Zalogowano.");
+        navigate(nextAction.navigateTo);
+        return;
       }
+
+      setMissingAccountPhone(nextAction.phone);
       setVerificationCode("");
       setConfirmationResult(null);
       setIsSmsDialogOpen(false);
-      toast.success("Zalogowano.");
-      navigate(getPublicSignedInPath());
+      toast.success("Numer telefonu został potwierdzony. Przejdź do rejestracji.");
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Nie udało się potwierdzić kodu SMS.",
@@ -2447,6 +2457,14 @@ function SmsLoginScreen() {
     }
   }
 
+  function handleMissingAccountDialogOpenChange(nextOpen: boolean) {
+    if (nextOpen) {
+      return;
+    }
+
+    setMissingAccountPhone(null);
+  }
+
   return (
     <section className="mx-auto max-w-7xl overflow-x-clip px-4 py-8 sm:px-6 sm:py-14 lg:px-8">
       <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
@@ -2462,7 +2480,10 @@ function SmsLoginScreen() {
                 required
                 autoComplete="tel"
                 value={phone}
-                onChange={(event) => setPhone(event.target.value)}
+                onChange={(event) => {
+                  setMissingAccountPhone(null);
+                  setPhone(event.target.value);
+                }}
                 placeholder="+48 500 600 700"
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
               />
@@ -2550,6 +2571,49 @@ function SmsLoginScreen() {
           pendingLabel: "Potwierdzanie...",
         }}
       />
+
+      <Dialog
+        open={Boolean(missingAccountPhone)}
+        onOpenChange={handleMissingAccountDialogOpenChange}
+      >
+        <DialogContent className="max-w-md rounded-[2rem] border-brand-line p-0">
+          <div className="grid gap-5 p-6 sm:p-8">
+            <DialogHeader className="text-left">
+              <p className="text-sm font-semibold uppercase tracking-[0.28em] text-brand-sky-deep">
+                Potwierdzenie SMS
+              </p>
+              <DialogTitle className="text-2xl font-semibold text-brand-navy">
+                Numer telefonu potwierdzony
+              </DialogTitle>
+              <DialogDescription className="text-sm leading-6 text-brand-muted">
+                Dla numeru{" "}
+                <strong className="text-brand-navy">{missingAccountPhone}</strong> nie ma jeszcze
+                konta. Przejdź do rejestracji profilu bez ponownej weryfikacji SMS.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setMissingAccountPhone(null)}
+                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+              >
+                Zamknij
+              </button>
+              {missingAccountPhone ? (
+                <Link
+                  to={buildRegistrationPath(missingAccountPhone)}
+                  onClick={() => setMissingAccountPhone(null)}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+                >
+                  Zarejestruj
+                  <ArrowRight size={16} />
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
@@ -2569,16 +2633,24 @@ function SmsRegisterScreen() {
   const enrollmentSource = searchParams.get("source") === "enrollment";
   const prefetchedPhone =
     typeof window === "undefined" ? "" : searchParams.get("phone") ?? "";
+  const currentSessionPhone = currentUser?.phone || getCurrentSessionPhone();
+  const verifiedPhonePreAuth = useMemo(() => getVerifiedPhonePreAuth(), []);
   const [loading, setLoading] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [confirmingCode, setConfirmingCode] = useState(false);
   const [isSmsDialogOpen, setIsSmsDialogOpen] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
-  const [smsVerified, setSmsVerified] = useState(Boolean(currentUser?.phone || getCurrentSessionPhone()));
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(() =>
+    getInitialVerifiedRegistrationPhone({
+      currentSessionPhone,
+      prefetchedPhone,
+      verifiedPreAuthPhone: verifiedPhonePreAuth?.phone ?? null,
+    }),
+  );
   const [form, setForm] = useState({
     displayName: "",
-    phone: prefetchedPhone || currentUser?.phone || getCurrentSessionPhone(),
+    phone: prefetchedPhone || currentSessionPhone || verifiedPhonePreAuth?.phone || "",
     notes: "",
     avatarFile: null as File | null,
     trainingDataConsentAccepted: false,
@@ -2586,11 +2658,12 @@ function SmsRegisterScreen() {
   const signupPhotoMode = store.appSettings.signupPhotoMode;
   const signupPhotoRequired = isPhotoModeRequired(signupPhotoMode);
   const signupPhotoEnabled = isPhotoModeEnabled(signupPhotoMode);
+  const smsVerified = Boolean(verifiedPhone);
 
   useEffect(() => {
     const sessionPhone = currentUser?.phone || getCurrentSessionPhone();
     if (sessionPhone) {
-      setSmsVerified(true);
+      setVerifiedPhone(sessionPhone);
       setForm((current) => ({
         ...current,
         phone: sessionPhone || current.phone,
@@ -2617,7 +2690,7 @@ function SmsRegisterScreen() {
   }
 
   function resetSmsVerification() {
-    setSmsVerified(false);
+    setVerifiedPhone(null);
     setVerificationCode("");
     setConfirmationResult(null);
   }
@@ -2708,12 +2781,12 @@ function SmsRegisterScreen() {
 
     try {
       const result = await confirmationResult.confirm(verificationCode.trim());
-      const confirmedPhone = result.user.phoneNumber ?? form.phone;
+      const confirmedPhone = result.phone;
       setForm((current) => ({
         ...current,
         phone: confirmedPhone,
       }));
-      setSmsVerified(true);
+      setVerifiedPhone(confirmedPhone);
       setVerificationCode("");
       setConfirmationResult(null);
       setIsSmsDialogOpen(false);
@@ -2789,7 +2862,7 @@ function SmsRegisterScreen() {
             autoComplete="tel"
             value={form.phone}
             onChange={(event) => {
-              if (smsVerified || confirmationResult) {
+              if (shouldResetVerifiedPhone(verifiedPhone, event.target.value) || confirmationResult) {
                 resetSmsVerification();
               }
 

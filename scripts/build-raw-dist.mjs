@@ -58,13 +58,6 @@ function createRawSeed(seedStore) {
     relations: [],
     trainingEvents: [],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
-    organizerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: rewriteBasePathStrings(

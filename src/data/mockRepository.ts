@@ -2,9 +2,7 @@ import type {
   AppRole,
   AppSettings,
   AppUser,
-  AvailabilityInput,
   CommunityOrganizerProfileUpdateInput,
-  AvailabilitySlot,
   DecisionStatus,
   DemoStore,
   EmandarBrandStatus,
@@ -22,25 +20,18 @@ import type {
   GroupUpdateInput,
   NotificationRecord,
   NotificationSettingsUpdateInput,
-  OrganizerCalendarFeedInput,
   OrganizerParticipantProfileInput,
   OrganizerProfile,
   OrganizerProfileUpdateInput,
-  OrganizerTrainingDraftDecisionInput,
-  OrganizerTrainingDraftInput,
-  OrganizerTrainingDraftUpdateInput,
   ParticipantGroupEventManagementInput,
   ParticipantRegistrationInput,
   ParticipantOnboardingInput,
   ParticipantProfile,
   ParticipantProfileUpdateInput,
   PhotoMode,
-  TrainerCalendarFeedInput,
   TrainerOrganizerRelation,
   TrainerProfile,
   TrainerProfileUpdateInput,
-  TrainerSharedSlotInput,
-  TrainerSharedSlotUpdateInput,
   TrainingEvent,
   TrainingEventBrandStatusUpdateInput,
   TrainingEventCollaborationUpdateInput,
@@ -59,8 +50,10 @@ import {
   canOrganizerAccessTrainer,
   deriveEnrollmentFinalStatus,
   getRoleHierarchyLevel,
+  hasInheritedRole,
   hasModeratorAccess,
   isCommunityBrandStatus,
+  isOfficialGroupTrainingEvent,
   isTrainingEventArchived,
   isTrainingEventPubliclyVisible,
   isOrganizerFunctionsBlocked,
@@ -82,13 +75,6 @@ type PersistedCollectionKey =
   | "eventParticipants"
   | "relations"
   | "trainingEvents"
-  | "availabilitySlots"
-  | "trainerSharedSlots"
-  | "trainerCalendarFeeds"
-  | "organizerCalendarFeeds"
-  | "trainerOrganizerCalendarFeeds"
-  | "trainerExternalBusyMonths"
-  | "organizerExternalBusyMonths"
   | "enrollmentRequests"
   | "notifications"
   | "appSettings";
@@ -96,6 +82,7 @@ type PersistedCollectionsPatch = Partial<Pick<DemoStore, PersistedCollectionKey>
 
 const authSessionStorageKey = "emandar:mock-auth-session";
 const smsSessionStorageKey = "emandar:mock-sms-session";
+const verifiedPhonePreAuthStorageKey = "emandar:mock-verified-phone-preauth";
 const pollIntervalMs = 5000;
 const persistedCollectionKeys: PersistedCollectionKey[] = [
   "users",
@@ -107,13 +94,6 @@ const persistedCollectionKeys: PersistedCollectionKey[] = [
   "eventParticipants",
   "relations",
   "trainingEvents",
-  "availabilitySlots",
-  "trainerSharedSlots",
-  "trainerCalendarFeeds",
-  "organizerCalendarFeeds",
-  "trainerOrganizerCalendarFeeds",
-  "trainerExternalBusyMonths",
-  "organizerExternalBusyMonths",
   "enrollmentRequests",
   "notifications",
   "appSettings",
@@ -131,6 +111,23 @@ const publicListeners = new Map<number, (patch: StorePatch) => void>();
 const privateListeners = new Map<number, (patch: StorePatch) => void>();
 const userProfileListeners = new Map<number, { userId: string; callback: (user: AppUser | null) => void }>();
 const authListeners = new Map<number, (userId: string | null) => void>();
+
+export type VerifiedPhonePreAuthState = {
+  phone: string;
+  verifiedAt: string;
+  seedTrainerId?: string;
+};
+
+export type ConfirmSmsCodeResult =
+  | {
+      status: "existing-account";
+      userId: string;
+      phone: string;
+    }
+  | {
+      status: "missing-account";
+      phone: string;
+    };
 
 class MockVersionConflictError extends Error {
   snapshot: { store: DemoStore; version: number };
@@ -326,13 +323,54 @@ function countConfirmedEventParticipants(store: DemoStore, eventId: string) {
   ).length;
 }
 
-function recomputeEventEnrolledCount(store: DemoStore, eventId: string) {
+function countAssignedEventParticipants(
+  store: Pick<DemoStore, "eventParticipants">,
+  eventId: string,
+) {
+  return store.eventParticipants.filter(
+    (participant) =>
+      participant.eventId === eventId &&
+      (participant.status === "invited" || participant.status === "confirmed"),
+  ).length;
+}
+
+function countReservedEventParticipants(
+  store: Pick<DemoStore, "eventParticipants">,
+  eventId: string,
+) {
+  return store.eventParticipants.filter(
+    (participant) => participant.eventId === eventId && participant.status === "rezerwowy",
+  ).length;
+}
+
+function recomputeEventParticipantCounts(store: DemoStore, eventId: string) {
   const event = store.trainingEvents.find((item) => item.id === eventId);
   if (!event) {
     return;
   }
 
+  event.assignedCount = countAssignedEventParticipants(store, eventId);
   event.enrolledCount = countConfirmedEventParticipants(store, eventId);
+  event.reserveCount = countReservedEventParticipants(store, eventId);
+}
+
+function resolveEligibleGroupPriorities(
+  event: Pick<TrainingEvent, "eligibleGroupPriorities">,
+) {
+  return event.eligibleGroupPriorities?.length && event.eligibleGroupPriorities.length > 0
+    ? event.eligibleGroupPriorities
+    : (["stali", "regularni"] as const satisfies GroupMemberPriority[]);
+}
+
+function canAutoAssignGroupMemberToEvent(
+  event: Pick<TrainingEvent, "groupId" | "eligibleGroupPriorities">,
+  member: Pick<GroupMember, "priority" | "membershipStatus">,
+) {
+  return (
+    Boolean(event.groupId) &&
+    member.membershipStatus === "active" &&
+    resolveEligibleGroupPriorities(event).includes(member.priority)
+  );
 }
 
 function syncParticipantProfileGroupMembership(
@@ -348,9 +386,11 @@ function syncParticipantProfileGroupMembership(
     profile.activeGroupIds = (profile.activeGroupIds ?? []).filter((item) => item !== group.id);
   }
 
-  profile.managerOrganizerIds = Array.from(
-    new Set([...(profile.managerOrganizerIds ?? []), group.organizerId]),
-  );
+  if (group.organizerId) {
+    profile.managerOrganizerIds = Array.from(
+      new Set([...(profile.managerOrganizerIds ?? []), group.organizerId]),
+    );
+  }
   if (group.organizerUserId) {
     profile.managerOrganizerUserIds = Array.from(
       new Set([...(profile.managerOrganizerUserIds ?? []), group.organizerUserId]),
@@ -373,7 +413,7 @@ function syncGroupMemberToEvent(
   member: GroupMember,
   source: EventParticipant["source"] = "auto-core",
 ) {
-  if (!event.groupId || member.membershipStatus !== "active") {
+  if (!canAutoAssignGroupMemberToEvent(event, member)) {
     return null;
   }
 
@@ -386,6 +426,10 @@ function syncGroupMemberToEvent(
   const eventParticipantId = buildEventParticipantId(event.id, profile.id);
   const existingIndex = store.eventParticipants.findIndex((item) => item.id === eventParticipantId);
   const existingParticipant = existingIndex >= 0 ? store.eventParticipants[existingIndex] : null;
+  const resolvedStatus =
+    existingParticipant?.status === "confirmed" || existingParticipant?.status === "rezerwowy"
+      ? existingParticipant.status
+      : "invited";
   const payload: EventParticipant = {
     id: eventParticipantId,
     eventId: event.id,
@@ -401,7 +445,7 @@ function syncGroupMemberToEvent(
     participantPhone: profile.phone,
     participantUserId: profile.linkedUserId ?? null,
     priority: member.priority,
-    status: existingParticipant?.status === "confirmed" ? "confirmed" : "invited",
+    status: resolvedStatus,
     source: existingParticipant?.source ?? source,
     overCapacity: existingParticipant?.overCapacity,
     invitedAt: existingParticipant?.invitedAt ?? nowIso(),
@@ -409,9 +453,8 @@ function syncGroupMemberToEvent(
     attendanceConfirmationRequestedAt: existingParticipant?.attendanceConfirmationRequestedAt,
     attendanceConfirmationRespondedAt: existingParticipant?.attendanceConfirmationRespondedAt,
     attendanceConfirmationExpiresAt: existingParticipant?.attendanceConfirmationExpiresAt,
-    confirmedAt: existingParticipant?.status === "confirmed"
-      ? existingParticipant.confirmedAt ?? nowIso()
-      : undefined,
+    confirmedAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.confirmedAt ?? nowIso() : undefined,
     declinedAt: existingParticipant?.status === "declined" ? existingParticipant.declinedAt : undefined,
     removedAt: existingParticipant?.status === "removed" ? existingParticipant.removedAt : undefined,
     updatedAt: nowIso(),
@@ -426,7 +469,7 @@ function syncGroupMemberToEvent(
     store.eventParticipants.unshift(payload);
   }
 
-  recomputeEventEnrolledCount(store, event.id);
+  recomputeEventParticipantCounts(store, event.id);
   return eventParticipantId;
 }
 
@@ -455,7 +498,7 @@ function syncGroupRosterToEvent(store: DemoStore, event: TrainingEvent) {
     syncGroupMemberToEvent(store, event, member, "auto-core");
   });
 
-  recomputeEventEnrolledCount(store, event.id);
+  recomputeEventParticipantCounts(store, event.id);
 }
 
 function splitDisplayName(value: string) {
@@ -475,6 +518,10 @@ function isPhoneOnlyDisplayName(value: string | null | undefined, phone: string)
   return Boolean(normalizedValue) && normalizedValue === normalizedPhone;
 }
 
+function isSamePhone(left: string | null | undefined, right: string | null | undefined) {
+  return normalizePhoneLookupKey(left ?? "") === normalizePhoneLookupKey(right ?? "");
+}
+
 function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoStore {
   const base = createEmptyStore();
 
@@ -491,19 +538,6 @@ function normalizePublicStore(raw: Partial<DemoStore> | null | undefined): DemoS
     relations: cloneValue(raw?.relations ?? base.relations),
     trainingEvents: cloneValue(raw?.trainingEvents ?? base.trainingEvents),
     publicTrainingEvents: cloneValue(raw?.publicTrainingEvents ?? base.publicTrainingEvents),
-    availabilitySlots: cloneValue(raw?.availabilitySlots ?? base.availabilitySlots),
-    trainerSharedSlots: cloneValue(raw?.trainerSharedSlots ?? base.trainerSharedSlots),
-    trainerCalendarFeeds: cloneValue(raw?.trainerCalendarFeeds ?? base.trainerCalendarFeeds),
-    organizerCalendarFeeds: cloneValue(raw?.organizerCalendarFeeds ?? base.organizerCalendarFeeds),
-    organizerExternalBusyMonths: cloneValue(
-      raw?.organizerExternalBusyMonths ?? base.organizerExternalBusyMonths,
-    ),
-    trainerOrganizerCalendarFeeds: cloneValue(
-      raw?.trainerOrganizerCalendarFeeds ?? base.trainerOrganizerCalendarFeeds,
-    ),
-    trainerExternalBusyMonths: cloneValue(
-      raw?.trainerExternalBusyMonths ?? base.trainerExternalBusyMonths,
-    ),
     enrollmentRequests: cloneValue(raw?.enrollmentRequests ?? base.enrollmentRequests),
     notifications: cloneValue(raw?.notifications ?? base.notifications),
     appSettings: {
@@ -532,6 +566,78 @@ function getCurrentSmsSession() {
     smsSessionStorageKey,
     null,
   );
+}
+
+function getVerifiedPhonePreAuthState() {
+  return readStorageJson<VerifiedPhonePreAuthState | null>(
+    verifiedPhonePreAuthStorageKey,
+    null,
+  );
+}
+
+function setVerifiedPhonePreAuthState(state: VerifiedPhonePreAuthState) {
+  writeStorageJson(verifiedPhonePreAuthStorageKey, state);
+}
+
+function clearVerifiedPhonePreAuthState() {
+  removeStorageValue(verifiedPhonePreAuthStorageKey);
+}
+
+function clearVerifiedPhonePreAuthStateForPhone(phone: string) {
+  const state = getVerifiedPhonePreAuthState();
+  if (state && isSamePhone(state.phone, phone)) {
+    clearVerifiedPhonePreAuthState();
+  }
+}
+
+function getMatchingVerifiedPhonePreAuthState(phone: string) {
+  const state = getVerifiedPhonePreAuthState();
+  if (!state || !isSamePhone(state.phone, phone)) {
+    return null;
+  }
+
+  return state;
+}
+
+function applyVerifiedPhoneToUser(
+  user: AppUser,
+  phone: string,
+  verifiedAt: string,
+  seedTrainerId?: string,
+) {
+  user.phone = phone;
+  user.phoneVerifiedAt = verifiedAt;
+  user.authProvider = "phone";
+  ensureRole(user, "participant");
+  if (!user.participantProfileId) {
+    user.participantProfileId = buildParticipantProfileId(phone);
+  }
+  if (seedTrainerId) {
+    user.selectedTrainerIds = Array.from(new Set([...(user.selectedTrainerIds ?? []), seedTrainerId]));
+  }
+}
+
+function createPhoneParticipantUser(
+  phone: string,
+  verifiedAt: string,
+  seedTrainerId?: string,
+): AppUser {
+  const participantProfileId = buildParticipantProfileId(phone);
+
+  return {
+    id: `user-${participantProfileId}`,
+    role: "participant",
+    roles: ["participant"],
+    primaryRole: "participant",
+    displayName: phone,
+    phone,
+    status: "active",
+    participantProfileId,
+    phoneVerifiedAt: verifiedAt,
+    createdAt: nowIso(),
+    selectedTrainerIds: seedTrainerId ? [seedTrainerId] : [],
+    authProvider: "phone",
+  };
 }
 
 async function readStoreSnapshot(): Promise<{ store: DemoStore; version: number }> {
@@ -916,7 +1022,9 @@ function rebuildParticipantDerivedFields(store: DemoStore) {
       ...profile,
       groupIds: members.map((item) => item.groupId),
       activeGroupIds: members.map((item) => item.groupId),
-      managerOrganizerIds: Array.from(new Set(members.map((item) => item.organizerId))),
+      managerOrganizerIds: Array.from(
+        new Set(members.map((item) => item.organizerId).filter(Boolean) as string[]),
+      ),
       managerOrganizerUserIds: Array.from(
         new Set(members.map((item) => item.organizerUserId).filter(Boolean) as string[]),
       ),
@@ -933,7 +1041,9 @@ function rebuildEventDerivedFields(store: DemoStore) {
   store.trainingEvents = store.trainingEvents.map((event) => {
     return {
       ...event,
+      assignedCount: countAssignedEventParticipants(store, event.id),
       enrolledCount: countConfirmedEventParticipants(store, event.id),
+      reserveCount: countReservedEventParticipants(store, event.id),
     };
   });
 
@@ -1132,6 +1242,54 @@ function requireOrganizerProfileId(user: Pick<AppUser, "organizerProfileId">) {
   return user.organizerProfileId;
 }
 
+function canManageGroupAsTrainer(
+  store: DemoStore,
+  group: Pick<Group, "trainerId">,
+  actor: Pick<AppUser, "id" | "role" | "roles" | "primaryRole" | "trainerProfileId">,
+) {
+  if (!hasInheritedRole(actor, "trainer")) {
+    return false;
+  }
+
+  try {
+    return requireTrainerProfileId(store, actor) === group.trainerId;
+  } catch {
+    return false;
+  }
+}
+
+function canManageGroupAsOrganizer(
+  group: Pick<Group, "organizerUserId">,
+  actor: Pick<AppUser, "id">,
+) {
+  return Boolean(group.organizerUserId && group.organizerUserId === actor.id);
+}
+
+function ensureGroupManagementAccess(
+  store: DemoStore,
+  group: Pick<Group, "organizerUserId" | "trainerId">,
+  actor: Pick<
+    AppUser,
+    "id" | "role" | "roles" | "primaryRole" | "trainerProfileId" | "organizerFunctionsBlockedAt"
+  >,
+  errorMessage: string,
+) {
+  if (hasRoleOrAdmin(actor, "admin")) {
+    return;
+  }
+
+  if (canManageGroupAsTrainer(store, group, actor)) {
+    return;
+  }
+
+  if (canManageGroupAsOrganizer(group, actor)) {
+    ensureOrganizerFunctionsActive(actor);
+    return;
+  }
+
+  throw new Error(errorMessage);
+}
+
 function asParticipantPriority(value: string | undefined): GroupMemberPriority {
   if (value === "regularni" || value === "rezerwowi") {
     return value;
@@ -1152,13 +1310,6 @@ export function createEmptyStore(): DemoStore {
     relations: [],
     trainingEvents: [],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    organizerExternalBusyMonths: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: {
@@ -1182,6 +1333,11 @@ export function subscribeAuthState(onAuthState: (userId: string | null) => void)
 export function getCurrentSessionPhone() {
   const store = getCachedStore();
   return getCurrentStoreUser(store)?.phone ?? "";
+}
+
+export function getVerifiedPhonePreAuth() {
+  const state = getVerifiedPhonePreAuthState();
+  return state ? cloneValue(state) : null;
 }
 
 export async function requestSmsCode(phone: string) {
@@ -1213,49 +1369,43 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
     throw new Error("Kod SMS jest nieprawidłowy.");
   }
 
-  const result = await mutateStore((store) => {
-    let user = store.users.find((item) => item.phone === phone) ?? null;
+  const verifiedAt = nowIso();
+  const store = await ensureStoreLoaded();
+  const existingUser = store.users.find((item) => isSamePhone(item.phone, phone)) ?? null;
 
-    if (!user) {
-      const participantProfileId = buildParticipantProfileId(phone);
-      user = {
-        id: `user-${participantProfileId}`,
-        role: "participant",
-        roles: ["participant"],
-        primaryRole: "participant",
-        displayName: phone,
-        phone,
-        status: "active",
-        participantProfileId,
-        phoneVerifiedAt: nowIso(),
-        createdAt: nowIso(),
-        selectedTrainerIds: seedTrainerId ? [seedTrainerId] : [],
-        authProvider: "phone",
-      };
-      store.users.push(user);
-    } else {
-      user.phone = phone;
-      user.phoneVerifiedAt = nowIso();
-      user.authProvider = "phone";
-      ensureRole(user, "participant");
-      if (!user.participantProfileId) {
-        user.participantProfileId = buildParticipantProfileId(phone);
-      }
-      if (seedTrainerId) {
-        user.selectedTrainerIds = Array.from(new Set([...(user.selectedTrainerIds ?? []), seedTrainerId]));
-      }
-    }
+  removeStorageValue(smsSessionStorageKey);
 
-    upsertParticipantProfileFromUser(store, user);
+  if (!existingUser) {
+    setVerifiedPhonePreAuthState({
+      phone,
+      verifiedAt,
+      seedTrainerId,
+    });
 
     return {
+      status: "missing-account",
+      phone,
+    } satisfies ConfirmSmsCodeResult;
+  }
+
+  const result = await mutateStore((draft) => {
+    const user = draft.users.find((item) => item.id === existingUser.id);
+    if (!user) {
+      throw new Error("Nie znaleziono użytkownika.");
+    }
+
+    applyVerifiedPhoneToUser(user, phone, verifiedAt, seedTrainerId);
+    upsertParticipantProfileFromUser(draft, user);
+
+    return {
+      status: "existing-account" as const,
       userId: user.id,
       phone,
     };
   });
 
+  clearVerifiedPhonePreAuthStateForPhone(phone);
   setCurrentSessionUserId(result.userId);
-  removeStorageValue(smsSessionStorageKey);
   emitAuthListeners();
   emitStoreListeners();
 
@@ -1315,8 +1465,41 @@ export async function fetchAppUser(userId: string) {
 export async function ensurePhoneParticipantProfile(input?: {
   seedTrainerId?: string;
 }) {
+  let sessionUserIdToSet: string | null = null;
+  let usedVerifiedPhoneState: VerifiedPhonePreAuthState | null = null;
+
   const result = await mutateStore((store) => {
-    const currentUser = getActorOrThrow(store);
+    let currentUser = getCurrentStoreUser(store);
+
+    if (!currentUser) {
+      const verifiedPhoneState = getVerifiedPhonePreAuthState();
+      if (!verifiedPhoneState) {
+        throw new Error("Najpierw potwierdź numer telefonu.");
+      }
+
+      usedVerifiedPhoneState = verifiedPhoneState;
+      currentUser =
+        store.users.find((item) => isSamePhone(item.phone, verifiedPhoneState.phone)) ?? null;
+
+      if (!currentUser) {
+        currentUser = createPhoneParticipantUser(
+          verifiedPhoneState.phone,
+          verifiedPhoneState.verifiedAt,
+          verifiedPhoneState.seedTrainerId,
+        );
+        store.users.push(currentUser);
+      } else {
+        applyVerifiedPhoneToUser(
+          currentUser,
+          verifiedPhoneState.phone,
+          verifiedPhoneState.verifiedAt,
+          verifiedPhoneState.seedTrainerId,
+        );
+      }
+
+      sessionUserIdToSet = currentUser.id;
+    }
+
     const accountCreated = !currentUser.participantProfileId;
 
     ensureRole(currentUser, "participant");
@@ -1337,6 +1520,16 @@ export async function ensurePhoneParticipantProfile(input?: {
       accountCreated,
     };
   });
+
+  if (usedVerifiedPhoneState) {
+    clearVerifiedPhonePreAuthStateForPhone(usedVerifiedPhoneState.phone);
+  }
+
+  if (sessionUserIdToSet) {
+    setCurrentSessionUserId(sessionUserIdToSet);
+    emitAuthListeners();
+    emitStoreListeners();
+  }
 
   return result;
 }
@@ -1529,9 +1722,19 @@ function syncEventParticipantFromEnrollment(
     priority: activeGroupMember?.priority ?? "regularni",
     status: resolvedStatus,
     source: "public-form",
-    invitedAt: nowIso(),
+    invitedAt: existingParticipant?.invitedAt ?? nowIso(),
+    attendanceConfirmationStatus:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationStatus : undefined,
+    attendanceConfirmationRequestedAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationRequestedAt : undefined,
+    attendanceConfirmationRespondedAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationRespondedAt : undefined,
+    attendanceConfirmationExpiresAt:
+      resolvedStatus === "confirmed" ? existingParticipant?.attendanceConfirmationExpiresAt : undefined,
     confirmedAt:
       resolvedStatus === "confirmed" ? existingParticipant?.confirmedAt ?? nowIso() : undefined,
+    declinedAt: resolvedStatus === "declined" ? existingParticipant?.declinedAt ?? nowIso() : undefined,
+    removedAt: resolvedStatus === "removed" ? existingParticipant?.removedAt ?? nowIso() : undefined,
     updatedAt: nowIso(),
   };
 
@@ -1545,7 +1748,7 @@ function syncEventParticipantFromEnrollment(
   }
 
   request.eventParticipantId = eventParticipantId;
-  recomputeEventEnrolledCount(store, event.id);
+  recomputeEventParticipantCounts(store, event.id);
 }
 
 function markEventParticipantFromEnrollmentAsDeclined(
@@ -1605,6 +1808,26 @@ function transferEnrollmentRequestToEvent(
   store.enrollmentRequests.unshift(transferredRequest);
 }
 
+function resolveAcceptedRequestParticipantStatus(
+  store: Pick<DemoStore, "eventParticipants">,
+  event: Pick<TrainingEvent, "id" | "assignedCount" | "capacity" | "brandStatus" | "groupId">,
+  preferredStatus?: Extract<EventParticipant["status"], "invited" | "confirmed" | "rezerwowy">,
+) {
+  if (preferredStatus) {
+    return preferredStatus;
+  }
+
+  if (isOfficialGroupTrainingEvent(event)) {
+    const assignedCount =
+      typeof event.assignedCount === "number"
+        ? event.assignedCount
+        : countAssignedEventParticipants(store, event.id);
+    return assignedCount < event.capacity ? "invited" : "rezerwowy";
+  }
+
+  return event.groupId ? "invited" : "confirmed";
+}
+
 export async function decideEnrollment(
   requestId: string,
   currentUser: AppUser,
@@ -1618,6 +1841,7 @@ export async function manageEnrollmentRequest(
     requestId: string;
     decision: DecisionStatus;
     transferTargetEventId?: string | null;
+    acceptedParticipantStatus?: Extract<EventParticipant["status"], "invited" | "confirmed" | "rezerwowy">;
   },
   currentUser: AppUser,
 ) {
@@ -1657,7 +1881,7 @@ export async function manageEnrollmentRequest(
       request.participantManagedAt = nowIso();
       request.participantActionSource = "staff";
       markEventParticipantFromEnrollmentAsDeclined(store, request);
-      recomputeEventEnrolledCount(store, event.id);
+      recomputeEventParticipantCounts(store, event.id);
       transferEnrollmentRequestToEvent(store, request, targetEvent);
       return;
     }
@@ -1665,7 +1889,11 @@ export async function manageEnrollmentRequest(
     request.finalStatus = deriveEnrollmentFinalStatus(input.decision);
 
     if (request.finalStatus === "accepted") {
-      syncEventParticipantFromEnrollment(store, request, event.groupId ? "invited" : "confirmed");
+      syncEventParticipantFromEnrollment(
+        store,
+        request,
+        resolveAcceptedRequestParticipantStatus(store, event, input.acceptedParticipantStatus),
+      );
     }
 
     if (request.finalStatus === "rejected") {
@@ -1675,7 +1903,7 @@ export async function manageEnrollmentRequest(
       request.participantStatus = "active";
     }
 
-    recomputeEventEnrolledCount(store, event.id);
+    recomputeEventParticipantCounts(store, event.id);
   });
 }
 
@@ -1702,7 +1930,7 @@ export async function manageOwnGroupEventParticipation(
       entry.status = "declined";
       entry.declinedAt = nowIso();
       entry.updatedAt = nowIso();
-      recomputeEventEnrolledCount(store, entry.eventId);
+      recomputeEventParticipantCounts(store, entry.eventId);
       return;
     }
 
@@ -1713,7 +1941,7 @@ export async function manageOwnGroupEventParticipation(
     entry.status = "declined";
     entry.declinedAt = nowIso();
     entry.updatedAt = nowIso();
-    recomputeEventEnrolledCount(store, entry.eventId);
+    recomputeEventParticipantCounts(store, entry.eventId);
     store.enrollmentRequests.unshift({
       id: createId("enrollment"),
       eventId: input.transferTargetEventId,
@@ -1779,18 +2007,26 @@ export async function detachRelation(
 
 export async function createGroup(input: GroupInput, actor: AppUser) {
   return mutateStore((store) => {
-    ensureOrganizerFunctionsActive(actor);
-    const organizerId = requireOrganizerProfileId(actor);
-    if (!canOrganizerAccessTrainer(organizerId, input.trainerId, store.relations)) {
-      throw new Error("Najpierw potrzebujesz aktywnego połączenia z tym trenerem.");
+    const organizerId = actor.organizerProfileId ?? "";
+    const canCreateAsTrainer = canManageGroupAsTrainer(store, { trainerId: input.trainerId }, actor);
+    const canCreateAsOrganizer =
+      Boolean(organizerId) &&
+      canUseOrganizerFunctions(actor) &&
+      canOrganizerAccessTrainer(organizerId, input.trainerId, store.relations);
+
+    if (!canCreateAsTrainer && !canCreateAsOrganizer) {
+      throw new Error(
+        "Możesz utworzyć własną grupę trenera albo grupę dla trenera z aktywnej relacji organizatora.",
+      );
     }
+
     const groupId = createId("group");
 
     store.groups.unshift({
       id: groupId,
       name: input.name.trim(),
-      organizerId,
-      organizerUserId: actor.id,
+      organizerId: canCreateAsOrganizer ? organizerId : "",
+      organizerUserId: canCreateAsOrganizer ? actor.id : undefined,
       trainerId: input.trainerId,
       trainerUserId: findTrainer(store, input.trainerId)?.userId ?? undefined,
       status: "active",
@@ -1818,13 +2054,7 @@ export async function updateGroup(input: GroupUpdateInput, actor: AppUser) {
       throw new Error("Nie znaleziono grupy.");
     }
 
-    if (group.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz edytować tej grupy.");
-    }
-
-    if (group.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz edytować tej grupy.");
 
     group.name = input.name.trim();
     group.notes = input.notes?.trim();
@@ -1845,13 +2075,7 @@ export async function archiveGroup(groupId: string, actor: AppUser) {
       throw new Error("Nie znaleziono grupy.");
     }
 
-    if (group.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz archiwizować tej grupy.");
-    }
-
-    if (group.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz archiwizować tej grupy.");
 
     group.status = "archived";
     group.archivedAt = nowIso();
@@ -1911,13 +2135,7 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
       throw new Error("Nie znaleziono grupy.");
     }
 
-    if (group.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz dodawać członków do tej grupy.");
-    }
-
-    if (group.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz dodawać członków do tej grupy.");
 
     let participantProfileId = input.participantProfileId?.trim() || undefined;
     let profile = participantProfileId
@@ -1952,7 +2170,7 @@ export async function addGroupMember(input: GroupMemberInput, actor: AppUser) {
           confirmationStatus: "unconfirmed",
           status: "active",
           createdAt: nowIso(),
-          createdByOrganizerId: group.organizerId,
+          createdByOrganizerId: group.organizerId || null,
           createdByUserId: actor.id,
         });
         profile = store.participantProfiles[0];
@@ -2020,13 +2238,12 @@ export async function updateGroupMember(input: GroupMemberUpdateInput, actor: Ap
       throw new Error("Nie znaleziono członka grupy.");
     }
 
-    if (member.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz edytować tego członka.");
+    const group = store.groups.find((item) => item.id === member.groupId);
+    if (!group) {
+      throw new Error("Nie znaleziono grupy.");
     }
 
-    if (member.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz edytować tego członka.");
 
     member.priority = asParticipantPriority(input.priority);
     member.notes = input.notes?.trim();
@@ -2041,13 +2258,12 @@ export async function removeGroupMember(memberId: string, actor: AppUser) {
       throw new Error("Nie znaleziono członka grupy.");
     }
 
-    if (member.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz usunąć tego członka.");
+    const group = store.groups.find((item) => item.id === member.groupId);
+    if (!group) {
+      throw new Error("Nie znaleziono grupy.");
     }
 
-    if (member.organizerUserId === actor.id && actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
+    ensureGroupManagementAccess(store, group, actor, "Nie możesz usunąć tego członka.");
 
     member.membershipStatus = "removed";
     member.removedAt = nowIso();
@@ -2108,7 +2324,7 @@ export async function addEventParticipant(input: EventParticipantInput, actor: A
       overCapacity: input.overCapacity === true,
       invitedAt: nowIso(),
     });
-    recomputeEventEnrolledCount(store, event.id);
+    recomputeEventParticipantCounts(store, event.id);
 
     return {
       ok: true as const,
@@ -2139,15 +2355,36 @@ export async function updateEventParticipantStatus(
     participant.updatedAt = nowIso();
     if (input.status === "confirmed") {
       participant.confirmedAt = nowIso();
+      participant.declinedAt = undefined;
+      participant.removedAt = undefined;
     }
     if (input.status === "declined" || input.status === "removed") {
       participant.declinedAt = nowIso();
+      if (input.status === "declined") {
+        participant.removedAt = undefined;
+      }
+      participant.attendanceConfirmationStatus = undefined;
+      participant.attendanceConfirmationRequestedAt = undefined;
+      participant.attendanceConfirmationRespondedAt = undefined;
+      participant.attendanceConfirmationExpiresAt = undefined;
+    }
+    if (input.status === "rezerwowy" || input.status === "invited") {
+      participant.confirmedAt = undefined;
+      participant.declinedAt = undefined;
+      participant.removedAt = undefined;
+      participant.attendanceConfirmationStatus = undefined;
+      participant.attendanceConfirmationRequestedAt = undefined;
+      participant.attendanceConfirmationRespondedAt = undefined;
+      participant.attendanceConfirmationExpiresAt = undefined;
+    }
+    if (input.status === "removed") {
+      participant.removedAt = nowIso();
     }
     if (input.status !== "confirmed") {
-      participant.confirmedAt = input.status === "confirmed" ? participant.confirmedAt : undefined;
+      participant.confirmedAt = undefined;
     }
 
-    recomputeEventEnrolledCount(store, participant.eventId);
+    recomputeEventParticipantCounts(store, participant.eventId);
   });
 }
 
@@ -2171,218 +2408,10 @@ export async function finalizeEventRoster(eventId: string, actor: AppUser) {
   });
 }
 
-export async function addAvailabilitySlot(input: AvailabilityInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId =
-      actor.role === "trainer" ? requireTrainerProfileId(store, actor) : input.trainerId;
-
-    store.availabilitySlots.unshift({
-      id: createId("availability"),
-      trainerId,
-      trainerUserId: findTrainer(store, trainerId)?.userId ?? actor.id,
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
-      location: input.location.trim(),
-      notes: input.notes.trim(),
-      visibility: "approved-organizers",
-      visibleToOrganizerIds: [],
-    });
-  });
-}
-
-export async function addTrainerCalendarFeed(input: TrainerCalendarFeedInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(store, actor);
-    store.trainerCalendarFeeds.unshift({
-      id: createId("trainer-feed"),
-      trainerId,
-      trainerUserId: actor.id,
-      provider: input.provider,
-      url: input.url.trim(),
-      enabled: true,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
-  });
-}
-
-export async function updateTrainerCalendarFeedEnabled(
-  feedId: string,
-  enabled: boolean,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    const feed = store.trainerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu kalendarza.");
-    }
-
-    if (feed.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego feedu.");
-    }
-
-    feed.enabled = enabled;
-    feed.updatedAt = nowIso();
-  });
-}
-
-export async function removeTrainerCalendarFeed(feedId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    const feed = store.trainerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu kalendarza.");
-    }
-
-    if (feed.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz usunąć tego feedu.");
-    }
-
-    store.trainerCalendarFeeds = store.trainerCalendarFeeds.filter((item) => item.id !== feedId);
-  });
-}
-
-export async function syncOwnTrainerCalendarFeeds(actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(store, actor);
-    store.trainerCalendarFeeds = store.trainerCalendarFeeds.map((feed) =>
-      feed.trainerId === trainerId
-        ? {
-            ...feed,
-            updatedAt: nowIso(),
-            syncRequestedAt: nowIso(),
-          }
-        : feed,
-    );
-  });
-}
-
-export async function addTrainerSharedSlot(input: TrainerSharedSlotInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const trainerId = requireTrainerProfileId(store, actor);
-    store.trainerSharedSlots.unshift({
-      id: createId("shared-slot"),
-      trainerId,
-      trainerUserId: actor.id,
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
-      location: input.location.trim(),
-      notes: input.notes.trim(),
-      source: input.source ?? "manual",
-      status: "active",
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
-  });
-}
-
-export async function updateTrainerSharedSlot(input: TrainerSharedSlotUpdateInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const slot = store.trainerSharedSlots.find((item) => item.id === input.slotId);
-    if (!slot) {
-      throw new Error("Nie znaleziono slotu.");
-    }
-
-    if (slot.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego slotu.");
-    }
-
-    slot.startsAt = input.startsAt;
-    slot.endsAt = input.endsAt;
-    slot.location = input.location.trim();
-    slot.notes = input.notes.trim();
-    slot.updatedAt = nowIso();
-  });
-}
-
-export async function archiveTrainerSharedSlot(slotId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    const slot = store.trainerSharedSlots.find((item) => item.id === slotId);
-    if (!slot) {
-      throw new Error("Nie znaleziono slotu.");
-    }
-
-    if (slot.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz archiwizować tego slotu.");
-    }
-
-    slot.status = "archived";
-    slot.updatedAt = nowIso();
-  });
-}
-
-export async function addOrganizerCalendarFeed(input: OrganizerCalendarFeedInput, actor: AppUser) {
-  await mutateStore((store) => {
-    const organizerId = requireOrganizerProfileId(actor);
-    store.organizerCalendarFeeds.unshift({
-      id: createId("organizer-feed"),
-      organizerId,
-      organizerUserId: actor.id,
-      provider: input.provider,
-      url: input.url.trim(),
-      enabled: true,
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    });
-  });
-}
-
-export async function updateOrganizerCalendarFeedEnabled(
-  feedId: string,
-  enabled: boolean,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    const feed = store.organizerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu organizatora.");
-    }
-
-    if (feed.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego feedu.");
-    }
-
-    feed.enabled = enabled;
-    feed.updatedAt = nowIso();
-  });
-}
-
-export async function removeOrganizerCalendarFeed(feedId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    const feed = store.organizerCalendarFeeds.find((item) => item.id === feedId);
-    if (!feed) {
-      throw new Error("Nie znaleziono feedu organizatora.");
-    }
-
-    if (feed.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz usunąć tego feedu.");
-    }
-
-    store.organizerCalendarFeeds = store.organizerCalendarFeeds.filter((item) => item.id !== feedId);
-  });
-}
-
-export async function syncOwnOrganizerCalendarFeeds(actor: AppUser) {
-  await mutateStore((store) => {
-    const organizerId = requireOrganizerProfileId(actor);
-    store.organizerCalendarFeeds = store.organizerCalendarFeeds.map((feed) =>
-      feed.organizerId === organizerId
-        ? {
-            ...feed,
-            updatedAt: nowIso(),
-            syncRequestedAt: nowIso(),
-          }
-        : feed,
-    );
-  });
-}
-
 function createEventBase(
   store: DemoStore,
   actor: AppUser,
-  input:
-    | TrainingEventInput
-    | OrganizerTrainingDraftInput
-    | OrganizerTrainingDraftUpdateInput,
+  input: TrainingEventInput,
 ) {
   const trainerId =
     "trainerId" in input && input.trainerId ? input.trainerId : actor.trainerProfileId ?? null;
@@ -2407,7 +2436,7 @@ function createEventBase(
     location: input.location.trim(),
     tags: cloneValue(input.tags ?? []),
     capacity: input.capacity,
-    isPublished: "isPublished" in input ? Boolean(input.isPublished) : false,
+    isPublished: Boolean(input.isPublished),
     imageHint: isCommunityBrandStatus(input.brandStatus ?? "official")
       ? "community event"
       : "training event",
@@ -2415,195 +2444,6 @@ function createEventBase(
     status: input.status ?? "active",
     minimumParticipants: input.minimumParticipants ?? 1,
   };
-}
-
-export async function createOrganizerTrainingDraft(
-  input: OrganizerTrainingDraftInput,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    ensureOrganizerFunctionsActive(actor);
-    const group = store.groups.find((item) => item.id === input.groupId);
-    if (!group) {
-      throw new Error("Nie znaleziono grupy.");
-    }
-
-    const base = createEventBase(store, actor, input);
-    store.trainingEvents.unshift({
-      id: createId("event"),
-      ...base,
-      groupId: group.id,
-      groupName: group.name,
-      eventImages: cloneValue(input.eventImages ?? []),
-      useEventImageAsCover: input.useEventImageAsCover === true,
-      eventTypeSystem: input.eventTypeSystem ?? group.defaultEventType,
-      enrolledCount: 0,
-      workflowStatus: "draft-requested",
-      publishAutomaticallyAfterTrainerApproval: input.publishAutomaticallyAfterTrainerApproval,
-      requiresOrganizerApproval: false,
-      eligibleGroupPriorities: cloneValue(input.eligibleGroupPriorities ?? ["stali", "regularni"]),
-      confirmationLeadTimeDays: input.confirmationLeadTimeDays ?? group.defaultConfirmationLeadTimeDays,
-      trainerCollaborationStatus: "pending",
-      organizerCollaborationStatus: "accepted",
-      sharedSlotId: input.sharedSlotId,
-      createdByRole: "organizer",
-      publicationApprovalStatus: isCommunityBrandStatus(base.brandStatus) ? "pending" : undefined,
-      enrollmentPhotoRequirement: "optional",
-      joinAudienceSetting: "default",
-    });
-  });
-}
-
-export async function updateOrganizerTrainingDraft(
-  input: OrganizerTrainingDraftUpdateInput,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    if (actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
-
-    const event = store.trainingEvents.find((item) => item.id === input.eventId);
-    if (!event) {
-      throw new Error("Nie znaleziono draftu.");
-    }
-
-    if (event.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zmieniać tego draftu.");
-    }
-
-    const group = store.groups.find((item) => item.id === input.groupId);
-    if (!group) {
-      throw new Error("Nie znaleziono grupy.");
-    }
-
-    const base = createEventBase(store, actor, input);
-    Object.assign(event, {
-      ...base,
-      groupId: group.id,
-      groupName: group.name,
-      eventImages: cloneValue(input.eventImages ?? []),
-      useEventImageAsCover: input.useEventImageAsCover === true,
-      eventTypeSystem: input.eventTypeSystem ?? group.defaultEventType,
-      sharedSlotId: input.sharedSlotId,
-      eligibleGroupPriorities: cloneValue(input.eligibleGroupPriorities ?? event.eligibleGroupPriorities ?? []),
-      confirmationLeadTimeDays:
-        input.confirmationLeadTimeDays ?? event.confirmationLeadTimeDays ?? group.defaultConfirmationLeadTimeDays,
-      joinAudienceSetting: event.joinAudienceSetting ?? "default",
-    });
-  });
-}
-
-export async function withdrawOrganizerTrainingDraft(eventId: string, actor: AppUser) {
-  await mutateStore((store) => {
-    if (actor.role !== "admin") {
-      ensureOrganizerFunctionsActive(actor);
-    }
-
-    const event = store.trainingEvents.find((item) => item.id === eventId);
-    if (!event) {
-      throw new Error("Nie znaleziono wydarzenia.");
-    }
-
-    if (event.organizerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz wycofać tego draftu.");
-    }
-
-    event.workflowStatus = "withdrawn";
-    event.withdrawnAt = nowIso();
-    event.withdrawnByUserId = actor.id;
-    event.isPublished = false;
-  });
-}
-
-export async function decideOrganizerTrainingDraft(
-  input: OrganizerTrainingDraftDecisionInput,
-  actor: AppUser,
-) {
-  await mutateStore((store) => {
-    const event = store.trainingEvents.find((item) => item.id === input.eventId);
-    if (!event) {
-      throw new Error("Nie znaleziono wydarzenia.");
-    }
-
-    if (event.trainerUserId !== actor.id && actor.role !== "admin") {
-      throw new Error("Nie możesz zdecydować o tym drafcie.");
-    }
-
-    event.trainerCollaborationStatus = input.decision;
-    event.trainerDecidedAt = nowIso();
-    event.trainerDecidedByUserId = actor.id;
-    event.trainerDecisionReason = input.message?.trim();
-    event.workflowStatus = input.decision === "accepted" ? "trainer-accepted" : "trainer-rejected";
-    if (input.decision === "accepted") {
-      event.isPublished = !isCommunityBrandStatus(event.brandStatus);
-    }
-  });
-}
-
-export async function resetTrainerOrganizerCalendarFeedToken(
-  relationId: string,
-  actor: AppUser,
-) {
-  return mutateStore((store) => {
-    const relation = store.relations.find((item) => item.id === relationId);
-    if (!relation) {
-      throw new Error("Nie znaleziono relacji.");
-    }
-
-    if (
-      relation.organizerUserId !== actor.id &&
-      relation.trainerUserId !== actor.id &&
-      actor.role !== "admin"
-    ) {
-      throw new Error("Nie możesz zresetować tokenu tej relacji.");
-    }
-
-    const token = createId("feed");
-    const publicFeedUrl = `${window.location.origin}${getBasePath()}api/ical/trainer-organizer/${token}.ics`;
-    const existing = store.trainerOrganizerCalendarFeeds.find((item) => item.id === relation.id);
-    if (existing) {
-      existing.token = token;
-      existing.publicFeedUrl = publicFeedUrl;
-      existing.updatedAt = nowIso();
-    } else {
-      store.trainerOrganizerCalendarFeeds.unshift({
-        id: relation.id,
-        relationId: relation.id,
-        trainerId: relation.trainerId,
-        organizerId: relation.organizerId,
-        trainerUserId: relation.trainerUserId ?? "",
-        organizerUserId: relation.organizerUserId ?? "",
-        token,
-        publicFeedUrl,
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      });
-    }
-
-    return {
-      ok: true as const,
-      token,
-    };
-  });
-}
-
-export async function getTrainerOrganizerGoogleCalendarSubscribeUrl(
-  relationId: string,
-  actor: AppUser,
-) {
-  const store = await ensureStoreLoaded();
-  const feed = store.trainerOrganizerCalendarFeeds.find((item) => item.id === relationId);
-  if (!feed) {
-    await resetTrainerOrganizerCalendarFeedToken(relationId, actor);
-    const refreshedStore = await ensureStoreLoaded();
-    return (
-      refreshedStore.trainerOrganizerCalendarFeeds.find((item) => item.id === relationId)?.publicFeedUrl ??
-      ""
-    );
-  }
-
-  return feed.publicFeedUrl ?? "";
 }
 
 export async function createTrainingEvent(input: TrainingEventInput, actor: AppUser) {
@@ -2633,6 +2473,7 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
     const nextEvent: TrainingEvent = {
       id: createId("event"),
       ...base,
+      title: base.title || group?.name || "",
       organizerId: group?.organizerId ?? base.organizerId,
       organizerUserId:
         group?.organizerId
@@ -2643,6 +2484,8 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
       eventImages: cloneValue(input.eventImages ?? []),
       useEventImageAsCover: input.useEventImageAsCover === true,
       eventTypeSystem: input.eventTypeSystem ?? group?.defaultEventType ?? null,
+      assignedCount: 0,
+      reserveCount: 0,
       enrolledCount: 0,
       workflowStatus: "published",
       requiresOrganizerApproval:
@@ -2678,7 +2521,7 @@ export async function createUnifiedTrainingEvent(input: TrainingEventInput, acto
     if (nextEvent.groupId) {
       syncGroupRosterToEvent(store, nextEvent);
     } else {
-      recomputeEventEnrolledCount(store, nextEvent.id);
+      recomputeEventParticipantCounts(store, nextEvent.id);
     }
   });
 }
@@ -2703,6 +2546,19 @@ export async function uploadCommunityEventImages(files: File[]) {
 
 export async function registerParticipant(input: ParticipantRegistrationInput) {
   const avatarUrl = await maybeReadFile(input.avatarFile);
+  const normalizedPhone = input.phone.trim();
+  const hasSession = Boolean(getCurrentSessionUserId());
+
+  if (!hasSession) {
+    const verifiedPhoneState = getMatchingVerifiedPhonePreAuthState(normalizedPhone);
+    if (!verifiedPhoneState) {
+      throw new Error("Najpierw potwierdź numer telefonu.");
+    }
+
+    await ensurePhoneParticipantProfile({
+      seedTrainerId: verifiedPhoneState.seedTrainerId,
+    });
+  }
 
   await mutateStore((store) => {
     const actor = getActorOrThrow(store);
@@ -2714,7 +2570,7 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
 
     actor.displayName = input.displayName.trim();
     actor.notes = input.notes.trim();
-    actor.phone = input.phone.trim();
+    actor.phone = normalizedPhone;
     actor.phoneVerifiedAt = actor.phoneVerifiedAt ?? nowIso();
     actor.participantOnboardingCompletedAt = nowIso();
     actor.trainingDataConsentAccepted = true;
@@ -2752,6 +2608,8 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
       }
     }
   });
+
+  clearVerifiedPhonePreAuthStateForPhone(normalizedPhone);
 }
 
 export async function connectOrganizerToTrainerWithCode(

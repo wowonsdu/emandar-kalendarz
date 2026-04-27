@@ -3,8 +3,6 @@ import {
   aggregateEventCapacityStats,
   buildGoogleCalendarSubscribeUrl,
   buildPhoneHref,
-  buildSharedAvailabilityWindows,
-  buildTrainerFreeDaySlices,
   canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
@@ -16,15 +14,14 @@ import {
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  getEventOverflowCount,
+  getEventParticipantCount,
   getTrainingEventScheduleBounds,
   getTrainingEventScheduleDays,
   getTrainingEventWorkflowStatusLabel,
   groupParticipantRecordsByPriority,
   isPhotoModeEnabled,
   isPhotoModeRequired,
-  isOrganizerTrainingDraftEditable,
-  isOrganizerTrainingDraftWithdrawable,
-  isTrainerSharedSlotActive,
   isTrainingEventArchived,
   isTrainingEventCollaborationAccepted,
   isTrainingEventPubliclyVisible,
@@ -79,13 +76,6 @@ describe("community organizer phone helpers", () => {
       relations: [],
       trainingEvents: [],
       publicTrainingEvents: [],
-      availabilitySlots: [],
-      trainerSharedSlots: [],
-      trainerCalendarFeeds: [],
-      organizerCalendarFeeds: [],
-      trainerOrganizerCalendarFeeds: [],
-      trainerExternalBusyMonths: [],
-      organizerExternalBusyMonths: [],
       enrollmentRequests: [],
       notifications: [],
       appSettings: {
@@ -243,6 +233,52 @@ describe("participant priority helpers", () => {
       { priority: "regularni", ids: ["regularni-a"] },
       { priority: "rezerwowi", ids: ["rezerwowi-z"] },
     ]);
+  });
+});
+
+describe("event participant occupancy helpers", () => {
+  it("uses assignedCount for official grouped trainings", () => {
+    const event = {
+      brandStatus: "official" as const,
+      groupId: "group-1",
+      assignedCount: 5,
+      enrolledCount: 0,
+      capacity: 10,
+    };
+
+    expect(getEventParticipantCount(event)).toBe(5);
+    expect(getAvailablePlaces(event)).toBe(5);
+    expect(getEventFillRate(event)).toBe(50);
+    expect(getEventOverflowCount(event)).toBe(0);
+  });
+
+  it("keeps enrolledCount-based occupancy for non-grouped or community events", () => {
+    const communityEvent = {
+      brandStatus: "supported" as const,
+      groupId: null,
+      assignedCount: 8,
+      enrolledCount: 3,
+      capacity: 10,
+    };
+
+    expect(getEventParticipantCount(communityEvent)).toBe(3);
+    expect(getAvailablePlaces(communityEvent)).toBe(7);
+    expect(getEventFillRate(communityEvent)).toBe(30);
+  });
+
+  it("reports overflow for over-capacity grouped trainings without creating negative availability", () => {
+    const event = {
+      brandStatus: "official" as const,
+      groupId: "group-1",
+      assignedCount: 25,
+      enrolledCount: 20,
+      capacity: 20,
+    };
+
+    expect(getEventParticipantCount(event)).toBe(25);
+    expect(getEventOverflowCount(event)).toBe(5);
+    expect(getAvailablePlaces(event)).toBe(0);
+    expect(getEventFillRate(event)).toBe(100);
   });
 });
 
@@ -795,103 +831,9 @@ describe("permissions and sorting", () => {
     ]);
   });
 
-  it("builds shared availability windows for fully shared and partial gaps", () => {
-    const windows = buildSharedAvailabilityWindows({
-      trainerIds: ["trainer-1", "trainer-2"],
-      rangeStart: "2026-03-10T08:00:00.000Z",
-      rangeEnd: "2026-03-11T18:00:00.000Z",
-      minimumDurationHours: 1,
-      busyIntervalsByTrainer: {
-        "trainer-1": [
-          {
-            startsAt: "2026-03-10T09:00:00.000Z",
-            endsAt: "2026-03-10T12:00:00.000Z",
-            source: "emandar",
-          },
-          {
-            startsAt: "2026-03-10T21:00:00.000Z",
-            endsAt: "2026-03-11T15:00:00.000Z",
-            source: "ical",
-          },
-        ],
-        "trainer-2": [
-          {
-            startsAt: "2026-03-10T15:00:00.000Z",
-            endsAt: "2026-03-10T18:00:00.000Z",
-            source: "emandar",
-          },
-        ],
-      },
-    });
-
-    expect(windows[0]).toEqual({
-      startsAt: "2026-03-10T12:00:00.000Z",
-      endsAt: "2026-03-10T15:00:00.000Z",
-      durationHours: 3,
-      availableTrainerIds: ["trainer-1", "trainer-2"],
-      missingTrainerIds: [],
-      availableCount: 2,
-      isFullMatch: true,
-    });
-
-    expect(windows.some((window) => window.availableCount === 1)).toBe(true);
-  });
-
-  it("builds future free day slices grouped by span length", () => {
-    const slices = buildTrainerFreeDaySlices({
-      rangeStart: "2026-03-10T08:20:00.000Z",
-      rangeEnd: "2026-03-16T20:00:00.000Z",
-      minimumDurationHours: 1,
-      busyIntervals: [
-        {
-          startsAt: "2026-03-10T09:00:00.000Z",
-          endsAt: "2026-03-10T12:00:00.000Z",
-          source: "ical",
-        },
-        {
-          startsAt: "2026-03-12T10:00:00.000Z",
-          endsAt: "2026-03-12T13:00:00.000Z",
-          source: "emandar",
-        },
-      ],
-    });
-
-    expect(slices[0]).toEqual({
-      startsAt: "2026-03-10T12:00:00.000Z",
-      endsAt: "2026-03-11T00:00:00.000Z",
-      dayKey: "2026-03-10",
-      durationHours: 12,
-      spanStartsAt: "2026-03-10T12:00:00.000Z",
-      spanEndsAt: "2026-03-12T10:00:00.000Z",
-      spanDays: 3,
-      spanBucket: "3-days",
-    });
-
-    expect(slices[1]).toMatchObject({
-      startsAt: "2026-03-11T00:00:00.000Z",
-      endsAt: "2026-03-12T00:00:00.000Z",
-      spanDays: 3,
-      spanBucket: "3-days",
-    });
-    expect(slices.some((slice) => slice.spanBucket === "more-than-7-days")).toBe(false);
-    expect(
-      buildTrainerFreeDaySlices({
-        rangeStart: "2026-03-10T00:00:00.000Z",
-        rangeEnd: "2026-03-25T00:00:00.000Z",
-        minimumDurationHours: 1,
-        busyIntervals: [
-          {
-            startsAt: "2026-03-18T00:00:00.000Z",
-            endsAt: "2026-03-18T02:00:00.000Z",
-            source: "ical",
-          },
-        ],
-      }).some((slice) => slice.spanBucket === "more-than-7-days"),
-    ).toBe(true);
-  });
 });
 
-describe("draft workflow helpers", () => {
+describe("workflow helpers", () => {
   it("resolves workflow fallback from published and rejected states", () => {
     expect(
       resolveTrainingEventWorkflowStatus({
@@ -905,34 +847,6 @@ describe("draft workflow helpers", () => {
         trainerDecisionReason: "conflict",
       }),
     ).toBe("trainer-rejected");
-  });
-
-  it("allows organizer to edit and withdraw only pending own draft", () => {
-    const event = {
-      organizerId: "organizer-1",
-      workflowStatus: "draft-requested" as const,
-    };
-
-    expect(
-      isOrganizerTrainingDraftEditable(event, {
-        role: "organizer",
-        organizerProfileId: "organizer-1",
-      }),
-    ).toBe(true);
-
-    expect(
-      isOrganizerTrainingDraftWithdrawable(event, {
-        role: "organizer",
-        organizerProfileId: "organizer-1",
-      }),
-    ).toBe(true);
-
-    expect(
-      isOrganizerTrainingDraftEditable(event, {
-        role: "trainer",
-        organizerProfileId: "organizer-1",
-      }),
-    ).toBe(true);
 
     expect(getTrainingEventWorkflowStatusLabel("trainer-accepted")).toBe(
       "zaakceptowany przez trenera",
@@ -940,21 +854,7 @@ describe("draft workflow helpers", () => {
   });
 });
 
-describe("slot and overlap helpers", () => {
-  it("marks archived shared slot as inactive", () => {
-    expect(
-      isTrainerSharedSlotActive({
-        status: "active",
-      }),
-    ).toBe(true);
-
-    expect(
-      isTrainerSharedSlotActive({
-        status: "archived",
-      }),
-    ).toBe(false);
-  });
-
+describe("overlap helpers", () => {
   it("detects overlap for interval and event schedule ranges", () => {
     expect(
       doIntervalsOverlap(

@@ -8,7 +8,7 @@
 ## Data gate
 
 - Confirm every relation document uses the deterministic id format `<trainerId>__<organizerId>`.
-- Confirm `trainingEvents`, `availabilitySlots` and `enrollmentRequests` have normalized `trainerUserId` and `organizerUserId`.
+- Confirm `trainingEvents` and `enrollmentRequests` have normalized `trainerUserId` and `organizerUserId`.
 - Confirm archived events have `isPublished=false` and organizer access is read-only from the list level.
 
 ## App smoke

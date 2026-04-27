@@ -179,13 +179,6 @@ function createStore(overrides: Partial<DemoStore> = {}): DemoStore {
     relations: [],
     trainingEvents: [],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
-    organizerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: {
@@ -329,6 +322,48 @@ describe("dashboard helpers", () => {
     expect(model.pendingConfirmationItems.map((item) => item.token)).toEqual(["participant-event-1"]);
   });
 
+  it("labels reserve roster entries as rezerwowy in participant dashboard", () => {
+    const reserveEvent = createEvent({
+      id: "event-reserve",
+      title: "Rezerwa",
+      groupId: "group-1",
+      groupName: "Grupa Poranna",
+      startsAt: "2026-04-20T10:00:00.000Z",
+      endsAt: "2026-04-20T14:00:00.000Z",
+      scheduleDays: [
+        {
+          startsAt: "2026-04-20T10:00:00.000Z",
+          endsAt: "2026-04-20T14:00:00.000Z",
+        },
+      ],
+    });
+    const store = createStore({
+      trainingEvents: [reserveEvent],
+      eventParticipants: [
+        createEventParticipant({
+          id: "participant-event-reserve",
+          eventId: "event-reserve",
+          status: "rezerwowy",
+          attendanceConfirmationStatus: "not-required",
+        }),
+      ],
+    });
+
+    const model = getParticipantDashboardModel({
+      userId: "user-1",
+      participantProfileId: "participant-1",
+      store,
+      now: new Date("2026-04-06T08:00:00.000Z"),
+    });
+
+    expect(model.upcomingItems).toEqual([
+      expect.objectContaining({
+        id: "participant-event-reserve",
+        statusLabel: "Rezerwowy",
+      }),
+    ]);
+  });
+
   it("returns only unsynced active request-backed participant enrollments", () => {
     const communityEvent = createEvent({
       id: "event-community",
@@ -463,6 +498,7 @@ describe("dashboard helpers", () => {
         },
       ],
       capacity: 10,
+      assignedCount: 8,
       enrolledCount: 6,
     });
     const groupedEventAccepted = createEvent({
@@ -583,7 +619,8 @@ describe("dashboard helpers", () => {
       expect.objectContaining({
         event: expect.objectContaining({ id: "event-group-1" }),
         pendingRequestCount: 1,
-        missingPeople: 4,
+        missingPeople: 2,
+        fillRate: 80,
       }),
     ]);
   });

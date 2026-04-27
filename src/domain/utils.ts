@@ -6,7 +6,6 @@ import type {
   DemoStore,
   EmandarBrandStatus,
   EnrollmentIntent,
-  ExternalBusyInterval,
   EventCollaborationStatus,
   GroupMemberPriority,
   EnrollmentFinalStatus,
@@ -14,11 +13,7 @@ import type {
   OrganizerProfile,
   ParticipantEnrollmentStatus,
   PhotoMode,
-  SharedAvailabilityWindow,
   TrainingJoinAudience,
-  TrainerFreeDaySlice,
-  TrainerFreeDaySliceBucket,
-  TrainerSharedSlot,
   TrainingEventScheduleDay,
   TrainingEventWorkflowStatus,
   TrainerOrganizerRelation,
@@ -593,20 +588,49 @@ export function getTrainingEventScheduleBounds(
   };
 }
 
-export function getAvailablePlaces(
-  event: Pick<TrainingEvent, "capacity" | "enrolledCount">,
+export function isOfficialGroupTrainingEvent(
+  event: Partial<Pick<TrainingEvent, "brandStatus" | "groupId">>,
 ) {
-  return Math.max(event.capacity - event.enrolledCount, 0);
+  return !isCommunityBrandStatus(event.brandStatus) && Boolean(event.groupId);
+}
+
+export function getEventParticipantCount(
+  event: Pick<TrainingEvent, "enrolledCount" | "capacity"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  if (isOfficialGroupTrainingEvent(event)) {
+    return typeof event.assignedCount === "number" ? event.assignedCount : event.enrolledCount;
+  }
+
+  return event.enrolledCount;
+}
+
+export function getEventOverflowCount(
+  event: Pick<TrainingEvent, "enrolledCount" | "capacity"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  return Math.max(getEventParticipantCount(event) - event.capacity, 0);
+}
+
+export function getAvailablePlaces(
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  return Math.max(event.capacity - getEventParticipantCount(event), 0);
 }
 
 export function getEventFillRate(
-  event: Pick<TrainingEvent, "capacity" | "enrolledCount">,
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
 ) {
   if (event.capacity <= 0) {
     return 0;
   }
 
-  return Math.round((Math.min(event.enrolledCount, event.capacity) / event.capacity) * 1000) / 10;
+  return (
+    Math.round((Math.min(getEventParticipantCount(event), event.capacity) / event.capacity) * 1000) /
+    10
+  );
 }
 
 export function aggregateEventCapacityStats(events: TrainingEvent[]) {
@@ -722,30 +746,6 @@ export function getTrainingEventStatusLabel(
 export function resolveMinimumParticipants(event: Pick<TrainingEvent, "minimumParticipants" | "capacity">) {
   const minimumParticipants = event.minimumParticipants ?? 0;
   return Math.max(1, Math.min(event.capacity, minimumParticipants || event.capacity));
-}
-
-export function isOrganizerTrainingDraftEditable(
-  event: Pick<TrainingEvent, "archivedAt" | "organizerId" | "withdrawnAt" | "workflowStatus">,
-  actor: Pick<
-    AppUser,
-    "organizerProfileId" | "role" | "roles" | "primaryRole" | "organizerFunctionsBlockedAt"
-  >,
-) {
-  return (
-    getRoleHierarchyLevel(actor.role) >= getRoleHierarchyLevel("organizer") &&
-    actor.organizerProfileId === event.organizerId &&
-    !isOrganizerFunctionsBlocked(actor) &&
-    !isTrainingEventArchived(event) &&
-    !event.withdrawnAt &&
-    resolveTrainingEventWorkflowStatus(event) === "draft-requested"
-  );
-}
-
-export function isOrganizerTrainingDraftWithdrawable(
-  event: Pick<TrainingEvent, "archivedAt" | "organizerId" | "withdrawnAt" | "workflowStatus">,
-  actor: Pick<AppUser, "organizerProfileId" | "role">,
-) {
-  return isOrganizerTrainingDraftEditable(event, actor);
 }
 
 export function getRoleLabel(role: AppRole) {
@@ -942,12 +942,6 @@ export function requireOrganizerProfileId(
   return organizerProfileId;
 }
 
-export function isTrainerSharedSlotActive(
-  slot: Pick<TrainerSharedSlot, "archivedAt" | "status">,
-) {
-  return slot.status !== "archived" && !slot.archivedAt;
-}
-
 export function doIntervalsOverlap(
   left: Pick<TrainingEventScheduleDay, "startsAt" | "endsAt">,
   right: Pick<TrainingEventScheduleDay, "startsAt" | "endsAt">,
@@ -981,341 +975,4 @@ export function buildGoogleCalendarSubscribeUrl(
 
 function toTimestamp(value: string) {
   return new Date(value).getTime();
-}
-
-function toIso(value: number) {
-  return new Date(value).toISOString();
-}
-
-function roundUpToHour(timestamp: number) {
-  const date = new Date(timestamp);
-  date.setUTCMinutes(0, 0, 0);
-
-  if (date.getTime() < timestamp) {
-    date.setUTCHours(date.getUTCHours() + 1);
-  }
-
-  return date.getTime();
-}
-
-function roundDownToHour(timestamp: number) {
-  const date = new Date(timestamp);
-  date.setUTCMinutes(0, 0, 0);
-  return date.getTime();
-}
-
-function getUtcDayStart(timestamp: number) {
-  const date = new Date(timestamp);
-  date.setUTCHours(0, 0, 0, 0);
-  return date.getTime();
-}
-
-function getNextUtcDayStart(timestamp: number) {
-  const date = new Date(timestamp);
-  date.setUTCHours(24, 0, 0, 0);
-  return date.getTime();
-}
-
-function getTrainerFreeDaySliceBucket(spanDays: number): TrainerFreeDaySliceBucket {
-  if (spanDays <= 1) {
-    return "1-day";
-  }
-
-  if (spanDays === 2) {
-    return "2-days";
-  }
-
-  if (spanDays === 3) {
-    return "3-days";
-  }
-
-  if (spanDays === 4) {
-    return "4-days";
-  }
-
-  if (spanDays === 5) {
-    return "5-days";
-  }
-
-  if (spanDays === 6) {
-    return "6-days";
-  }
-
-  if (spanDays === 7) {
-    return "7-days";
-  }
-
-  return "more-than-7-days";
-}
-
-export function mergeBusyIntervals(intervals: ExternalBusyInterval[]) {
-  const sortedIntervals = [...intervals]
-    .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt))
-    .sort((left, right) => toTimestamp(left.startsAt) - toTimestamp(right.startsAt));
-
-  return sortedIntervals.reduce<ExternalBusyInterval[]>((merged, interval) => {
-    const previous = merged[merged.length - 1];
-
-    if (!previous) {
-      merged.push({ ...interval });
-      return merged;
-    }
-
-    if (toTimestamp(interval.startsAt) <= toTimestamp(previous.endsAt)) {
-      previous.endsAt =
-        toTimestamp(interval.endsAt) > toTimestamp(previous.endsAt)
-          ? interval.endsAt
-          : previous.endsAt;
-      previous.sourceLabel = previous.sourceLabel ?? interval.sourceLabel;
-      return merged;
-    }
-
-    merged.push({ ...interval });
-    return merged;
-  }, []);
-}
-
-export function buildSharedAvailabilityWindows({
-  trainerIds,
-  busyIntervalsByTrainer,
-  rangeStart,
-  rangeEnd,
-  minimumDurationHours = 1,
-}: {
-  trainerIds: string[];
-  busyIntervalsByTrainer: Record<string, ExternalBusyInterval[]>;
-  rangeStart: string;
-  rangeEnd: string;
-  minimumDurationHours?: number;
-}) {
-  const uniqueTrainerIds = Array.from(new Set(trainerIds.filter(Boolean)));
-
-  if (uniqueTrainerIds.length === 0) {
-    return [] satisfies SharedAvailabilityWindow[];
-  }
-
-  const rangeStartTimestamp = roundUpToHour(toTimestamp(rangeStart));
-  const rangeEndTimestamp = roundDownToHour(toTimestamp(rangeEnd));
-  const minimumDurationMs = Math.max(1, minimumDurationHours) * 60 * 60 * 1000;
-
-  if (rangeEndTimestamp <= rangeStartTimestamp) {
-    return [] satisfies SharedAvailabilityWindow[];
-  }
-
-  const mergedBusyIntervalsByTrainer = Object.fromEntries(
-    uniqueTrainerIds.map((trainerId) => {
-      const clippedIntervals = (busyIntervalsByTrainer[trainerId] ?? [])
-        .map((interval) => {
-          const startsAt = Math.max(toTimestamp(interval.startsAt), rangeStartTimestamp);
-          const endsAt = Math.min(toTimestamp(interval.endsAt), rangeEndTimestamp);
-
-          return {
-            ...interval,
-            startsAt: toIso(startsAt),
-            endsAt: toIso(endsAt),
-          };
-        })
-        .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt));
-
-      return [trainerId, mergeBusyIntervals(clippedIntervals)];
-    }),
-  ) as Record<string, ExternalBusyInterval[]>;
-
-  const boundaries = Array.from(
-    new Set(
-      [
-        rangeStartTimestamp,
-        rangeEndTimestamp,
-        ...Object.values(mergedBusyIntervalsByTrainer).flatMap((intervals) =>
-          intervals.flatMap((interval) => [
-            toTimestamp(interval.startsAt),
-            toTimestamp(interval.endsAt),
-          ]),
-        ),
-      ]
-        .filter((value) => value >= rangeStartTimestamp && value <= rangeEndTimestamp)
-        .sort((left, right) => left - right),
-    ),
-  );
-
-  const rawWindows: SharedAvailabilityWindow[] = [];
-
-  for (let index = 0; index < boundaries.length - 1; index += 1) {
-    const segmentStart = boundaries[index];
-    const segmentEnd = boundaries[index + 1];
-
-    if (!segmentStart || !segmentEnd || segmentEnd <= segmentStart) {
-      continue;
-    }
-
-    const roundedStart = roundUpToHour(segmentStart);
-    const roundedEnd = roundDownToHour(segmentEnd);
-
-    if (roundedEnd <= roundedStart || roundedEnd - roundedStart < minimumDurationMs) {
-      continue;
-    }
-
-    const availableTrainerIds = uniqueTrainerIds.filter((trainerId) => {
-      const busyIntervals = mergedBusyIntervalsByTrainer[trainerId] ?? [];
-
-      return !busyIntervals.some(
-        (interval) =>
-          roundedStart < toTimestamp(interval.endsAt) &&
-          roundedEnd > toTimestamp(interval.startsAt),
-      );
-    });
-
-    if (availableTrainerIds.length === 0) {
-      continue;
-    }
-
-    const missingTrainerIds = uniqueTrainerIds.filter(
-      (trainerId) => !availableTrainerIds.includes(trainerId),
-    );
-
-    rawWindows.push({
-      startsAt: toIso(roundedStart),
-      endsAt: toIso(roundedEnd),
-      durationHours: Math.round(((roundedEnd - roundedStart) / (60 * 60 * 1000)) * 10) / 10,
-      availableTrainerIds,
-      missingTrainerIds,
-      availableCount: availableTrainerIds.length,
-      isFullMatch: availableTrainerIds.length === uniqueTrainerIds.length,
-    });
-  }
-
-  const mergedWindows = rawWindows.reduce<SharedAvailabilityWindow[]>((windows, window) => {
-    const previous = windows[windows.length - 1];
-
-    if (
-      previous &&
-      previous.endsAt === window.startsAt &&
-      previous.availableTrainerIds.join("|") === window.availableTrainerIds.join("|") &&
-      previous.missingTrainerIds.join("|") === window.missingTrainerIds.join("|")
-    ) {
-      previous.endsAt = window.endsAt;
-      previous.durationHours =
-        Math.round(
-          ((toTimestamp(previous.endsAt) - toTimestamp(previous.startsAt)) /
-            (60 * 60 * 1000)) *
-            10,
-        ) / 10;
-      previous.availableCount = previous.availableTrainerIds.length;
-      previous.isFullMatch = previous.availableCount === uniqueTrainerIds.length;
-      return windows;
-    }
-
-    windows.push({ ...window });
-    return windows;
-  }, []);
-
-  return mergedWindows.sort((left, right) => {
-    if (right.availableCount !== left.availableCount) {
-      return right.availableCount - left.availableCount;
-    }
-
-    if (right.durationHours !== left.durationHours) {
-      return right.durationHours - left.durationHours;
-    }
-
-    return toTimestamp(left.startsAt) - toTimestamp(right.startsAt);
-  });
-}
-
-export function buildTrainerFreeDaySlices({
-  busyIntervals,
-  rangeStart,
-  rangeEnd,
-  minimumDurationHours = 1,
-}: {
-  busyIntervals: ExternalBusyInterval[];
-  rangeStart: string;
-  rangeEnd: string;
-  minimumDurationHours?: number;
-}) {
-  const rangeStartTimestamp = roundUpToHour(toTimestamp(rangeStart));
-  const rangeEndTimestamp = roundDownToHour(toTimestamp(rangeEnd));
-  const minimumDurationMs = Math.max(1, minimumDurationHours) * 60 * 60 * 1000;
-
-  if (rangeEndTimestamp <= rangeStartTimestamp) {
-    return [] satisfies TrainerFreeDaySlice[];
-  }
-
-  const mergedBusyIntervals = mergeBusyIntervals(
-    busyIntervals
-      .map((interval) => {
-        const startsAt = Math.max(toTimestamp(interval.startsAt), rangeStartTimestamp);
-        const endsAt = Math.min(toTimestamp(interval.endsAt), rangeEndTimestamp);
-
-        return {
-          ...interval,
-          startsAt: toIso(startsAt),
-          endsAt: toIso(endsAt),
-        };
-      })
-      .filter((interval) => toTimestamp(interval.endsAt) > toTimestamp(interval.startsAt)),
-  );
-
-  const freeWindows: Array<{ startsAt: number; endsAt: number }> = [];
-  let cursor = rangeStartTimestamp;
-
-  mergedBusyIntervals.forEach((interval) => {
-    const intervalStart = toTimestamp(interval.startsAt);
-    const intervalEnd = toTimestamp(interval.endsAt);
-
-    if (intervalStart > cursor) {
-      freeWindows.push({
-        startsAt: cursor,
-        endsAt: intervalStart,
-      });
-    }
-
-    if (intervalEnd > cursor) {
-      cursor = intervalEnd;
-    }
-  });
-
-  if (cursor < rangeEndTimestamp) {
-    freeWindows.push({
-      startsAt: cursor,
-      endsAt: rangeEndTimestamp,
-    });
-  }
-
-  return freeWindows.flatMap((window) => {
-    if (window.endsAt - window.startsAt < minimumDurationMs) {
-      return [];
-    }
-
-    const spanDays =
-      Math.floor(
-        (getUtcDayStart(window.endsAt - 1) - getUtcDayStart(window.startsAt)) /
-          (24 * 60 * 60 * 1000),
-      ) + 1;
-    const spanBucket = getTrainerFreeDaySliceBucket(spanDays);
-    const slices: TrainerFreeDaySlice[] = [];
-    let sliceStart = window.startsAt;
-
-    while (sliceStart < window.endsAt) {
-      const sliceEnd = Math.min(window.endsAt, getNextUtcDayStart(sliceStart));
-
-      if (sliceEnd - sliceStart >= minimumDurationMs) {
-        slices.push({
-          startsAt: toIso(sliceStart),
-          endsAt: toIso(sliceEnd),
-          dayKey: toIso(getUtcDayStart(sliceStart)).slice(0, 10),
-          durationHours:
-            Math.round(((sliceEnd - sliceStart) / (60 * 60 * 1000)) * 10) / 10,
-          spanStartsAt: toIso(window.startsAt),
-          spanEndsAt: toIso(window.endsAt),
-          spanDays,
-          spanBucket,
-        });
-      }
-
-      sliceStart = sliceEnd;
-    }
-
-    return slices;
-  });
 }

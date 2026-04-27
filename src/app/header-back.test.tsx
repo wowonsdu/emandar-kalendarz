@@ -44,7 +44,7 @@ describe("header back config", () => {
   });
 
   it("treats create and filtered panel routes as nested views", () => {
-    const rootPaths = new Set(["/panel/dashboard", "/panel/grupy", "/panel/terminy"]);
+    const rootPaths = new Set(["/panel/dashboard", "/panel/grupy", "/panel/szkolenia"]);
 
     expect(
       getHeaderBackConfig({
@@ -63,14 +63,14 @@ describe("header back config", () => {
     expect(
       getHeaderBackConfig({
         kind: "panel",
-        pathname: "/panel/terminy",
-        search: "?groupId=group-1",
+        pathname: "/panel/szkolenia/utworz",
+        search: "?groupId=group-1&returnToGroupId=group-1",
         state: null,
         rootPaths,
       }),
     ).toEqual({
       showBackButton: true,
-      fallbackPath: "/panel/terminy",
+      fallbackPath: "/panel/grupy/group-1",
       stateBackPath: null,
     });
   });
@@ -91,6 +91,25 @@ describe("header back config", () => {
     expect(config).toEqual({
       showBackButton: true,
       fallbackPath: "/panel/moderacja-wydarzen-spolecznosci",
+      stateBackPath: null,
+    });
+  });
+
+  it("routes community event edit views back to the community events list", () => {
+    const config = getHeaderBackConfig({
+      kind: "panel",
+      pathname: "/panel/wydarzenia-spolecznosci/event-1/edytuj",
+      search: "",
+      state: null,
+      rootPaths: new Set([
+        "/panel/dashboard",
+        "/panel/wydarzenia-spolecznosci",
+      ]),
+    });
+
+    expect(config).toEqual({
+      showBackButton: true,
+      fallbackPath: "/panel/wydarzenia-spolecznosci",
       stateBackPath: null,
     });
   });

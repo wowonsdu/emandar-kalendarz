@@ -74,13 +74,6 @@ function createStore(
     relations: [],
     trainingEvents: [createEvent(eventOverrides)],
     publicTrainingEvents: [],
-    availabilitySlots: [],
-    trainerSharedSlots: [],
-    trainerCalendarFeeds: [],
-    organizerCalendarFeeds: [],
-    organizerExternalBusyMonths: [],
-    trainerOrganizerCalendarFeeds: [],
-    trainerExternalBusyMonths: [],
     enrollmentRequests: [],
     notifications: [],
     appSettings: {
@@ -125,9 +118,51 @@ function createOrganizerStore(
   return store;
 }
 
-function mockSession(userId: string) {
-  const storage = new Map<string, string>();
-  storage.set("emandar:mock-auth-session", JSON.stringify({ userId }));
+function createTrainerOwnedStore(
+  actor: AppUser,
+  overrides: {
+    participantProfiles?: DemoStore["participantProfiles"];
+    groupMembers?: DemoStore["groupMembers"];
+  } = {},
+) {
+  const store = createStore({}, actor);
+  store.trainers = [
+    {
+      id: "trainer-1",
+      userId: actor.id,
+      slug: "krzysiu",
+      displayName: actor.displayName,
+      bio: "",
+      specialties: [],
+      locations: ["Warszawa"],
+      isVisible: true,
+      heroNote: "",
+      brandStatus: "official",
+    },
+  ];
+  store.groups = [
+    {
+      id: "group-1",
+      name: "Grupa oddechowa",
+      organizerId: "",
+      trainerId: "trainer-1",
+      trainerUserId: actor.id,
+      status: "active",
+      defaultEventType: "training",
+      defaultConfirmationLeadTimeDays: 7,
+      defaultJoinAudience: "new-people",
+      createdAt: "2026-04-01T10:00:00.000Z",
+    },
+  ];
+  store.participantProfiles = overrides.participantProfiles ?? [];
+  store.groupMembers = overrides.groupMembers ?? [];
+  return store;
+}
+
+function mockBrowserStorage(
+  initialEntries: Record<string, string> = {},
+) {
+  const storage = new Map<string, string>(Object.entries(initialEntries));
 
   vi.stubGlobal("window", {
     location: {
@@ -144,6 +179,14 @@ function mockSession(userId: string) {
     },
     setInterval: globalThis.setInterval.bind(globalThis),
     clearInterval: globalThis.clearInterval.bind(globalThis),
+  });
+
+  return storage;
+}
+
+function mockSession(userId: string) {
+  return mockBrowserStorage({
+    "emandar:mock-auth-session": JSON.stringify({ userId }),
   });
 }
 
@@ -376,6 +419,93 @@ describe("publishTrainingEvent", () => {
 });
 
 describe("addGroupMember", () => {
+  it("lets a trainer create their own group without an organizer profile", async () => {
+    const { createGroup } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-trainer-1",
+      role: "trainer",
+      roles: ["participant", "trainer"],
+      primaryRole: "trainer",
+      displayName: "Krzysiu",
+      trainerProfileId: "trainer-1",
+    });
+    const store = createStore({}, actor);
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: actor.id,
+        slug: "krzysiu",
+        displayName: actor.displayName,
+        bio: "",
+        specialties: [],
+        locations: ["Warszawa"],
+        isVisible: true,
+        heroNote: "",
+        brandStatus: "official",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      createGroup(
+        {
+          name: "Nowa grupa trenera",
+          trainerId: "trainer-1",
+          defaultEventType: "training",
+          defaultConfirmationLeadTimeDays: 7,
+          defaultJoinAudience: "new-people",
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      groupId: expect.any(String),
+    });
+
+    expect(mockedApi.getStore().groups[0]).toMatchObject({
+      name: "Nowa grupa trenera",
+      trainerId: "trainer-1",
+      trainerUserId: actor.id,
+      organizerId: "",
+    });
+  });
+
+  it("lets a trainer update their own group", async () => {
+    const { updateGroup } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-trainer-1",
+      role: "trainer",
+      roles: ["participant", "trainer"],
+      primaryRole: "trainer",
+      displayName: "Krzysiu",
+      trainerProfileId: "trainer-1",
+    });
+    const mockedApi = mockStoreFetch(createTrainerOwnedStore(actor));
+
+    await expect(
+      updateGroup(
+        {
+          groupId: "group-1",
+          name: "Grupa po zmianie",
+          notes: "Opis",
+          defaultEventType: "training",
+          defaultCapacity: 24,
+          defaultTags: ["oddech"],
+          defaultConfirmationLeadTimeDays: 5,
+          defaultJoinAudience: "new-people",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(mockedApi.getStore().groups[0]).toMatchObject({
+      id: "group-1",
+      name: "Grupa po zmianie",
+      defaultCapacity: 24,
+      defaultConfirmationLeadTimeDays: 5,
+    });
+  });
+
   it("reuses an existing participant profile found by phone without overwriting referral source", async () => {
     const { addGroupMember } = await import("./mockRepository");
     const actor = createActor({
@@ -614,6 +744,44 @@ describe("addGroupMember", () => {
     const futureOpenEvent = updatedStore.trainingEvents.find((item) => item.id === "event-future-open");
     expect(futureOpenEvent?.enrolledCount).toBe(0);
   });
+
+  it("lets a trainer add members to their own group", async () => {
+    const { addGroupMember } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-trainer-1",
+      role: "trainer",
+      roles: ["participant", "trainer"],
+      primaryRole: "trainer",
+      displayName: "Krzysiu",
+      trainerProfileId: "trainer-1",
+    });
+    const mockedApi = mockStoreFetch(createTrainerOwnedStore(actor));
+
+    await expect(
+      addGroupMember(
+        {
+          groupId: "group-1",
+          displayName: "Karolina Zielinska",
+          phone: "+48 600 333 444",
+          referralSource: "Instagram",
+          notes: "Lubi soboty",
+          priority: "stali",
+        },
+        actor,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      memberId: "group-1__participant-48600333444",
+      participantProfileId: "participant-48600333444",
+    });
+
+    expect(mockedApi.getStore().groupMembers?.[0]).toMatchObject({
+      groupId: "group-1",
+      trainerId: "trainer-1",
+      organizerId: "",
+      participantProfileId: "participant-48600333444",
+    });
+  });
 });
 
 describe("submitEnrollment", () => {
@@ -752,6 +920,141 @@ describe("ensurePhoneParticipantProfile", () => {
   });
 });
 
+describe("phone pre-auth registration flow", () => {
+  it("logs in an existing user after SMS confirmation without creating another account", async () => {
+    const storage = mockBrowserStorage();
+    const store = createStore(
+      {},
+      {
+        id: "user-existing",
+        role: "participant",
+        roles: ["participant"],
+        primaryRole: "participant",
+        displayName: "Anna Test",
+        phone: "+48 500 600 700",
+        status: "active",
+      },
+    );
+    mockStoreFetch(store);
+
+    const { confirmSmsCode, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 500 600 700");
+
+    await expect(confirmSmsCode("+48 500 600 700", "123456")).resolves.toEqual({
+      status: "existing-account",
+      userId: "user-existing",
+      phone: "+48 500 600 700",
+    });
+
+    expect(storage.get("emandar:mock-auth-session")).toBe(
+      JSON.stringify({ userId: "user-existing" }),
+    );
+    expect(storage.has("emandar:mock-verified-phone-preauth")).toBe(false);
+  });
+
+  it("stores a verified phone without creating a user or session when the account is missing", async () => {
+    const storage = mockBrowserStorage();
+    const store = createStore();
+    store.users = [];
+    const mockedApi = mockStoreFetch(store);
+
+    const { confirmSmsCode, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 501 602 703");
+
+    await expect(confirmSmsCode("+48 501 602 703", "123456")).resolves.toEqual({
+      status: "missing-account",
+      phone: "+48 501 602 703",
+    });
+
+    expect(storage.has("emandar:mock-auth-session")).toBe(false);
+    expect(storage.get("emandar:mock-verified-phone-preauth")).toContain("+48 501 602 703");
+    expect(mockedApi.getStore().users).toHaveLength(0);
+  });
+
+  it("creates the account only on participant registration and signs the user in", async () => {
+    const storage = mockBrowserStorage();
+    const store = createStore();
+    store.users = [];
+    const mockedApi = mockStoreFetch(store);
+
+    const { confirmSmsCode, registerParticipant, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 511 622 733");
+
+    await expect(confirmSmsCode("+48 511 622 733", "123456")).resolves.toEqual({
+      status: "missing-account",
+      phone: "+48 511 622 733",
+    });
+
+    expect(mockedApi.getStore().users).toHaveLength(0);
+
+    await expect(
+      registerParticipant({
+        displayName: "Kasia Test",
+        phone: "+48 511 622 733",
+        notes: "Kilka słów o sobie",
+        avatarFile: null,
+        trainingDataConsentAccepted: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.users).toHaveLength(1);
+    expect(updatedStore.users[0]).toMatchObject({
+      displayName: "Kasia Test",
+      phone: "+48 511 622 733",
+      participantProfileId: "participant-48511622733",
+    });
+    expect(storage.get("emandar:mock-auth-session")).toBe(
+      JSON.stringify({ userId: updatedStore.users[0]?.id }),
+    );
+    expect(storage.has("emandar:mock-verified-phone-preauth")).toBe(false);
+  });
+
+  it("links an existing participant profile instead of duplicating it during registration", async () => {
+    const store = createStore();
+    store.users = [];
+    store.participantProfiles = [
+      {
+        id: "participant-48522633744",
+        linkedUserId: null,
+        displayName: "Profil z grupy",
+        firstName: "Profil",
+        lastName: "Z grupy",
+        phone: "+48 522 633 744",
+        phoneLookupKey: "48522633744",
+        confirmationStatus: "unconfirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+        managerOrganizerIds: ["organizer-1"],
+        managerOrganizerUserIds: ["user-organizer-1"],
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+    mockBrowserStorage();
+
+    const { confirmSmsCode, registerParticipant, requestSmsCode } = await import("./mockRepository");
+    await requestSmsCode("+48 522 633 744");
+    await confirmSmsCode("+48 522 633 744", "123456");
+
+    await registerParticipant({
+      displayName: "Maria Nowa",
+      phone: "+48 522 633 744",
+      notes: "Opis uczestniczki",
+      avatarFile: null,
+      trainingDataConsentAccepted: true,
+    });
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.users).toHaveLength(1);
+    expect(updatedStore.participantProfiles).toHaveLength(1);
+    expect(updatedStore.participantProfiles[0]).toMatchObject({
+      id: "participant-48522633744",
+      linkedUserId: updatedStore.users[0]?.id,
+      displayName: "Maria Nowa",
+    });
+  });
+});
+
 describe("manageEnrollmentRequest", () => {
   it("links accepted grouped enrollments to an invited event participant", async () => {
     const { manageEnrollmentRequest } = await import("./mockRepository");
@@ -869,6 +1172,12 @@ describe("manageEnrollmentRequest", () => {
       participantProfileId: "participant-1",
       status: "invited",
       source: "public-form",
+    });
+    expect(updatedStore.trainingEvents[0]).toMatchObject({
+      id: "event-group",
+      assignedCount: 1,
+      enrolledCount: 0,
+      reserveCount: 0,
     });
   });
 
@@ -994,6 +1303,167 @@ describe("manageEnrollmentRequest", () => {
       participantProfileId: "participant-1",
       status: "invited",
       source: "public-form",
+    });
+    expect(updatedStore.trainingEvents[0]).toMatchObject({
+      id: "event-group-organizer",
+      assignedCount: 1,
+      enrolledCount: 0,
+      reserveCount: 0,
+    });
+  });
+
+  it("moves accepted grouped enrollments to reserve automatically when the roster is full", async () => {
+    const { manageEnrollmentRequest } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const store = createStore(
+      {
+        id: "event-group-reserve",
+        title: "Szkolenie grupowe",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        brandStatus: "official",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+        capacity: 1,
+      },
+      actor,
+    );
+    store.groups = [
+      {
+        id: "group-1",
+        name: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        status: "active",
+        defaultEventType: "training",
+        defaultConfirmationLeadTimeDays: 7,
+        defaultJoinAudience: "new-people",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.organizers = [
+      {
+        id: "organizer-1",
+        userId: "user-organizer-1",
+        displayName: "Anita",
+        description: "Opis",
+        isVisible: true,
+      },
+    ];
+    store.trainers = [
+      {
+        id: "trainer-1",
+        userId: "user-trainer-1",
+        slug: "jacek",
+        displayName: "Jacek",
+        bio: "Bio",
+        specialties: [],
+        locations: ["Łódź"],
+        isVisible: true,
+        heroNote: "Hero",
+        brandStatus: "official",
+      },
+    ];
+    store.participantProfiles = [
+      {
+        id: "participant-1",
+        linkedUserId: null,
+        displayName: "Anna Nowak",
+        firstName: "Anna",
+        lastName: "Nowak",
+        phone: "+48 605 100 304",
+        phoneLookupKey: "48605100304",
+        confirmationStatus: "confirmed",
+        status: "active",
+        createdAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    store.enrollmentRequests = [
+      {
+        id: "enrollment-organizer-reserve",
+        eventId: "event-group-reserve",
+        trainerId: "trainer-1",
+        organizerId: "organizer-1",
+        participantProfileId: "participant-1",
+        trainerUserId: "user-trainer-1",
+        organizerUserId: "user-organizer-1",
+        intent: "participating",
+        imieNazwisko: "Anna Nowak",
+        telefon: "+48 605 100 304",
+        polecenieOdKogo: "",
+        wiadomosc: "Chcę dołączyć",
+        photoStatus: "pending",
+        finalStatus: "pending",
+        participantStatus: "active",
+        createdAt: "2026-04-02T12:00:00.000Z",
+      },
+    ];
+    store.eventParticipants = [
+      {
+        id: "event-group-reserve__participant-existing",
+        eventId: "event-group-reserve",
+        eventTitle: "Szkolenie grupowe",
+        groupId: "group-1",
+        groupName: "EnergyTeam x1",
+        organizerId: "organizer-1",
+        organizerUserId: "user-organizer-1",
+        trainerId: "trainer-1",
+        trainerUserId: "user-trainer-1",
+        participantProfileId: "participant-existing",
+        participantDisplayName: "Miejsce zajęte",
+        participantPhone: "+48 605 100 399",
+        participantUserId: null,
+        priority: "stali",
+        status: "invited",
+        source: "auto-core",
+        invitedAt: "2026-04-01T10:00:00.000Z",
+        updatedAt: "2026-04-01T10:00:00.000Z",
+      },
+    ];
+    const mockedApi = mockStoreFetch(store);
+
+    await expect(
+      manageEnrollmentRequest(
+        {
+          requestId: "enrollment-organizer-reserve",
+          decision: "accepted",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    const updatedStore = mockedApi.getStore();
+    expect(updatedStore.enrollmentRequests[0]).toMatchObject({
+      id: "enrollment-organizer-reserve",
+      finalStatus: "accepted",
+      eventParticipantId: "event-group-reserve__participant-1",
+      participantStatus: "active",
+    });
+    expect(updatedStore.eventParticipants.find((item) => item.id === "event-group-reserve__participant-1"))
+      .toMatchObject({
+      id: "event-group-reserve__participant-1",
+      eventId: "event-group-reserve",
+      participantProfileId: "participant-1",
+      status: "rezerwowy",
+      source: "public-form",
+    });
+    expect(updatedStore.trainingEvents[0]).toMatchObject({
+      id: "event-group-reserve",
+      assignedCount: 1,
+      enrolledCount: 0,
+      reserveCount: 1,
     });
   });
 
@@ -1775,7 +2245,7 @@ describe("organizer profile updates", () => {
 });
 
 describe("group event roster defaults", () => {
-  it("creates a full invited roster from the group when a grouped training event is created", async () => {
+  it("creates an invited roster from eligible group members when a grouped training event is created", async () => {
     const { createTrainingEvent } = await import("./mockRepository");
     const actor = createActor({
       id: "user-organizer-1",
@@ -1899,9 +2369,11 @@ describe("group event roster defaults", () => {
     expect(createdEvent).toMatchObject({
       groupId: "group-1",
       groupName: "Grupa oddechowa",
+      assignedCount: 1,
       enrolledCount: 0,
+      reserveCount: 0,
     });
-    expect(updatedStore.eventParticipants).toHaveLength(2);
+    expect(updatedStore.eventParticipants).toHaveLength(1);
     expect(updatedStore.eventParticipants.map((item) => ({
       participantProfileId: item.participantProfileId,
       priority: item.priority,
@@ -1915,17 +2387,11 @@ describe("group event roster defaults", () => {
           status: "invited",
           source: "auto-core",
         },
-        {
-          participantProfileId: "participant-2",
-          priority: "rezerwowi",
-          status: "invited",
-          source: "auto-core",
-        },
       ]),
     );
   });
 
-  it("counts only confirmed participants in enrolledCount for grouped events", async () => {
+  it("counts assigned, confirmed, and reserve participants separately for grouped events", async () => {
     const { updateEventParticipantStatus } = await import("./mockRepository");
     const actor = createActor();
     const store = createStore(
@@ -1989,6 +2455,21 @@ describe("group event roster defaults", () => {
     await expect(
       updateEventParticipantStatus(
         {
+          eventParticipantId: "event-group-count__participant-2",
+          status: "rezerwowy",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    let updatedStore = mockedApi.getStore();
+    expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(1);
+
+    await expect(
+      updateEventParticipantStatus(
+        {
           eventParticipantId: "event-group-count__participant-1",
           status: "confirmed",
         },
@@ -1996,8 +2477,25 @@ describe("group event roster defaults", () => {
       ),
     ).resolves.toBeUndefined();
 
-    let updatedStore = mockedApi.getStore();
+    updatedStore = mockedApi.getStore();
     expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(1);
+
+    await expect(
+      updateEventParticipantStatus(
+        {
+          eventParticipantId: "event-group-count__participant-2",
+          status: "invited",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    updatedStore = mockedApi.getStore();
+    expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(2);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(0);
 
     await expect(
       updateEventParticipantStatus(
@@ -2011,6 +2509,8 @@ describe("group event roster defaults", () => {
 
     updatedStore = mockedApi.getStore();
     expect(updatedStore.trainingEvents[0]?.enrolledCount).toBe(0);
+    expect(updatedStore.trainingEvents[0]?.assignedCount).toBe(1);
+    expect(updatedStore.trainingEvents[0]?.reserveCount).toBe(0);
   });
 
   it("does not restore the previous user profile after sign-out", async () => {
@@ -2052,5 +2552,50 @@ describe("group event roster defaults", () => {
 
     stopUserProfile();
     stopAuth();
+  });
+
+  it("creates an official group training without requiring summary or description", async () => {
+    const { createTrainingEvent } = await import("./mockRepository");
+    const actor = createActor({
+      id: "user-organizer-1",
+      role: "organizer",
+      roles: ["participant", "organizer"],
+      primaryRole: "organizer",
+      organizerProfileId: "organizer-1",
+    });
+    const mockedApi = mockStoreFetch(createOrganizerStore(actor));
+
+    await expect(
+      createTrainingEvent(
+        {
+          trainerId: "trainer-1",
+          groupId: "group-1",
+          summary: "",
+          description: "",
+          type: "Szkolenie",
+          eventTypeSystem: "training",
+          scheduleDays: [
+            {
+              startsAt: "2099-06-10T08:00:00.000Z",
+              endsAt: "2099-06-10T14:00:00.000Z",
+            },
+          ],
+          location: "",
+          capacity: 20,
+          minimumParticipants: 10,
+          confirmationLeadTimeDays: 7,
+          isPublished: true,
+          brandStatus: "official",
+        },
+        actor,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(mockedApi.getStore().trainingEvents[0]).toMatchObject({
+      groupId: "group-1",
+      summary: "",
+      description: "",
+      title: "Grupa oddechowa",
+    });
   });
 });

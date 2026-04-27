@@ -68,3 +68,18 @@
 - When multiple agents work in parallel, each agent must use a separate branch and avoid sharing a working branch.
 - Before starting work, verify the current branch and create a new Git Flow branch if needed.
 - Before finishing work, merge into the correct long-lived branch instead of leaving changes only on an agent branch.
+
+## Locked Follow-Up: roster / rezerwowi / komunikacja
+
+- Do not redesign or "tidy up" the participant roster, reserve list, participant tabs, or reserve-list communication flows until the following package is implemented together.
+- The intended participant-facing split must be:
+  - `oczekuję`
+  - `rezerwowi`
+  - `uczestniczę`
+  - `organizuję` as a separate tab
+- The intended organizer/system follow-up must include:
+  - a clearer logical handling of the reserve list
+  - a communication module for reserve-list messaging
+  - a bulk message to the full reserve list when there is no space for a given group/event
+  - a manual notification flow for a closed roster / reserve-list outcome
+- Treat this as a product lock: until that full follow-up is implemented, avoid partial UX changes in this area that would make the current roster/request/reserve behavior diverge from the target structure above.

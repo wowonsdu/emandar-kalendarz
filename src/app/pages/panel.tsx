@@ -42,21 +42,12 @@ import {
   getOrganizerOfficialDashboardModel,
   getParticipantDashboardModel,
   getParticipantEnrollmentViewRecords,
+  type ParticipantEnrollmentViewRecord,
   type ParticipantGroupEventRecord,
   type ParticipantPendingEnrollmentRequestRecord,
 } from "@/app/dashboard";
 import { CommunityEventCard } from "@/app/components/community-event-card";
-import {
-  OrganizerCalendarFeedsPanel,
-  OrganizerGoogleCalendarExportPanel,
-  OrganizerMatchedSlotsPanel,
-  OrganizerTrainingDraftEditorPanel,
-  OrganizerTrainingDraftListPanel,
-  type OrganizerMatchedSlotView,
-  type OrganizerTrainingDraftFormValues,
-  type OrganizerTrainingDraftListItem,
-  TrainerAvailabilityWorkspace,
-} from "@/app/components/panel";
+import { saveOrganizerProfiles } from "@/app/pages/organizer-profile-flow";
 import { AvatarMedia } from "@/app/components/avatar-media";
 import {
   Collapsible,
@@ -67,6 +58,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/app/components/ui/dialog";
@@ -80,7 +72,6 @@ import {
   aggregateEventCapacityStats,
   buildPhoneHref,
   canApproveEnrollmentRequest,
-  buildTrainerFreeDaySlices,
   canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
@@ -89,6 +80,8 @@ import {
   getEventCollaborationStatusLabel,
   getAvailablePlaces,
   getEventFillRate,
+  getEventOverflowCount,
+  getEventParticipantCount,
   getHighestRole,
   getRoleLabel,
   getTrainingJoinAudienceLabel,
@@ -97,6 +90,7 @@ import {
   getTrainingEventStatusLabel,
   hasModeratorAccess,
   hasInheritedRole,
+  isOfficialGroupTrainingEvent,
   isTrainingEventCollaborationAccepted,
   isTrainingEventArchived,
   isSelfManagedTrainingEvent,
@@ -138,10 +132,8 @@ import type {
   PhotoMode,
   TrainerProfile,
   TrainerOrganizerRelation,
-  TrainerFreeDaySliceBucket,
   TrainingEventImage,
   TrainingJoinAudienceSetting,
-  TrainerCalendarFeedProvider,
   TrainingEvent,
   TrainingEventScheduleDay,
   TrainingEventStatus,
@@ -171,34 +163,6 @@ function formatDateTime(date: string) {
     minute: "2-digit",
   }).format(new Date(date));
 }
-
-function formatDurationHours(hours: number) {
-  if (Number.isInteger(hours)) {
-    return `${hours} h`;
-  }
-
-  return `${hours.toFixed(1).replace(".", ",")} h`;
-}
-
-function getFreeSliceBucketLabel(bucket: TrainerFreeDaySliceBucket) {
-  switch (bucket) {
-    case "2-days":
-      return "2 dni";
-    case "3-days":
-      return "3 dni";
-    case "4-plus-days":
-      return "Wiecej niz 3 dni";
-    default:
-      return "1 dzien";
-  }
-}
-
-const FREE_SLICE_BUCKETS = [
-  "1-day",
-  "2-days",
-  "3-days",
-  "4-plus-days",
-] as const satisfies TrainerFreeDaySliceBucket[];
 
 const PROFILE_AVATAR_ASPECT_RATIO = 4 / 5;
 
@@ -330,59 +294,6 @@ function buildAvatarCropSettings(draft: AvatarCropDraft): AvatarCropSettings | u
   };
 }
 
-function getAvailabilityHorizonEnd() {
-  const end = new Date();
-  end.setUTCMinutes(0, 0, 0);
-  end.setUTCFullYear(end.getUTCFullYear() + 3);
-  return end.toISOString();
-}
-
-function createOrganizerDraftFormValuesFromSlot(
-  slot: OrganizerMatchedSlotView,
-): OrganizerTrainingDraftFormValues {
-  return {
-    groupId: "",
-    sharedSlotId: slot.id,
-    title: `${slot.trainerName} · ${slot.location}`,
-    summary: "",
-    description: "",
-    type: "Warsztat stacjonarny",
-    location: slot.location,
-    capacity: 20,
-    minimumParticipants: 10,
-    status: "active",
-    publishAutomaticallyAfterTrainerApproval: false,
-    tagsText: "",
-    scheduleDays: [
-      {
-        startsAt: slot.startsAt,
-        endsAt: slot.endsAt,
-      },
-    ],
-  };
-}
-
-function createOrganizerDraftFormValuesFromEvent(
-  event: TrainingEvent,
-): OrganizerTrainingDraftFormValues {
-  return {
-    groupId: event.groupId ?? "",
-    sharedSlotId: event.sharedSlotId ?? "",
-    title: event.title,
-    summary: event.summary,
-    description: event.description,
-    type: event.type,
-    location: event.location,
-    capacity: event.capacity,
-    minimumParticipants: resolveMinimumParticipants(event),
-    status: resolveTrainingEventStatus(event.status),
-    publishAutomaticallyAfterTrainerApproval:
-      event.publishAutomaticallyAfterTrainerApproval === true,
-    tagsText: (event.tags ?? []).join(", "),
-    scheduleDays: getTrainingEventScheduleDays(event),
-  };
-}
-
 type GroupFormState = {
   name: string;
   trainerId: string;
@@ -446,6 +357,8 @@ type EventManagementSettingsDraft = {
   location: string;
   eventImages: TrainingEventImage[];
   useEventImageAsCover: boolean;
+  summary: string;
+  description: string;
   enrollmentPhotoRequirement: "default" | "required" | "optional";
   joinAudience: "existing-practitioners" | "new-people";
   tags: string;
@@ -505,6 +418,60 @@ function createEmptyTrainingEventFormState(): TrainingEventFormState {
     confirmationLeadTimeDays: "5",
     joinAudience: "new-people",
     isPublished: true,
+  };
+}
+
+export function getGroupTrainingCreatePath(groupId: string) {
+  const params = new URLSearchParams({
+    groupId,
+    returnToGroupId: groupId,
+  });
+
+  return `/panel/szkolenia/utworz?${params.toString()}`;
+}
+
+export function getLatestGroupTrainingCopy(
+  events: TrainingEvent[],
+  groupId: string,
+) {
+  const latestGroupEvent = sortEventsByDate(
+    events.filter(
+      (event) =>
+        event.groupId === groupId &&
+        !isCommunityBrandStatus(event.brandStatus) &&
+        !isTrainingEventArchived(event),
+    ),
+  ).at(-1);
+
+  return {
+    summary: latestGroupEvent?.summary ?? "",
+    description: latestGroupEvent?.description ?? "",
+  };
+}
+
+export function applyOfficialGroupDefaultsToTrainingForm(
+  previous: TrainingEventFormState,
+  group: Group | null,
+  events: TrainingEvent[],
+): TrainingEventFormState {
+  if (!group) {
+    return previous;
+  }
+
+  const latestGroupCopy = getLatestGroupTrainingCopy(events, group.id);
+
+  return {
+    ...previous,
+    groupId: group.id,
+    trainerId: group.trainerId,
+    summary: latestGroupCopy.summary,
+    description: latestGroupCopy.description,
+    location: group.defaultLocation ?? "",
+    capacity:
+      typeof group.defaultCapacity === "number" ? String(group.defaultCapacity) : previous.capacity,
+    confirmationLeadTimeDays: String(group.defaultConfirmationLeadTimeDays ?? 5),
+    joinAudience: group.defaultJoinAudience ?? previous.joinAudience,
+    tags: group.defaultTags?.length ? group.defaultTags.join(", ") : "",
   };
 }
 
@@ -643,62 +610,44 @@ export function splitGroupsByArchivedStatus(groups: Group[]) {
   };
 }
 
+export function getManagedGroupsForUser(input: {
+  currentUser: Pick<AppUser, "role" | "roles" | "primaryRole">;
+  groups: Group[];
+  organizerProfileId?: string | null;
+  trainerProfileId?: string | null;
+}) {
+  const managedGroupIds = new Set<string>();
+  const managedGroups: Group[] = [];
+
+  for (const group of input.groups) {
+    const isOrganizerOwned =
+      Boolean(input.organizerProfileId) && group.organizerId === input.organizerProfileId;
+    const isTrainerOwned =
+      hasInheritedRole(input.currentUser, "trainer") &&
+      Boolean(input.trainerProfileId) &&
+      group.trainerId === input.trainerProfileId;
+
+    if (!isOrganizerOwned && !isTrainerOwned) {
+      continue;
+    }
+
+    if (managedGroupIds.has(group.id)) {
+      continue;
+    }
+
+    managedGroupIds.add(group.id);
+    managedGroups.push(group);
+  }
+
+  return sortGroupsByStatusAndName(managedGroups);
+}
+
 function getParticipantConfirmationLabel(profile?: ParticipantProfile | null) {
   if (!profile) {
     return "Brak profilu";
   }
 
   return profile.confirmationStatus === "confirmed" ? "Potwierdzony" : "Niepotwierdzony";
-}
-
-const ANNUAL_PLANNING_INTERVALS = [4, 6, 8, 10, 12] as const;
-
-function buildTrainerTravelWarningForSlot(
-  slot: OrganizerMatchedSlotView,
-  events: TrainingEvent[],
-) {
-  const relevantEvents = events
-    .filter(
-      (event) =>
-        event.trainerId === slot.trainerId &&
-        !isTrainingEventArchived(event) &&
-        resolveTrainingEventWorkflowStatus(event) !== "draft-requested",
-    )
-    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
-  const previousEvent = [...relevantEvents]
-    .filter((event) => new Date(event.endsAt).getTime() <= new Date(slot.startsAt).getTime())
-    .sort((left, right) => new Date(right.endsAt).getTime() - new Date(left.endsAt).getTime())[0];
-  const nextEvent = relevantEvents
-    .filter((event) => new Date(event.startsAt).getTime() >= new Date(slot.endsAt).getTime())
-    .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime())[0];
-
-  const warnings: string[] = [];
-
-  if (previousEvent) {
-    const gapHours =
-      Math.round(
-        ((new Date(slot.startsAt).getTime() - new Date(previousEvent.endsAt).getTime()) /
-          (1000 * 60 * 60)) *
-          10,
-      ) / 10;
-    warnings.push(
-      `Poprzednie szkolenie: ${previousEvent.location} do ${formatDateTime(previousEvent.endsAt)}. Przerwa: ${gapHours} h.`,
-    );
-  }
-
-  if (nextEvent) {
-    const gapHours =
-      Math.round(
-        ((new Date(nextEvent.startsAt).getTime() - new Date(slot.endsAt).getTime()) /
-          (1000 * 60 * 60)) *
-          10,
-      ) / 10;
-    warnings.push(
-      `Następne szkolenie: ${nextEvent.location} od ${formatDateTime(nextEvent.startsAt)}. Przerwa: ${gapHours} h.`,
-    );
-  }
-
-  return warnings.join(" ");
 }
 
 function resolveBrandStatus(
@@ -962,7 +911,6 @@ function applyCommunityEventEditorValuesToTrainingForm(
 
 function getCommunityEventEditorValuesFromManagementDraft(
   draft: EventManagementSettingsDraft,
-  event: TrainingEvent,
 ): CommunityEventEditorValues {
   return {
     status: draft.status,
@@ -974,8 +922,8 @@ function getCommunityEventEditorValuesFromManagementDraft(
     eventImages: draft.eventImages,
     useEventImageAsCover: draft.useEventImageAsCover,
     tags: draft.tags,
-    summary: event.summary,
-    description: event.description,
+    summary: draft.summary,
+    description: draft.description,
     firstDayDate: draft.firstDayDate,
     scheduleDays: draft.scheduleDays,
   };
@@ -996,6 +944,8 @@ function applyCommunityEventEditorValuesToManagementDraft(
     eventImages: values.eventImages,
     useEventImageAsCover: values.useEventImageAsCover,
     tags: values.tags,
+    summary: values.summary,
+    description: values.description,
     firstDayDate: values.firstDayDate,
     scheduleDays: values.scheduleDays,
   };
@@ -1144,17 +1094,17 @@ function getParticipantGroupTransferOptions(
         return false;
       }
 
-      if (
-        isTrainingEventArchived(event) ||
-        isEventFinished(event) ||
-        !event.isPublished ||
-        !isTrainingEventCollaborationAccepted(event) ||
-        Boolean(event.rosterFinalizedAt) ||
-        new Date(event.startsAt).getTime() <= Date.now() ||
-        event.capacity <= event.enrolledCount
-      ) {
-        return false;
-      }
+        if (
+          isTrainingEventArchived(event) ||
+          isEventFinished(event) ||
+          !event.isPublished ||
+          !isTrainingEventCollaborationAccepted(event) ||
+          Boolean(event.rosterFinalizedAt) ||
+          new Date(event.startsAt).getTime() <= Date.now() ||
+          getEventParticipantCount(event) >= event.capacity
+        ) {
+          return false;
+        }
 
       const eligiblePriorities =
         event.eligibleGroupPriorities?.length && event.eligibleGroupPriorities.length > 0
@@ -1253,7 +1203,7 @@ function ParticipantGroupEventCard({
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-white">
-            {record.eventParticipant.status}
+            {getEventParticipantStatusLabel(record.eventParticipant.status)}
           </span>
           <span className="rounded-full border border-brand-line px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
             {getGroupPriorityLabel(record.eventParticipant.priority)}
@@ -1285,9 +1235,13 @@ function ParticipantGroupEventCard({
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-brand-muted">
         <span>{getPanelScheduleRangeLabel(record.event)}</span>
         <span>{record.event.location}</span>
-        <span>
-          {record.event.enrolledCount}/{record.event.capacity} miejsc
-        </span>
+        <span>{getEventParticipantCountLabel(record.event)} miejsc</span>
+        {getEventConfirmedCountLabel(record.event) ? (
+          <span>{getEventConfirmedCountLabel(record.event)}</span>
+        ) : null}
+        {getEventCapacityOverflowLabel(record.event) ? (
+          <span>{getEventCapacityOverflowLabel(record.event)}</span>
+        ) : null}
       </div>
 
       {canCancelParticipation ? (
@@ -1415,9 +1369,13 @@ function ParticipantPendingEnrollmentRequestCard({
       <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-brand-muted">
         <span>{getPanelScheduleRangeLabel(record.event)}</span>
         <span>{record.event.location}</span>
-        <span>
-          {record.event.enrolledCount}/{record.event.capacity} miejsc
-        </span>
+        <span>{getEventParticipantCountLabel(record.event)} miejsc</span>
+        {getEventConfirmedCountLabel(record.event) ? (
+          <span>{getEventConfirmedCountLabel(record.event)}</span>
+        ) : null}
+        {getEventCapacityOverflowLabel(record.event) ? (
+          <span>{getEventCapacityOverflowLabel(record.event)}</span>
+        ) : null}
       </div>
 
       <p className="mt-5 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm text-brand-muted">
@@ -1595,6 +1553,10 @@ function getDashboardChartHeight(itemCount: number) {
   return Math.max(180, itemCount * 48);
 }
 
+function getCommunityEventEditPath(eventId: string) {
+  return `/panel/wydarzenia-spolecznosci/${eventId}/edytuj`;
+}
+
 function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
   switch (status) {
     case "accepted":
@@ -1610,6 +1572,7 @@ function getEnrollmentFinalStatusLabel(status: EnrollmentFinalStatus) {
 
 const MANAGEABLE_EVENT_PARTICIPANT_STATUSES = [
   "invited",
+  "rezerwowy",
   "confirmed",
   "declined",
 ] as const satisfies EventParticipantStatus[];
@@ -1617,23 +1580,75 @@ const MANAGEABLE_EVENT_PARTICIPANT_STATUSES = [
 const EVENT_PARTICIPANT_STATUS_ORDER: Record<EventParticipantStatus, number> = {
   confirmed: 0,
   invited: 1,
-  declined: 2,
-  removed: 3,
+  rezerwowy: 2,
+  declined: 3,
+  removed: 4,
 };
 
 type GroupEventRosterSectionKey = GroupMemberPriority | "joining";
+type ManagedOfficialTrainingRosterSectionKey = "assigned" | "reserve" | "inactive";
 
 function getEventParticipantStatusLabel(status: EventParticipantStatus) {
   switch (status) {
     case "confirmed":
       return "Potwierdził";
+    case "rezerwowy":
+      return "Rezerwowy";
     case "declined":
       return "Odrzucił";
     case "removed":
       return "Usunięty";
-    default:
+    case "invited":
       return "Zaproszony";
+    default:
+      return status;
   }
+}
+
+function getEventParticipantCountLabel(
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  return `${getEventParticipantCount(event)}/${event.capacity}`;
+}
+
+function getEventCapacityOverflowLabel(
+  event: Pick<TrainingEvent, "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId" | "assignedCount">>,
+) {
+  const overflowCount = getEventOverflowCount(event);
+  return overflowCount > 0 ? `Nad limit: ${overflowCount}` : null;
+}
+
+function getEventConfirmedCountLabel(
+  event: Pick<TrainingEvent, "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "brandStatus" | "groupId">>,
+) {
+  return isOfficialGroupTrainingEvent(event) ? `Potwierdzeni: ${event.enrolledCount}` : null;
+}
+
+function resolveEnrollmentAcceptanceTargetStatus(
+  event: Pick<TrainingEvent, "brandStatus" | "groupId" | "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "assignedCount">>,
+) {
+  if (!isOfficialGroupTrainingEvent(event)) {
+    return event.groupId ? "invited" : "confirmed";
+  }
+
+  return getEventParticipantCount(event) < event.capacity ? "invited" : "rezerwowy";
+}
+
+function getEnrollmentAcceptanceHint(
+  event: Pick<TrainingEvent, "brandStatus" | "groupId" | "capacity" | "enrolledCount"> &
+    Partial<Pick<TrainingEvent, "assignedCount">>,
+) {
+  if (!isOfficialGroupTrainingEvent(event)) {
+    return null;
+  }
+
+  return resolveEnrollmentAcceptanceTargetStatus(event) === "rezerwowy"
+    ? "Po potwierdzeniu osoba trafi na listę rezerwowych."
+    : "Po potwierdzeniu osoba trafi na listę uczestników szkolenia.";
 }
 
 function getEventParticipantSourceLabel(source: EventParticipant["source"]) {
@@ -1653,6 +1668,19 @@ function getGroupEventRosterSectionLabel(section: GroupEventRosterSectionKey) {
   }
 
   return getGroupPriorityLabel(section);
+}
+
+function getManagedOfficialTrainingRosterSectionLabel(
+  section: ManagedOfficialTrainingRosterSectionKey,
+) {
+  switch (section) {
+    case "assigned":
+      return "Lista uczestników";
+    case "reserve":
+      return "Lista rezerwowych";
+    default:
+      return "Poza listą";
+  }
 }
 
 function sortGroupEventParticipantsByStatusAndName(participants: EventParticipant[]) {
@@ -1699,17 +1727,61 @@ function buildGroupEventRosterSections(
     .filter((section) => section.participants.length > 0);
 }
 
-function parseGroupMemberPriorityPromptValue(value: string | null) {
-  const normalized = value?.trim().toLowerCase();
-  if (
-    normalized === "stali" ||
-    normalized === "regularni" ||
-    normalized === "rezerwowi"
-  ) {
-    return normalized as GroupMemberPriority;
-  }
+function buildManagedOfficialTrainingRosterSections(
+  participants: EventParticipant[],
+): ManagedEventParticipantSection[] {
+  const buckets: Record<ManagedOfficialTrainingRosterSectionKey, EventParticipant[]> = {
+    assigned: [],
+    reserve: [],
+    inactive: [],
+  };
 
-  return null;
+  participants.forEach((participant) => {
+    if (participant.status === "removed" || participant.status === "declined") {
+      buckets.inactive.push(participant);
+      return;
+    }
+
+    if (participant.status === "rezerwowy") {
+      buckets.reserve.push(participant);
+      return;
+    }
+
+    buckets.assigned.push(participant);
+  });
+
+  return (["assigned", "reserve", "inactive"] as const)
+    .map((sectionKey) => ({
+      key: sectionKey,
+      title: getManagedOfficialTrainingRosterSectionLabel(sectionKey),
+      participants: sortGroupEventParticipantsByStatusAndName(buckets[sectionKey]),
+    }))
+    .filter((section) => section.participants.length > 0);
+}
+
+type AcceptedRequestGroupDialogDraft = {
+  priority: GroupMemberPriority;
+  notes: string;
+  syncFutureEvents: boolean;
+};
+
+type AcceptedRequestGroupAssignmentTarget = {
+  groupId: string;
+  participantProfileId: string;
+  participantName: string;
+  futureOpenGroupEventsCount: number;
+};
+
+type AcceptedRequestGroupDialogSession = AcceptedRequestGroupAssignmentTarget & {
+  draft: AcceptedRequestGroupDialogDraft;
+};
+
+export function createAcceptedRequestGroupDialogDraft(): AcceptedRequestGroupDialogDraft {
+  return {
+    priority: "regularni",
+    notes: "",
+    syncFutureEvents: false,
+  };
 }
 
 function getFutureOpenGroupEvents(
@@ -1742,70 +1814,305 @@ function hasActiveGroupMember(
   );
 }
 
-async function maybeAddAcceptedRequestToGroup({
+function getAcceptedRequestGroupAssignmentTarget({
   request,
   event,
   store,
-  addGroupMember,
 }: {
-  request: EnrollmentRequest;
+  request: Pick<EnrollmentRequest, "participantProfileId" | "imieNazwisko">;
   event: Pick<TrainingEvent, "id" | "groupId">;
   store: Pick<DemoStore, "groupMembers" | "trainingEvents">;
-  addGroupMember: (
-    input: {
-      groupId: string;
-      participantProfileId: string;
-      priority: GroupMemberPriority;
-      syncFutureEvents?: boolean;
-    },
-  ) => Promise<void>;
 }) {
   if (!event.groupId || !request.participantProfileId) {
-    return false;
+    return null;
   }
 
   if (hasActiveGroupMember(store, event.groupId, request.participantProfileId)) {
-    return false;
-  }
-
-  const shouldAddToGroup = window.confirm(
-    "Osoba trafiła na roster wydarzenia. Dopisać ją też do grupy?",
-  );
-  if (!shouldAddToGroup) {
-    return false;
-  }
-
-  const priorityValue = window.prompt(
-    "Podaj rangę w grupie: stali, regularni albo rezerwowi.",
-    "regularni",
-  );
-  const priority = parseGroupMemberPriorityPromptValue(priorityValue);
-  if (!priority) {
-    toast.error("Osoba została dodana do rosteru. Do grupy wpisz: stali, regularni albo rezerwowi.");
-    return false;
+    return null;
   }
 
   const futureOpenGroupEvents = getFutureOpenGroupEvents(store, event.groupId, event.id);
-  const shouldSyncFutureEvents =
-    futureOpenGroupEvents.length > 0
-      ? window.confirm(
-          `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
-        )
-      : false;
 
-  await addGroupMember({
+  return {
     groupId: event.groupId,
     participantProfileId: request.participantProfileId,
-    priority,
-    syncFutureEvents: shouldSyncFutureEvents,
-  });
+    participantName: request.imieNazwisko,
+    futureOpenGroupEventsCount: futureOpenGroupEvents.length,
+  };
+}
 
-  return true;
+export function AcceptedRequestGroupDialogBody({
+  draft,
+  disabled = false,
+  futureOpenGroupEventsCount,
+  onCancel,
+  onDraftChange,
+  onSubmit,
+}: {
+  draft: AcceptedRequestGroupDialogDraft;
+  disabled?: boolean;
+  futureOpenGroupEventsCount: number;
+  onCancel: () => void;
+  onDraftChange: (
+    updater: (previous: AcceptedRequestGroupDialogDraft) => AcceptedRequestGroupDialogDraft,
+  ) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="mt-6 space-y-4">
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Ranga w grupie</span>
+        <select
+          autoFocus
+          value={draft.priority}
+          onChange={(event) =>
+            onDraftChange((previous) => ({
+              ...previous,
+              priority: event.target.value as GroupMemberPriority,
+            }))
+          }
+          disabled={disabled}
+          className="w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <option value="stali">Stali</option>
+          <option value="regularni">Regularni</option>
+          <option value="rezerwowi">Rezerwowi</option>
+        </select>
+      </label>
+
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-brand-navy">Notatki</span>
+        <textarea
+          rows={3}
+          value={draft.notes}
+          onChange={(event) =>
+            onDraftChange((previous) => ({
+              ...previous,
+              notes: event.target.value,
+            }))
+          }
+          disabled={disabled}
+          className="w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed disabled:opacity-60"
+        />
+      </label>
+
+      {futureOpenGroupEventsCount > 0 ? (
+        <label className="flex items-start gap-3 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+          <input
+            type="checkbox"
+            checked={draft.syncFutureEvents}
+            onChange={(event) =>
+              onDraftChange((previous) => ({
+                ...previous,
+                syncFutureEvents: event.target.checked,
+              }))
+            }
+            disabled={disabled}
+            className="mt-1"
+          />
+          <span>
+            {futureOpenGroupEventsCount === 1
+              ? "Dodaj też automatycznie do 1 przyszłego otwartego szkolenia tej grupy."
+              : `Dodaj też automatycznie do ${futureOpenGroupEventsCount} przyszłych otwartych szkoleń tej grupy.`}
+          </span>
+        </label>
+      ) : null}
+
+      <DialogFooter className="mt-6">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={disabled}
+          className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Anuluj
+        </button>
+        <button
+          type="submit"
+          disabled={disabled}
+          className="inline-flex items-center justify-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {disabled ? "Dodawanie..." : "Dodaj do grupy"}
+        </button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function CommunityEventMutationForm({
+  disabled = false,
+  submitLabel,
+  submitting,
+  uploadingImages,
+  helperMessage,
+  values,
+  onChange,
+  onSubmit,
+  onUploadImages,
+}: {
+  disabled?: boolean;
+  submitLabel: string;
+  submitting: boolean;
+  uploadingImages: boolean;
+  helperMessage?: string | null;
+  values: CommunityEventEditorValues;
+  onChange: (updater: (previous: CommunityEventEditorValues) => CommunityEventEditorValues) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onUploadImages: (files: File[]) => Promise<void>;
+}) {
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+    >
+      <CommunityEventEditorFields
+        values={values}
+        uploadingImages={uploadingImages}
+        disabled={disabled || submitting}
+        onChange={onChange}
+        onUploadImages={onUploadImages}
+      />
+
+      {helperMessage ? (
+        <div className="mt-4 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted">
+          {helperMessage}
+        </div>
+      ) : null}
+
+      <button
+        type="submit"
+        disabled={disabled || submitting}
+        className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+      >
+        {submitting ? "Zapisywanie..." : submitLabel}
+      </button>
+    </form>
+  );
+}
+
+function useAcceptedRequestGroupDialog({
+  addGroupMember,
+}: {
+  addGroupMember: (input: {
+    groupId: string;
+    participantProfileId: string;
+    priority: GroupMemberPriority;
+    notes?: string;
+    syncFutureEvents?: boolean;
+  }) => Promise<void>;
+}) {
+  const [session, setSession] = useState<AcceptedRequestGroupDialogSession | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const resolverRef = useRef<((value: boolean) => void) | null>(null);
+
+  function closeDialog(result: boolean) {
+    resolverRef.current?.(result);
+    resolverRef.current = null;
+    setSubmitting(false);
+    setSession(null);
+  }
+
+  function updateDraft(
+    updater: (previous: AcceptedRequestGroupDialogDraft) => AcceptedRequestGroupDialogDraft,
+  ) {
+    setSession((previous) =>
+      previous
+        ? {
+            ...previous,
+            draft: updater(previous.draft),
+          }
+        : previous,
+    );
+  }
+
+  function openDialog(target: AcceptedRequestGroupAssignmentTarget) {
+    if (resolverRef.current) {
+      resolverRef.current(false);
+      resolverRef.current = null;
+    }
+
+    setSubmitting(false);
+    setSession({
+      ...target,
+      draft: createAcceptedRequestGroupDialogDraft(),
+    });
+
+    return new Promise<boolean>((resolve) => {
+      resolverRef.current = resolve;
+    });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!session) {
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      await addGroupMember({
+        groupId: session.groupId,
+        participantProfileId: session.participantProfileId,
+        priority: session.draft.priority,
+        notes: session.draft.notes,
+        syncFutureEvents:
+          session.futureOpenGroupEventsCount > 0 ? session.draft.syncFutureEvents : false,
+      });
+      closeDialog(true);
+    } catch (error) {
+      setSubmitting(false);
+      toast.error(error instanceof Error ? error.message : "Nie udało się dodać osoby do grupy.");
+    }
+  }
+
+  const dialog = session ? (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !submitting) {
+          closeDialog(false);
+        }
+      }}
+    >
+      <DialogContent className="max-w-md rounded-[2rem] border border-brand-line bg-white p-0">
+        <div className="p-6 sm:p-7">
+          <DialogHeader className="text-left">
+            <DialogTitle className="text-2xl font-semibold text-brand-navy">
+              Dopisz do grupy
+            </DialogTitle>
+            <DialogDescription className="text-sm text-brand-muted">
+              {`${
+                session.participantName || "Ta osoba"
+              } trafiła już na roster wydarzenia. Wybierz rangę, uzupełnij notatkę i zdecyduj, czy dopisać ją też do grupy.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          <AcceptedRequestGroupDialogBody
+            draft={session.draft}
+            disabled={submitting}
+            futureOpenGroupEventsCount={session.futureOpenGroupEventsCount}
+            onCancel={() => closeDialog(false)}
+            onDraftChange={updateDraft}
+            onSubmit={handleSubmit}
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  ) : null;
+
+  return {
+    dialog,
+    openDialog,
+  };
 }
 
 type EnrollmentRequestDisplayStatus = EnrollmentRequest["finalStatus"] | "partial";
 
 type EnrollmentRequestArchiveSectionKey = "active" | "confirmed" | "rejected";
+
+type ParticipantOfficialEnrollmentSectionKey = "pending" | "reserve" | "participating";
 
 type EnrollmentRequestArchiveSection = {
   key: EnrollmentRequestArchiveSectionKey;
@@ -1813,6 +2120,14 @@ type EnrollmentRequestArchiveSection = {
   requests: EnrollmentRequest[];
   defaultOpen: boolean;
 };
+
+type ParticipantOfficialEnrollmentSection = {
+  key: ParticipantOfficialEnrollmentSectionKey;
+  title: string;
+  records: ParticipantEnrollmentViewRecord[];
+};
+
+type EnrollmentRequestListItemPosition = "single" | "first" | "middle" | "last";
 
 type ManagedEventParticipantSection = {
   key: string;
@@ -1836,6 +2151,57 @@ function resolveEnrollmentRequestDisplayStatus(
   request: Pick<EnrollmentRequest, "finalStatus">,
 ): EnrollmentRequestDisplayStatus {
   return request.finalStatus as EnrollmentRequestDisplayStatus;
+}
+
+export function buildParticipantOfficialEnrollmentSections(
+  records: ParticipantEnrollmentViewRecord[],
+): ParticipantOfficialEnrollmentSection[] {
+  const buckets: Record<ParticipantOfficialEnrollmentSectionKey, ParticipantEnrollmentViewRecord[]> = {
+    pending: [],
+    reserve: [],
+    participating: [],
+  };
+
+  records.forEach((record) => {
+    if (record.isArchived) {
+      return;
+    }
+
+    if (record.kind === "request" && record.displayStatus === "pending") {
+      buckets.pending.push(record);
+      return;
+    }
+
+    if (record.kind === "roster" && record.eventParticipant.status === "rezerwowy") {
+      buckets.reserve.push(record);
+      return;
+    }
+
+    if (
+      record.kind === "roster" &&
+      (record.eventParticipant.status === "invited" || record.eventParticipant.status === "confirmed")
+    ) {
+      buckets.participating.push(record);
+    }
+  });
+
+  return [
+    {
+      key: "pending",
+      title: "Oczekujące",
+      records: buckets.pending,
+    },
+    {
+      key: "reserve",
+      title: "Lista rezerwowych",
+      records: buckets.reserve,
+    },
+    {
+      key: "participating",
+      title: "Uczestniczę",
+      records: buckets.participating,
+    },
+  ].filter((section) => section.records.length > 0);
 }
 
 function isEnrollmentRequestTransferredByStaff(
@@ -1879,7 +2245,7 @@ export function splitEnrollmentRequestsByIntent(requests: EnrollmentRequest[]) {
   return [
     {
       key: "active",
-      title: "Zgłoszenia",
+      title: "Oczekujące",
       requests: activeRequests,
       defaultOpen: true,
     },
@@ -2280,6 +2646,37 @@ function getEnrollmentRequestContextLabels(
   };
 }
 
+function getEnrollmentRequestListItemPosition(
+  index: number,
+  total: number,
+): EnrollmentRequestListItemPosition {
+  if (total <= 1) {
+    return "single";
+  }
+
+  if (index === 0) {
+    return "first";
+  }
+
+  if (index === total - 1) {
+    return "last";
+  }
+
+  return "middle";
+}
+
+function EnrollmentRequestListSurface({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return (
+    <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80">
+      {children}
+    </div>
+  );
+}
+
 function EnrollmentRequestMetaRow({
   request,
 }: {
@@ -2337,30 +2734,37 @@ function getEnrollmentRequestDecisionOptions(
 
 export function EnrollmentRequestDecisionButtons({
   finalStatus,
+  acceptHint = null,
   disabled = false,
   onDecision,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
+  acceptHint?: string | null;
   disabled?: boolean;
   onDecision: (decision: Extract<DecisionStatus, "accepted" | "rejected">) => void;
 }) {
   return (
-    <div className="flex items-center gap-3">
-      {getEnrollmentRequestDecisionOptions(finalStatus).map((decision) => (
-        <button
-          key={decision}
-          type="button"
-          disabled={disabled}
-          onClick={() => onDecision(decision)}
-          className={
-            decision === "accepted"
-              ? "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
-              : "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
-          }
-        >
-          {decision === "accepted" ? "Potwierdź" : "Odrzuć"}
-        </button>
-      ))}
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        {getEnrollmentRequestDecisionOptions(finalStatus).map((decision) => (
+          <button
+            key={decision}
+            type="button"
+            disabled={disabled}
+            onClick={() => onDecision(decision)}
+            className={
+              decision === "accepted"
+                ? "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
+                : "inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+            }
+          >
+            {decision === "accepted" ? "Potwierdź" : "Odrzuć"}
+          </button>
+        ))}
+      </div>
+      {finalStatus === "pending" && acceptHint ? (
+        <p className="text-sm text-brand-muted">{acceptHint}</p>
+      ) : null}
     </div>
   );
 }
@@ -2372,6 +2776,7 @@ export function EnrollmentRequestSlimRow({
   isExpanded,
   onExpandedChange,
   isSaving = false,
+  itemPosition = "single",
   children,
 }: {
   request: EnrollmentRequest;
@@ -2380,31 +2785,37 @@ export function EnrollmentRequestSlimRow({
   isExpanded: boolean;
   onExpandedChange: (open: boolean) => void;
   isSaving?: boolean;
+  itemPosition?: EnrollmentRequestListItemPosition;
   children: ReactNode;
 }) {
   const { groupLabel, locationLabel } = getEnrollmentRequestContextLabels(event, eventGroup);
   const eventDetailPath = getPanelEventDetailPath(event);
+  const itemShapeClassName =
+    itemPosition === "single"
+      ? "rounded-[1.75rem]"
+      : itemPosition === "first"
+        ? "rounded-t-[1.75rem]"
+        : itemPosition === "last"
+          ? "rounded-b-[1.75rem]"
+          : "";
 
   return (
     <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
       <article
         className={cn(
-          "bg-white px-6 py-3",
-          "sm:rounded-3xl sm:border sm:bg-white sm:p-4 sm:shadow-soft",
+          "overflow-hidden bg-white px-6 py-3 sm:px-6 sm:py-4",
+          itemShapeClassName,
         )}
       >
-        <div className="flex min-w-0 items-start gap-3 sm:items-center">
-          <div className="min-w-0 flex-1">
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1.5 sm:items-center">
+          <div className="min-w-0">
             <Link
               to={eventDetailPath}
               className="inline-flex max-w-full truncate text-xs font-semibold uppercase tracking-[0.18em] text-brand-sky-deep underline-offset-4 transition hover:text-brand-navy hover:underline focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-sky-deep/40 sm:text-[13px] sm:tracking-[0.22em]"
             >
               {groupLabel}
             </Link>
-            <p className="mt-1 truncate text-sm text-brand-muted">{locationLabel}</p>
-            <p className="mt-1.5 truncate text-[17px] font-semibold leading-tight text-brand-navy sm:text-lg">
-              {request.imieNazwisko}
-            </p>
+            <p className="mt-1 min-w-0 text-sm text-brand-muted">{locationLabel}</p>
           </div>
 
           <div className="flex shrink-0 items-start gap-2 sm:items-center">
@@ -2447,6 +2858,10 @@ export function EnrollmentRequestSlimRow({
               </button>
             </CollapsibleTrigger>
           </div>
+
+          <p className="col-span-2 min-w-0 text-[17px] font-semibold leading-tight text-brand-navy sm:text-lg">
+            {request.imieNazwisko}
+          </p>
         </div>
 
         <CollapsibleContent className="mt-3 border-t border-brand-line/60 pt-3 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
@@ -2457,11 +2872,15 @@ export function EnrollmentRequestSlimRow({
   );
 }
 
-function buildManagedEventParticipantSections(
-  event: Pick<TrainingEvent, "groupId">,
+export function buildManagedEventParticipantSections(
+  event: Pick<TrainingEvent, "brandStatus" | "groupId">,
   participants: EventParticipant[],
   activeGroupMembersByParticipantProfileId: Map<string, GroupMember>,
 ): ManagedEventParticipantSection[] {
+  if (isOfficialGroupTrainingEvent(event)) {
+    return buildManagedOfficialTrainingRosterSections(participants);
+  }
+
   if (event.groupId) {
     return buildGroupEventRosterSections(participants, activeGroupMembersByParticipantProfileId);
   }
@@ -2476,6 +2895,46 @@ function buildManagedEventParticipantSections(
       key: "participants",
       title: "Uczestnicy",
       participants: sortGroupEventParticipantsByStatusAndName(visibleParticipants),
+    },
+  ];
+}
+
+export function buildCommunityParticipantSections(
+  participants: EventParticipant[],
+): ManagedEventParticipantSection[] {
+  const visibleParticipants = participants.filter(
+    (participant) => participant.status === "invited" || participant.status === "confirmed",
+  );
+
+  if (visibleParticipants.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      key: "participants",
+      title: "Uczestnicy",
+      participants: sortGroupEventParticipantsByStatusAndName(visibleParticipants),
+    },
+  ];
+}
+
+export function buildCommunityReserveSections(
+  participants: EventParticipant[],
+): ManagedEventParticipantSection[] {
+  const reserveParticipants = participants.filter(
+    (participant) => participant.status === "rezerwowy",
+  );
+
+  if (reserveParticipants.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      key: "reserve",
+      title: "Rezerwowi",
+      participants: sortGroupEventParticipantsByStatusAndName(reserveParticipants),
     },
   ];
 }
@@ -2584,6 +3043,7 @@ function EnrollmentRequestTransferPanel({
 
 export function EnrollmentRequestManagementActions({
   finalStatus,
+  acceptHint = null,
   disabled = false,
   transferPending = false,
   transferTargetEventId = "",
@@ -2591,6 +3051,7 @@ export function EnrollmentRequestManagementActions({
   onTransfer,
 }: {
   finalStatus: EnrollmentRequestDisplayStatus;
+  acceptHint?: string | null;
   disabled?: boolean;
   transferPending?: boolean;
   transferTargetEventId?: string;
@@ -2603,34 +3064,39 @@ export function EnrollmentRequestManagementActions({
   const isDisabled = disabled || transferPending;
 
   return (
-    <div className="flex items-center gap-3">
-      {canReject ? (
-        <button
-          type="button"
-          disabled={isDisabled}
-          onClick={() => onDecision("rejected")}
-          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
-        >
-          Odrzuć
-        </button>
-      ) : null}
+    <div className="space-y-2">
+      <div className="flex items-center gap-3">
+        {canReject ? (
+          <button
+            type="button"
+            disabled={isDisabled}
+            onClick={() => onDecision("rejected")}
+            className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60 sm:flex-none"
+          >
+            Odrzuć
+          </button>
+        ) : null}
 
-      {shouldTransfer || canAccept ? (
-        <button
-          type="button"
-          disabled={isDisabled}
-          onClick={() => {
-            if (shouldTransfer) {
-              onTransfer();
-              return;
-            }
+        {shouldTransfer || canAccept ? (
+          <button
+            type="button"
+            disabled={isDisabled}
+            onClick={() => {
+              if (shouldTransfer) {
+                onTransfer();
+                return;
+              }
 
-            onDecision("accepted");
-          }}
-          className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
-        >
-          {shouldTransfer ? (transferPending ? "Przenoszenie..." : "Przenieś") : "Potwierdź"}
-        </button>
+              onDecision("accepted");
+            }}
+            className="inline-flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60 sm:flex-none"
+          >
+            {shouldTransfer ? (transferPending ? "Przenoszenie..." : "Przenieś") : "Potwierdź"}
+          </button>
+        ) : null}
+      </div>
+      {!shouldTransfer && canAccept && acceptHint ? (
+        <p className="text-sm text-brand-muted">{acceptHint}</p>
       ) : null}
     </div>
   );
@@ -2823,6 +3289,7 @@ function ManagedEnrollmentRequestsSection({
   canManageRequests,
   event,
   eventGroup,
+  title = "Chcą wziąć udział",
   movingRequestId,
   onDecision,
   onTransfer,
@@ -2839,6 +3306,7 @@ function ManagedEnrollmentRequestsSection({
   canManageRequests: boolean;
   event: TrainingEvent;
   eventGroup?: Group | null;
+  title?: string;
   movingRequestId: string | null;
   onDecision: (request: EnrollmentRequest, decision: DecisionStatus) => Promise<void>;
   onTransfer: (request: EnrollmentRequest) => Promise<void>;
@@ -2855,7 +3323,7 @@ function ManagedEnrollmentRequestsSection({
   return (
     <div className="space-y-4">
       <SectionBlockHeading
-        title="Chcą wziąć udział"
+        title={title}
         description="Aktywne zgłoszenia są na górze, a potwierdzone i odrzucone osoby spadają niżej do osobnych zwiniętych sekcji."
       />
       {requestSections.length === 0 ? (
@@ -2872,66 +3340,67 @@ function ManagedEnrollmentRequestsSection({
             open={expandedRequestSections[section.key] ?? section.defaultOpen}
             onOpenChange={(open) => onExpandedSectionChange(section.key, open)}
           >
-            <div className="-mx-6 mt-1 sm:mx-0 sm:mt-0">
-              <div className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft divide-y divide-brand-line/80 sm:space-y-3 sm:divide-y-0 sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:shadow-none">
-                {section.requests.map((request) => {
-                  const transferTargetEventId = transferSelections[request.id] ?? "";
-                  const showTransferPanel = requestTransferOptions.length > 0;
-                  const showPhoto = hasEnrollmentRequestReadyPhoto(request);
+            <EnrollmentRequestListSurface>
+              {section.requests.map((request, index) => {
+                const transferTargetEventId = transferSelections[request.id] ?? "";
+                const showTransferPanel = requestTransferOptions.length > 0;
+                const showPhoto = hasEnrollmentRequestReadyPhoto(request);
+                const acceptHint = getEnrollmentAcceptanceHint(event);
 
-                  return (
-                    <EnrollmentRequestSlimRow
-                      key={request.id}
-                      request={request}
-                      event={event}
-                      eventGroup={eventGroup}
-                      isExpanded={expandedRequestIds.includes(request.id)}
-                      onExpandedChange={(open) => onExpandedRequestChange(request.id, open)}
-                      isSaving={updatingRequestId === request.id || movingRequestId === request.id}
-                    >
-                      <div className="space-y-4">
-                        <EnrollmentRequestMetaRow request={request} />
-                        <EnrollmentRequestMessageBlock request={request} />
+                return (
+                  <EnrollmentRequestSlimRow
+                    key={request.id}
+                    request={request}
+                    event={event}
+                    eventGroup={eventGroup}
+                    isExpanded={expandedRequestIds.includes(request.id)}
+                    onExpandedChange={(open) => onExpandedRequestChange(request.id, open)}
+                    isSaving={updatingRequestId === request.id || movingRequestId === request.id}
+                    itemPosition={getEnrollmentRequestListItemPosition(index, section.requests.length)}
+                  >
+                    <div className="space-y-4">
+                      <EnrollmentRequestMetaRow request={request} />
+                      <EnrollmentRequestMessageBlock request={request} />
 
-                        {showPhoto || showTransferPanel ? (
-                          <div
-                            className={cn(
-                              "grid gap-4",
-                              showPhoto && showTransferPanel ? "lg:grid-cols-[1.2fr_1fr]" : "",
-                            )}
-                          >
-                            <EnrollmentPhotoCard request={request} />
-                            <EnrollmentRequestTransferPanel
-                              title={
-                                isCommunityPanelEvent(event)
-                                  ? "Przenieś na inne wydarzenie"
-                                  : "Przenieś na inny termin"
-                              }
-                              options={requestTransferOptions}
-                              value={transferTargetEventId}
-                              onChange={(nextValue) =>
-                                onTransferSelectionChange(request.id, nextValue)
-                              }
-                            />
-                          </div>
-                        ) : null}
-
-                        {canManageRequests ? (
-                          <EnrollmentRequestManagementActions
-                            finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
-                            disabled={updatingRequestId === request.id}
-                            transferPending={movingRequestId === request.id}
-                            transferTargetEventId={transferTargetEventId}
-                            onDecision={(decision) => void onDecision(request, decision)}
-                            onTransfer={() => void onTransfer(request)}
+                      {showPhoto || showTransferPanel ? (
+                        <div
+                          className={cn(
+                            "grid gap-4",
+                            showPhoto && showTransferPanel ? "lg:grid-cols-[1.2fr_1fr]" : "",
+                          )}
+                        >
+                          <EnrollmentPhotoCard request={request} />
+                          <EnrollmentRequestTransferPanel
+                            title={
+                              isCommunityPanelEvent(event)
+                                ? "Przenieś na inne wydarzenie"
+                                : "Przenieś na inny termin"
+                            }
+                            options={requestTransferOptions}
+                            value={transferTargetEventId}
+                            onChange={(nextValue) =>
+                              onTransferSelectionChange(request.id, nextValue)
+                            }
                           />
-                        ) : null}
-                      </div>
-                    </EnrollmentRequestSlimRow>
-                  );
-                })}
-              </div>
-            </div>
+                        </div>
+                      ) : null}
+
+                      {canManageRequests ? (
+                        <EnrollmentRequestManagementActions
+                          finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
+                          acceptHint={acceptHint}
+                          disabled={updatingRequestId === request.id}
+                          transferPending={movingRequestId === request.id}
+                          transferTargetEventId={transferTargetEventId}
+                          onDecision={(decision) => void onDecision(request, decision)}
+                          onTransfer={() => void onTransfer(request)}
+                        />
+                      ) : null}
+                    </div>
+                  </EnrollmentRequestSlimRow>
+                );
+              })}
+            </EnrollmentRequestListSurface>
           </EnrollmentRequestArchiveSectionBlock>
         ))
       )}
@@ -3171,16 +3640,18 @@ function EventDetailScopeSwitch({
   onChange,
   requestCount,
   participantCountLabel,
+  reserveCount,
 }: {
-  activeTab: "requests" | "participants" | "edit";
-  onChange: (nextTab: "requests" | "participants" | "edit") => void;
+  activeTab: "requests" | "participants" | "reserve";
+  onChange: (nextTab: "requests" | "participants" | "reserve") => void;
   requestCount: number;
   participantCountLabel: string;
+  reserveCount: number;
 }) {
   const items = [
     {
       id: "requests" as const,
-      label: "Chcą wziąć udział",
+      label: "Zgłoszenia",
       badge: requestCount > 0 ? String(requestCount) : undefined,
       icon: <Bell size={15} />,
     },
@@ -3191,10 +3662,10 @@ function EventDetailScopeSwitch({
       icon: <Users size={15} />,
     },
     {
-      id: "edit" as const,
-      label: "Edycja wydarzenia",
-      badge: undefined,
-      icon: null,
+      id: "reserve" as const,
+      label: "Rezerwowi",
+      badge: reserveCount > 0 ? String(reserveCount) : undefined,
+      icon: <ShieldCheck size={15} />,
     },
   ];
 
@@ -3636,9 +4107,12 @@ type DashboardEventBarDatum = {
   startsAt: string;
   statusLabel: string;
   status: TrainingEventStatus;
+  isOfficialGroupTraining: boolean;
   fillRate: number;
   missingPeople: number;
   occupiedPlaces: number;
+  confirmedCount: number;
+  overflowCount: number;
   capacity: number;
   availablePlaces: number;
 };
@@ -3648,6 +4122,8 @@ type DashboardMonthCapacityDatum = {
   label: string;
   totalCapacity: number;
   enrolledCount: number;
+  confirmedCount: number;
+  overflowCount: number;
   availablePlaces: number;
 };
 
@@ -3697,7 +4173,13 @@ function MissingPeopleTooltip({
       <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
       <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
       <p className="mt-2 text-sm text-brand-navy">Brakuje: {item.missingPeople} osob</p>
-      <p className="text-sm text-brand-navy">Zapisani: {item.occupiedPlaces}/{item.capacity}</p>
+      <p className="text-sm text-brand-navy">Na rosterze: {item.occupiedPlaces}/{item.capacity}</p>
+      {item.isOfficialGroupTraining ? (
+        <p className="text-sm text-brand-navy">Potwierdzeni: {item.confirmedCount}</p>
+      ) : null}
+      {item.overflowCount > 0 ? (
+        <p className="text-sm text-brand-navy">Nad limit: {item.overflowCount}</p>
+      ) : null}
     </div>
   );
 }
@@ -3718,9 +4200,13 @@ function CapacityByMonthTooltip({
   return (
     <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
       <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
-      <p className="mt-2 text-sm text-brand-navy">Zapisani: {item.enrolledCount}</p>
+      <p className="mt-2 text-sm text-brand-navy">Na rosterze: {item.enrolledCount}</p>
+      <p className="text-sm text-brand-navy">Potwierdzeni: {item.confirmedCount}</p>
       <p className="text-sm text-brand-navy">Liczba miejsc: {item.totalCapacity}</p>
       <p className="text-sm text-brand-navy">Wolne miejsca: {item.availablePlaces}</p>
+      {item.overflowCount > 0 ? (
+        <p className="text-sm text-brand-navy">Nad limit: {item.overflowCount}</p>
+      ) : null}
     </div>
   );
 }
@@ -3833,7 +4319,13 @@ function CancelledEventsTooltip({
       <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
       <p className="mt-1 text-sm text-brand-muted">{item.statusLabel}</p>
       <p className="mt-2 text-sm text-brand-navy">Liczba miejsc: {item.capacity}</p>
-      <p className="text-sm text-brand-navy">Zapisani przed anulacja: {item.occupiedPlaces}</p>
+      <p className="text-sm text-brand-navy">Na rosterze: {item.occupiedPlaces}</p>
+      {item.isOfficialGroupTraining ? (
+        <p className="text-sm text-brand-navy">Potwierdzeni: {item.confirmedCount}</p>
+      ) : null}
+      {item.overflowCount > 0 ? (
+        <p className="text-sm text-brand-navy">Nad limit: {item.overflowCount}</p>
+      ) : null}
     </div>
   );
 }
@@ -4266,12 +4758,17 @@ function OperationalDashboardPerspectiveView({
         (event) => ({
           id: event.id,
           label: event.location || event.title,
+          isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
           fillRate: getEventFillRate(event),
           statusLabel: getTrainingEventStatusLabel(event.status),
           status: resolveTrainingEventStatus(event.status),
-          occupiedPlaces: event.enrolledCount,
+          occupiedPlaces: getEventParticipantCount(event),
+          confirmedCount: event.enrolledCount,
+          overflowCount: getEventOverflowCount(event),
           availablePlaces: getAvailablePlaces(event),
           startsAt: event.startsAt,
+          capacity: event.capacity,
+          missingPeople: getAvailablePlaces(event),
         }),
       ),
     [activeCommunityEvents, confirmedCommunityEvents],
@@ -4307,9 +4804,12 @@ function OperationalDashboardPerspectiveView({
         startsAt: event.startsAt,
         statusLabel: getTrainingEventStatusLabel(event.status),
         status: resolveTrainingEventStatus(event.status),
+        isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
         fillRate: getEventFillRate(event),
         missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
+        occupiedPlaces: getEventParticipantCount(event),
+        confirmedCount: event.enrolledCount,
+        overflowCount: getEventOverflowCount(event),
         capacity: event.capacity,
         availablePlaces: getAvailablePlaces(event),
       })),
@@ -4348,7 +4848,9 @@ function OperationalDashboardPerspectiveView({
           key: bucket.key,
           label: bucket.label,
           totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
-          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          enrolledCount: monthEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
+          confirmedCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          overflowCount: monthEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
           availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
         };
       }),
@@ -4419,9 +4921,12 @@ function OperationalDashboardPerspectiveView({
         startsAt: event.startsAt,
         statusLabel: getTrainingEventStatusLabel(event.status),
         status: resolveTrainingEventStatus(event.status),
+        isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
         fillRate: getEventFillRate(event),
         missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
+        occupiedPlaces: getEventParticipantCount(event),
+        confirmedCount: event.enrolledCount,
+        overflowCount: getEventOverflowCount(event),
         capacity: event.capacity,
         availablePlaces: getAvailablePlaces(event),
       })),
@@ -4446,9 +4951,12 @@ function OperationalDashboardPerspectiveView({
         startsAt: event.startsAt,
         statusLabel: getTrainingEventStatusLabel(event.status),
         status: resolveTrainingEventStatus(event.status),
+        isOfficialGroupTraining: isOfficialGroupTrainingEvent(event),
         fillRate: getEventFillRate(event),
         missingPeople: getAvailablePlaces(event),
-        occupiedPlaces: event.enrolledCount,
+        occupiedPlaces: getEventParticipantCount(event),
+        confirmedCount: event.enrolledCount,
+        overflowCount: getEventOverflowCount(event),
         capacity: event.capacity,
         availablePlaces: getAvailablePlaces(event),
       })),
@@ -4465,7 +4973,9 @@ function OperationalDashboardPerspectiveView({
           key: bucket.key,
           label: bucket.label,
           totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
-          enrolledCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          enrolledCount: monthEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
+          confirmedCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          overflowCount: monthEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
           availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
         };
       }),
@@ -4719,7 +5229,7 @@ function OperationalDashboardPerspectiveView({
 
             <DashboardChartCard
               title="Zapełnienie terminów"
-              description="Porównanie przyszłych terminów według poziomu zajętych miejsc."
+              description="Porównanie przyszłych terminów według poziomu zapełnienia rosteru."
             >
               {organizerFillRateData.length === 0 ? (
                 <DashboardChartEmptyState message="Brak terminów do porównania w tym oknie czasu." />
@@ -4754,11 +5264,11 @@ function OperationalDashboardPerspectiveView({
 
             <DashboardChartCard
               title="Obłożenie w miesiącach"
-              description="Łączna liczba zapisanych osób versus cała pula miejsc w pipeline grup."
+              description="Łączna liczba osób na rosterze versus cała pula miejsc w pipeline grup."
             >
               <DashboardLegend
                 items={[
-                  { label: "Zapisani", color: "#174f9a" },
+                  { label: "Na rosterze", color: "#174f9a" },
                   { label: "Liczba miejsc", color: "#88aee0" },
                 ]}
               />
@@ -4906,6 +5416,12 @@ function OperationalDashboardPerspectiveView({
                   <p className="text-sm text-brand-muted">
                     Wolne miejsca: {summary.missingPeople} • Zapełnienie: {Math.round(summary.fillRate)}%
                   </p>
+                  <p className="text-sm text-brand-muted">
+                    Na rosterze: {getEventParticipantCount(summary.event)}/{summary.event.capacity}
+                    {getEventOverflowCount(summary.event) > 0
+                      ? ` • Nad limit: ${getEventOverflowCount(summary.event)}`
+                      : ""}
+                  </p>
                 </div>
               ))}
               {(organizerOfficialDashboard?.eventsRequiringDecision.length ?? 0) === 0 && (
@@ -4992,7 +5508,7 @@ function OperationalDashboardPerspectiveView({
 
           <DashboardChartCard
             title="Zapelnienie terminow"
-            description="Porownanie wydarzen wedlug procentu zajetych miejsc."
+            description="Porownanie wydarzen wedlug procentu zapełnienia rosteru."
           >
             {fillRateData.length === 0 ? (
               <DashboardChartEmptyState message="Brak wydarzen do porownania w tym oknie czasu." />
@@ -5031,11 +5547,11 @@ function OperationalDashboardPerspectiveView({
 
           <DashboardChartCard
             title="Oblozenie w miesiacach"
-            description="Laczna liczba zapisanych osob versus cala pula miejsc w nadchodzacych miesiacach."
+            description="Laczna liczba osob na rosterze versus cala pula miejsc w nadchodzacych miesiacach."
           >
             <DashboardLegend
               items={[
-                { label: "Zapisani", color: "#174f9a" },
+                { label: "Na rosterze", color: "#174f9a" },
                 { label: "Liczba miejsc", color: "#88aee0" },
               ]}
             />
@@ -5466,6 +5982,12 @@ export function RequestsPage() {
   });
   const [expandedRequestIds, setExpandedRequestIds] = useState<string[]>([]);
   const [updatingRequestId, setUpdatingRequestId] = useState<string | null>(null);
+  const {
+    dialog: acceptedRequestGroupDialog,
+    openDialog: openAcceptedRequestGroupDialog,
+  } = useAcceptedRequestGroupDialog({
+    addGroupMember,
+  });
   const manageableEventIds = new Set(
     store.trainingEvents
       .filter((event) => canManageTrainingEvent(event, currentUser))
@@ -5483,6 +6005,51 @@ export function RequestsPage() {
         ? Array.from(new Set([...previous, requestId]))
         : previous.filter((item) => item !== requestId),
     );
+  }
+
+  async function handleRequestDecision(
+    request: EnrollmentRequest,
+    event: TrainingEvent,
+    decision: Extract<DecisionStatus, "accepted" | "rejected">,
+  ) {
+    setUpdatingRequestId(request.id);
+
+    try {
+      const acceptedTargetStatus =
+        decision === "accepted" ? resolveEnrollmentAcceptanceTargetStatus(event) : null;
+
+      await manageEnrollmentRequest(request.id, decision);
+      if (decision === "accepted") {
+        if (acceptedTargetStatus === "rezerwowy") {
+          toast.success("Potwierdzono zgłoszenie i dodano osobę do listy rezerwowych.");
+          return;
+        }
+
+        const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
+          request,
+          event,
+          store,
+        });
+        const addedToGroup = groupAssignmentTarget
+          ? await openAcceptedRequestGroupDialog(groupAssignmentTarget)
+          : false;
+        toast.success(
+          event.groupId
+            ? addedToGroup
+              ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
+              : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
+            : "Potwierdzono zgłoszenie.",
+        );
+      } else {
+        toast.success("Odrzucono zgłoszenie.");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Nie udało się zaktualizować zgłoszenia.",
+      );
+    } finally {
+      setUpdatingRequestId(null);
+    }
   }
 
   return (
@@ -5511,80 +6078,54 @@ export function RequestsPage() {
               }))
             }
           >
-            {section.requests.map((request) => {
-              const event = store.trainingEvents.find((item) => item.id === request.eventId);
-              if (!event) {
-                return null;
-              }
+            <EnrollmentRequestListSurface>
+              {section.requests.map((request, index) => {
+                const event = store.trainingEvents.find((item) => item.id === request.eventId);
+                if (!event) {
+                  return null;
+                }
 
-              const eventGroup = event.groupId
-                ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
-                : null;
-              const canDecideRequest = canManageTrainingEvent(event, currentUser);
-              const isExpanded = expandedRequestIds.includes(request.id);
+                const eventGroup = event.groupId
+                  ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
+                  : null;
+                const canDecideRequest = canManageTrainingEvent(event, currentUser);
+                const isExpanded = expandedRequestIds.includes(request.id);
 
-              return (
-                <EnrollmentRequestSlimRow
-                  key={request.id}
-                  request={request}
-                  event={event}
-                  eventGroup={eventGroup}
-                  isExpanded={isExpanded}
-                  onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
-                  isSaving={updatingRequestId === request.id}
-                >
-                  <div className="space-y-4">
-                    <EnrollmentRequestMetaRow request={request} />
-                    <EnrollmentRequestMessageBlock request={request} />
+                return (
+                  <EnrollmentRequestSlimRow
+                    key={request.id}
+                    request={request}
+                    event={event}
+                    eventGroup={eventGroup}
+                    isExpanded={isExpanded}
+                    onExpandedChange={(open) => toggleExpandedRequest(request.id, open)}
+                    isSaving={updatingRequestId === request.id}
+                    itemPosition={getEnrollmentRequestListItemPosition(index, section.requests.length)}
+                  >
+                    <div className="space-y-4">
+                      <EnrollmentRequestMetaRow request={request} />
+                      <EnrollmentRequestMessageBlock request={request} />
 
-                    <EnrollmentPhotoCard request={request} />
+                      <EnrollmentPhotoCard request={request} />
 
-                    {canDecideRequest ? (
-                      <EnrollmentRequestDecisionButtons
-                        finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
-                        disabled={updatingRequestId === request.id}
-                        onDecision={(decision) => {
-                          void (async () => {
-                            setUpdatingRequestId(request.id);
-
-                            try {
-                              await manageEnrollmentRequest(request.id, decision);
-                              if (decision === "accepted") {
-                                const addedToGroup = await maybeAddAcceptedRequestToGroup({
-                                  request,
-                                  event,
-                                  store,
-                                  addGroupMember,
-                                });
-                                toast.success(
-                                  event.groupId
-                                    ? addedToGroup
-                                      ? "Potwierdzono zgłoszenie, dodano osobę do rosteru i do grupy."
-                                      : "Potwierdzono zgłoszenie i dodano osobę do rosteru wydarzenia."
-                                    : "Potwierdzono zgłoszenie.",
-                                );
-                              } else if (decision === "rejected") {
-                                toast.success("Odrzucono zgłoszenie.");
-                              }
-                            } catch (error) {
-                              toast.error(
-                                error instanceof Error
-                                  ? error.message
-                                  : "Nie udało się zaktualizować zgłoszenia.",
-                              );
-                            } finally {
-                              setUpdatingRequestId(null);
-                            }
-                          })();
-                        }}
-                      />
-                    ) : null}
-                  </div>
-                </EnrollmentRequestSlimRow>
-              );
-            })}
+                      {canDecideRequest ? (
+                        <EnrollmentRequestDecisionButtons
+                          finalStatus={resolveEnrollmentRequestDisplayStatus(request)}
+                          acceptHint={getEnrollmentAcceptanceHint(event)}
+                          disabled={updatingRequestId === request.id}
+                          onDecision={(decision) =>
+                            void handleRequestDecision(request, event, decision)
+                          }
+                        />
+                      ) : null}
+                    </div>
+                  </EnrollmentRequestSlimRow>
+                );
+              })}
+            </EnrollmentRequestListSurface>
           </EnrollmentRequestArchiveSectionBlock>
         ))}
+        {acceptedRequestGroupDialog}
       </div>
     </PanelSection>
   );
@@ -6145,8 +6686,6 @@ export function GroupsPage() {
   const navigate = useNavigate();
   const { groupId } = useParams();
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
-  const [planningIntervalWeeks, setPlanningIntervalWeeks] =
-    useState<(typeof ANNUAL_PLANNING_INTERVALS)[number]>(8);
   const [groupForm, setGroupForm] = useState<GroupFormState>(createEmptyGroupFormState());
   const [memberForm, setMemberForm] = useState<GroupMemberFormState>(
     createEmptyGroupMemberFormState(),
@@ -6171,6 +6710,7 @@ export function GroupsPage() {
   }
 
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser.id);
+  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
   const hasActiveOrganizerAccess = Boolean(
     organizerProfile &&
       (store.relations ?? []).some(
@@ -6178,8 +6718,11 @@ export function GroupsPage() {
           relation.organizerId === organizerProfile.id && relation.status === "approved",
       ),
   );
-  const canManageGroups =
+  const canManageOrganizerGroups =
     Boolean(organizerProfile) && hasActiveOrganizerAccess && canUseOrganizerFunctions(currentUser);
+  const canManageTrainerGroups =
+    hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile);
+  const canManageGroups = canManageOrganizerGroups || canManageTrainerGroups;
   const trainersById = useMemo(
     () => new Map((store.trainers ?? []).map((trainer) => [trainer.id, trainer])),
     [store.trainers],
@@ -6258,14 +6801,15 @@ export function GroupsPage() {
     },
     [store.trainingEvents],
   );
-  const ownedGroups = useMemo(
+  const managedGroups = useMemo(
     () =>
-      organizerProfile
-        ? sortGroupsByStatusAndName(
-            (store.groups ?? []).filter((group) => group.organizerId === organizerProfile.id),
-          )
-        : [],
-    [organizerProfile, store.groups],
+      getManagedGroupsForUser({
+        currentUser,
+        groups: store.groups ?? [],
+        organizerProfileId: organizerProfile?.id,
+        trainerProfileId: trainerProfile?.id,
+      }),
+    [currentUser, organizerProfile?.id, store.groups, trainerProfile?.id],
   );
   const joinedGroups = useMemo(
     () =>
@@ -6276,17 +6820,18 @@ export function GroupsPage() {
       ),
     [participantGroupMembershipsByGroupId, store.groups],
   );
-  const hasOrganizerGroupScope =
-    Boolean(organizerProfile) &&
-    (ownedGroups.length > 0 || hasInheritedRole(currentUser, "organizer"));
-  const isParticipantGroupViewer = !hasOrganizerGroupScope || groupScope === "all";
+  const hasManagedGroupScope =
+    managedGroups.length > 0 ||
+    (Boolean(organizerProfile) && hasInheritedRole(currentUser, "organizer")) ||
+    (Boolean(trainerProfile) && hasInheritedRole(currentUser, "trainer"));
+  const isParticipantGroupViewer = !hasManagedGroupScope || groupScope === "all";
   const visibleGroups = useMemo(() => {
     if (isParticipantGroupViewer) {
       return joinedGroups;
     }
 
-    return ownedGroups;
-  }, [isParticipantGroupViewer, joinedGroups, ownedGroups]);
+    return managedGroups;
+  }, [isParticipantGroupViewer, joinedGroups, managedGroups]);
   const { active: activeVisibleGroups, archived: archivedVisibleGroups } = useMemo(
     () => splitGroupsByArchivedStatus(visibleGroups),
     [visibleGroups],
@@ -6347,33 +6892,50 @@ export function GroupsPage() {
     [selectedGroupEvents],
   );
   const availableTrainers = useMemo(() => {
-    if (!organizerProfile) {
-      return [];
+    const nextTrainers = new Map<string, TrainerProfile>();
+
+    if (canManageTrainerGroups && trainerProfile) {
+      nextTrainers.set(trainerProfile.id, trainerProfile);
     }
 
-    return (store.relations ?? [])
-      .filter(
-        (relation) =>
-          relation.organizerId === organizerProfile.id && relation.status === "approved",
-      )
-      .map((relation) => trainersById.get(relation.trainerId))
-      .filter((trainer): trainer is TrainerProfile => Boolean(trainer))
-      .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
-  }, [organizerProfile, store.relations, trainersById]);
+    if (canManageOrganizerGroups && organizerProfile) {
+      for (const relation of store.relations ?? []) {
+        if (relation.organizerId !== organizerProfile.id || relation.status !== "approved") {
+          continue;
+        }
+
+        const trainer = trainersById.get(relation.trainerId);
+        if (trainer) {
+          nextTrainers.set(trainer.id, trainer);
+        }
+      }
+    }
+
+    return sortTrainerProfiles([...nextTrainers.values()]);
+  }, [
+    canManageOrganizerGroups,
+    canManageTrainerGroups,
+    organizerProfile,
+    store.relations,
+    trainerProfile,
+    trainersById,
+  ]);
   const canCreateGroups = canManageGroups && availableTrainers.length > 0;
-  const organizerManagedProfiles = useMemo(() => {
-    if (!organizerProfile || !canManageGroups) {
+  const managedParticipantProfiles = useMemo(() => {
+    if (!canManageGroups) {
       return [];
     }
 
     return (store.participantProfiles ?? [])
       .filter(
         (profile) =>
-          profile.createdByOrganizerId === organizerProfile.id ||
-          profile.managerOrganizerIds?.includes(organizerProfile.id),
+          (organizerProfile &&
+            (profile.createdByOrganizerId === organizerProfile.id ||
+              profile.managerOrganizerIds?.includes(organizerProfile.id))) ||
+          (trainerProfile && profile.managerTrainerIds?.includes(trainerProfile.id)),
         )
       .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
-  }, [canManageGroups, organizerProfile, store.participantProfiles]);
+  }, [canManageGroups, organizerProfile, store.participantProfiles, trainerProfile]);
   const selectedMemberProfile = useMemo(
     () =>
       memberForm.participantProfileId
@@ -6383,132 +6945,27 @@ export function GroupsPage() {
   );
   const memberProfileOptions = useMemo(() => {
     if (!selectedMemberProfile) {
-      return organizerManagedProfiles;
+      return managedParticipantProfiles;
     }
 
-    return organizerManagedProfiles.some((profile) => profile.id === selectedMemberProfile.id)
-      ? organizerManagedProfiles
-      : [selectedMemberProfile, ...organizerManagedProfiles];
-  }, [organizerManagedProfiles, selectedMemberProfile]);
+    return managedParticipantProfiles.some((profile) => profile.id === selectedMemberProfile.id)
+      ? managedParticipantProfiles
+      : [selectedMemberProfile, ...managedParticipantProfiles];
+  }, [managedParticipantProfiles, selectedMemberProfile]);
   const shouldShowMemberDetails =
     Boolean(selectedMemberProfile) || hasCompleteParticipantPhone(memberForm.phone);
-  const sharedSlotsById = useMemo(
-    () => new Map((store.trainerSharedSlots ?? []).map((slot) => [slot.id, slot])),
-    [store.trainerSharedSlots],
-  );
-  const selectedGroupMatchedSlots = useMemo(() => {
-    if (!selectedGroup || !organizerProfile || !canManageGroups) {
-      return [] as OrganizerMatchedSlotView[];
-    }
-
-    return (store.trainerOrganizerCalendarFeeds ?? [])
-      .filter(
-        (feed) =>
-          feed.organizerId === organizerProfile.id &&
-          feed.trainerId === selectedGroup.trainerId &&
-          feed.enabled,
-      )
-      .flatMap((feed) =>
-        (feed.matchedSharedSlotIds ?? []).map((slotId) => {
-          const slot = sharedSlotsById.get(slotId);
-          if (!slot || slot.status === "archived" || slot.archivedAt) {
-            return null;
-          }
-
-          const trainer = trainersById.get(slot.trainerId);
-          const baseSlot = {
-            ...slot,
-            trainerName: trainer?.displayName ?? "Przekazujący Wiedzę",
-            relation: undefined,
-            googleFeedUrl: feed.publicFeedUrl,
-          } satisfies OrganizerMatchedSlotView;
-
-          return {
-            ...baseSlot,
-            travelWarning: buildTrainerTravelWarningForSlot(baseSlot, store.trainingEvents ?? []),
-          } satisfies OrganizerMatchedSlotView;
-        }),
-      )
-      .filter(
-        (slot): slot is OrganizerMatchedSlotView =>
-          Boolean(slot) && new Date(slot.startsAt).getTime() > Date.now(),
-      )
-      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
-  }, [
-    canManageGroups,
-    organizerProfile,
-    selectedGroup,
-    sharedSlotsById,
-    store.trainerOrganizerCalendarFeeds,
-    store.trainingEvents,
-    trainersById,
-  ]);
-  const selectedGroupIsOwnedByCurrentUser = Boolean(
-    selectedGroup && organizerProfile && selectedGroup.organizerId === organizerProfile.id,
+  const selectedGroupIsManagedByCurrentUser = Boolean(
+    selectedGroup && managedGroups.some((group) => group.id === selectedGroup.id),
   );
   const selectedGroupParticipantMembership = selectedGroup
     ? participantGroupMembershipsByGroupId.get(selectedGroup.id) ?? null
     : null;
-  const annualPlanningSuggestions = useMemo(() => {
-    if (!selectedGroup || selectedGroupMatchedSlots.length === 0) {
-      return [];
-    }
-
-    const intervalMs = planningIntervalWeeks * 7 * 24 * 60 * 60 * 1000;
-    const oneDayMs = 24 * 60 * 60 * 1000;
-    const futureSlots = selectedGroupMatchedSlots.filter(
-      (slot) => new Date(slot.startsAt).getTime() > Date.now(),
-    );
-
-    if (futureSlots.length === 0) {
-      return [];
-    }
-
-    const usedIds = new Set<string>();
-    const suggestions: Array<
-      OrganizerMatchedSlotView & { suggestedGapDays: number; targetStartsAt: string }
-    > = [];
-    let previousAnchorTime =
-      selectedGroupEvents.length > 0
-        ? new Date(selectedGroupEvents[selectedGroupEvents.length - 1].startsAt).getTime()
-        : Date.now();
-
-    for (let index = 0; index < 6; index += 1) {
-      const targetTime = previousAnchorTime + intervalMs;
-      const minimumAllowedTime = previousAnchorTime + intervalMs * 0.6;
-      const candidate = futureSlots
-        .filter(
-          (slot) =>
-            !usedIds.has(slot.id) && new Date(slot.startsAt).getTime() >= minimumAllowedTime,
-        )
-        .sort((left, right) => {
-          const leftDiff = Math.abs(new Date(left.startsAt).getTime() - targetTime);
-          const rightDiff = Math.abs(new Date(right.startsAt).getTime() - targetTime);
-          return leftDiff - rightDiff;
-        })[0];
-
-      if (!candidate) {
-        break;
-      }
-
-      const candidateTime = new Date(candidate.startsAt).getTime();
-      suggestions.push({
-        ...candidate,
-        suggestedGapDays: Math.round((candidateTime - previousAnchorTime) / oneDayMs),
-        targetStartsAt: new Date(targetTime).toISOString(),
-      });
-      usedIds.add(candidate.id);
-      previousAnchorTime = candidateTime;
-    }
-
-    return suggestions;
-  }, [planningIntervalWeeks, selectedGroup, selectedGroupEvents, selectedGroupMatchedSlots]);
 
   useEffect(() => {
-    if (!hasOrganizerGroupScope && groupScope !== "all") {
+    if (!hasManagedGroupScope && groupScope !== "all") {
       setGroupScope("all");
     }
-  }, [groupScope, hasOrganizerGroupScope]);
+  }, [groupScope, hasManagedGroupScope]);
 
   useEffect(() => {
     if (!canCreateGroups || editingGroupId || groupForm.trainerId || availableTrainers.length === 0) {
@@ -6746,7 +7203,7 @@ export function GroupsPage() {
       <div className="divide-y divide-brand-line/70 border-y border-brand-line/70 bg-white sm:space-y-3 sm:divide-y-0 sm:border-y-0 sm:bg-transparent">
         {groups.map((group) => {
           const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-          const isOwnedGroup = ownedGroups.some((ownedGroup) => ownedGroup.id === group.id);
+          const isOwnedGroup = managedGroups.some((managedGroup) => managedGroup.id === group.id);
 
           return (
             <GroupListSlimRow
@@ -6965,13 +7422,13 @@ export function GroupsPage() {
           ? undefined
           : isGroupDetailView
             ? isParticipantGroupViewer
-              ? "Widzisz tylko grupy, które sam utworzyłeś albo do których już należysz. Dane administracyjne są tu ukryte."
-              : "To nadrzędny kontekst dla wszystkich szkoleń Emandar w tej relacji trener-organizator."
+              ? "Widzisz grupę w perspektywie uczestnika. Dane administracyjne są tu ukryte."
+              : "To nadrzędny kontekst dla wszystkich szkoleń Emandar przypiętych do tej grupy."
             : isParticipantGroupViewer
               ? undefined
               : canManageGroups
                 ? undefined
-                : "To Twoje grupy organizatora. Bez aktywnego trenera pozostają dostępne w trybie podglądu."
+                : "To Twoje grupy. Obecnie masz do nich tylko dostęp podglądowy."
       }
       showLeadText={isCreateGroupRoute || isGroupDetailView}
       action={
@@ -6988,7 +7445,7 @@ export function GroupsPage() {
         ) : undefined
       }
     >
-      {!isGroupDetailView && !isCreateGroupRoute && hasOrganizerGroupScope ? (
+      {!isGroupDetailView && !isCreateGroupRoute && hasManagedGroupScope ? (
         <div className="flex justify-start">
           <EventScopeSwitch
             activeScope={groupScope}
@@ -7169,7 +7626,7 @@ export function GroupsPage() {
                 canCreateGroups
                   ? "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
                   : isParticipantGroupViewer
-                    ? "Nie należysz jeszcze do żadnej grupy i nie masz własnych grup organizatora."
+                    ? "Nie należysz jeszcze do żadnej grupy i nie masz jeszcze własnych grup."
                   : "Nie masz jeszcze żadnych przypisanych grup."
               }
             />
@@ -7196,7 +7653,7 @@ export function GroupsPage() {
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Edytuj grupę"
-                description="Zmieniasz ustawienia nadrzędne dla tej relacji trener-organizator."
+                description="Zmieniasz ustawienia nadrzędne tej grupy i jej przyszłych szkoleń."
               />
               <form onSubmit={handleSaveGroup} className="mt-6 grid gap-4 lg:grid-cols-2">
                 <label className="grid gap-2 lg:col-span-2">
@@ -7394,16 +7851,16 @@ export function GroupsPage() {
               ) : null}
               {isParticipantGroupViewer ? (
                 <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
-                  {selectedGroupIsOwnedByCurrentUser
-                    ? hasActiveOrganizerAccess
-                      ? "To Twoja grupa organizatora. Masz aktywny dostęp organizatora, więc możesz zarządzać nią bez zmiany perspektywy konta."
-                      : "To Twoja wcześniejsza grupa organizatora. Bez aktywnego trenera pozostaje dostępna tylko do podglądu."
+                  {selectedGroupIsManagedByCurrentUser
+                    ? canManageGroups
+                      ? "To Twoja grupa. W tym widoku oglądasz ją jak uczestnik, a pełne zarządzanie masz po przełączeniu na zakładkę Organizuję."
+                      : "To Twoja grupa, ale w tej chwili pozostaje dostępna tylko do podglądu."
                     : selectedGroupParticipantMembership
                       ? "Należysz do tej grupy jako uczestnik. Widzisz podgląd grupy i powiązane wydarzenia, bez ustawień administracyjnych."
                       : "Widzisz tę grupę w trybie podglądu."}
                 </div>
               ) : null}
-              {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+              {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                 <div className="mt-6 flex flex-wrap gap-3">
                   <button
                     type="button"
@@ -7425,86 +7882,16 @@ export function GroupsPage() {
                     Archiwizuj
                   </button>
                   <Link
-                    to="/panel/terminy"
+                    to={getGroupTrainingCreatePath(selectedGroup.id)}
+                    state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
                     className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
                   >
                     <CalendarDays size={16} />
-                    Utwórz draft dla grupy
+                    Utwórz wydarzenie
                   </Link>
                 </div>
               ) : null}
             </article>
-
-            {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
-              <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-                <SectionBlockHeading
-                  title="Planowanie Roczne"
-                  description="System dobiera najlepsze przyszłe sloty dla tej grupy na bazie wspólnych terminów organizatora i trenera oraz docelowego interwału w tygodniach."
-                />
-                <div className="mt-6 flex flex-wrap gap-2">
-                  {ANNUAL_PLANNING_INTERVALS.map((interval) => (
-                    <button
-                      key={interval}
-                      type="button"
-                      onClick={() => setPlanningIntervalWeeks(interval)}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                        planningIntervalWeeks === interval
-                          ? "bg-brand-navy text-white"
-                          : "border border-brand-line text-brand-navy"
-                      }`}
-                    >
-                      co {interval} tyg.
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-6 space-y-3">
-                  {annualPlanningSuggestions.length === 0 ? (
-                    <EmptyPanelState
-                      title="Brak sugestii"
-                      description="Dla tej grupy nie ma jeszcze wystarczającej puli przyszłych zmatchowanych slotów, żeby zaproponować plan roczny."
-                    />
-                  ) : (
-                    annualPlanningSuggestions.map((slot, index) => (
-                      <article
-                        key={slot.id}
-                        className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-4">
-                          <div className="space-y-2">
-                            <p className="text-lg font-semibold text-brand-navy">
-                              Sugestia {index + 1} · {formatDate(slot.startsAt)}
-                            </p>
-                            <p className="text-sm text-brand-muted">
-                              Cel: {formatDate(slot.targetStartsAt)} · faktyczny slot{" "}
-                              {formatShortTime(slot.startsAt)} - {formatShortTime(slot.endsAt)}
-                            </p>
-                            <p className="text-sm text-brand-muted">{slot.location}</p>
-                            <p className="text-xs uppercase tracking-[0.18em] text-brand-sky-deep">
-                              przerwa {slot.suggestedGapDays} dni od poprzedniego wydarzenia
-                            </p>
-                            {slot.travelWarning ? (
-                              <p className="text-sm text-amber-900">{slot.travelWarning}</p>
-                            ) : null}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              navigate(
-                                `/panel/terminy?groupId=${selectedGroup.id}&slotId=${slot.id}`,
-                              )
-                            }
-                            className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-                          >
-                            <CalendarDays size={16} />
-                            Otwórz draft
-                          </button>
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </article>
-            ) : null}
 
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
@@ -7515,7 +7902,7 @@ export function GroupsPage() {
                     : "Priorytet członka steruje tym, kto wpada automatycznie do rosteru wydarzenia i kto ma pierwszeństwo przy obsłudze listy."
                 }
               />
-              {canManageGroups && selectedGroupIsOwnedByCurrentUser && selectedGroup.status === "active" ? (
+              {canManageGroups && selectedGroupIsManagedByCurrentUser && selectedGroup.status === "active" ? (
                 <form onSubmit={handleAddMember} className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
                   <div className="grid min-w-0 gap-4 lg:col-span-2 lg:grid-cols-2">
                     <label className="grid min-w-0 gap-2">
@@ -7670,7 +8057,7 @@ export function GroupsPage() {
                                     </p>
                                   </div>
 
-                                  {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                  {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                                     <select
                                       value={draft.priority}
                                       onChange={(event) => {
@@ -7748,7 +8135,7 @@ export function GroupsPage() {
                                           </span>
                                         </div>
 
-                                        {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                        {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                                           <label className="grid gap-2">
                                             <span className="text-xs font-semibold text-brand-navy sm:text-sm">
                                               Notatka o uczestniku
@@ -7771,7 +8158,7 @@ export function GroupsPage() {
                                         ) : null}
                                       </div>
 
-                                      {canManageGroups && selectedGroupIsOwnedByCurrentUser ? (
+                                      {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
                                         <div className="flex items-start justify-start lg:justify-end">
                                           <button
                                             type="button"
@@ -7803,14 +8190,26 @@ export function GroupsPage() {
                 description={
                   isParticipantGroupViewer
                     ? "Tutaj widać szkolenia przypięte do tej grupy. Szczegóły uczestnictwa sprawdzisz z poziomu listy szkoleń."
-                    : "Tutaj widać wszystkie szkolenia i drafty przypięte do tej grupy."
+                    : "Tutaj widać wszystkie szkolenia przypięte do tej grupy i możesz szybko dodawać kolejne terminy."
                 }
               />
+              {canManageGroups && selectedGroupIsManagedByCurrentUser && selectedGroup.status === "active" ? (
+                <div className="mt-6">
+                  <Link
+                    to={getGroupTrainingCreatePath(selectedGroup.id)}
+                    state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
+                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                  >
+                    <CalendarDays size={16} />
+                    Utwórz wydarzenie
+                  </Link>
+                </div>
+              ) : null}
               <div className="mt-6 space-y-3">
                 {selectedGroupEvents.length === 0 ? (
                   <EmptyPanelState
                     title="Brak wydarzeń"
-                    description="Po utworzeniu draftu albo szkolenia z poziomu terminów wydarzenia pojawią się tutaj automatycznie."
+                    description="Po utworzeniu szkolenia dla tej grupy wydarzenia pojawią się tutaj automatycznie."
                   />
                 ) : (
                   selectedGroupEvents.map((event) =>
@@ -7870,770 +8269,9 @@ export function GroupsPage() {
   );
 }
 
-export function AvailabilityPage() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const {
-    addOrganizerCalendarFeed,
-    addTrainerCalendarFeed,
-    addTrainerSharedSlot,
-    createOrganizerTrainingDraft,
-    currentUser,
-    decideOrganizerTrainingDraft,
-    removeOrganizerCalendarFeed,
-    removeTrainerCalendarFeed,
-    store,
-    syncOwnOrganizerCalendarFeeds,
-    syncOwnTrainerCalendarFeeds,
-    updateOrganizerCalendarFeedEnabled,
-    updateOrganizerTrainingDraft,
-    updateTrainerCalendarFeedEnabled,
-    updateTrainerSharedSlot,
-    archiveTrainerSharedSlot,
-    withdrawOrganizerTrainingDraft,
-  } = useAppState();
-  const [organizerFeedForm, setOrganizerFeedForm] = useState({
-    provider: "google" as TrainerCalendarFeedProvider,
-    url: "",
-  });
-  const [syncingTrainerFeeds, setSyncingTrainerFeeds] = useState(false);
-  const [syncingOrganizerFeeds, setSyncingOrganizerFeeds] = useState(false);
-  const [activeFreeSliceBucket, setActiveFreeSliceBucket] = useState<
-    "all" | TrainerFreeDaySliceBucket
-  >("all");
-  const [draftEditorMode, setDraftEditorMode] = useState<"create" | "edit" | null>(null);
-  const [draftFormValues, setDraftFormValues] = useState<OrganizerTrainingDraftFormValues | null>(
-    null,
-  );
-  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
-  const [savingDraft, setSavingDraft] = useState(false);
-  const [withdrawingDraftId, setWithdrawingDraftId] = useState<string | null>(null);
-
-  if (!currentUser) {
-    return null;
-  }
-
-  const trainerProfile = store.trainers.find((item) => item.userId === currentUser.id);
-  const organizerProfile = store.organizers.find(
-    (item) => item.userId === currentUser.id,
-  );
-  const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
-  const hasTrainerAvailabilityScope =
-    hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile) && !isCommunityTrainer;
-  const hasOrganizerAvailabilityScope =
-    canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
-
-  const ownCalendarFeeds = useMemo(
-    () =>
-      (trainerProfile
-        ? (store.trainerCalendarFeeds ?? []).filter((feed) => feed.trainerId === trainerProfile.id)
-        : []
-      ).sort(
-        (left, right) =>
-          new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
-      ),
-    [store.trainerCalendarFeeds, trainerProfile],
-  );
-  const ownSharedSlots = useMemo(
-    () =>
-      (trainerProfile
-        ? (store.trainerSharedSlots ?? []).filter((slot) => slot.trainerId === trainerProfile.id)
-        : []
-      ).sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()),
-    [store.trainerSharedSlots, trainerProfile],
-  );
-  const trainerDrafts = useMemo(
-    () =>
-      sortEventsByDate(
-        (store.trainingEvents ?? []).filter(
-          (event) =>
-            event.trainerId === trainerProfile?.id &&
-            resolveTrainingEventWorkflowStatus(event) === "draft-requested",
-        ),
-      ),
-    [store.trainingEvents, trainerProfile?.id],
-  );
-  const organizerFeeds = useMemo(
-    () =>
-      (organizerProfile
-        ? (store.organizerCalendarFeeds ?? []).filter(
-            (feed) => feed.organizerId === organizerProfile.id,
-          )
-        : []
-      ).sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
-    [organizerProfile, store.organizerCalendarFeeds],
-  );
-  const organizerRelationFeeds = useMemo(
-    () =>
-      (organizerProfile
-        ? (store.trainerOrganizerCalendarFeeds ?? []).filter(
-            (feed) => feed.organizerId === organizerProfile.id && feed.enabled,
-          )
-        : []
-      ).sort((left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()),
-    [organizerProfile, store.trainerOrganizerCalendarFeeds],
-  );
-
-  useEffect(() => {
-    if (!hasTrainerAvailabilityScope) {
-      return;
-    }
-
-    void syncOwnTrainerCalendarFeeds().catch(() => {});
-  }, [hasTrainerAvailabilityScope, syncOwnTrainerCalendarFeeds]);
-  useEffect(() => {
-    if (!hasOrganizerAvailabilityScope) {
-      return;
-    }
-
-    void syncOwnOrganizerCalendarFeeds().catch(() => {});
-  }, [hasOrganizerAvailabilityScope, syncOwnOrganizerCalendarFeeds]);
-
-  const ownBusyIntervals = useMemo(() => {
-    if (!trainerProfile) {
-      return [];
-    }
-
-    return [
-      ...store.trainingEvents
-        .filter(
-          (event) =>
-            event.trainerId === trainerProfile.id &&
-            !isTrainingEventArchived(event) &&
-            !["draft-requested", "trainer-rejected", "withdrawn"].includes(
-              resolveTrainingEventWorkflowStatus(event),
-            ) &&
-            resolveTrainingEventStatus(event.status) !== "cancelled",
-        )
-        .flatMap((event) =>
-          getTrainingEventScheduleDays(event).map((day) => ({
-            startsAt: day.startsAt,
-            endsAt: day.endsAt,
-            source: "emandar" as const,
-          })),
-        ),
-      ...(store.trainerExternalBusyMonths ?? [])
-        .filter((month) => month.trainerId === trainerProfile.id)
-        .flatMap((month) => month.intervals),
-    ];
-  }, [
-    store.trainerExternalBusyMonths,
-    store.trainingEvents,
-    trainerProfile,
-  ]);
-  const freeDaySlices = useMemo(() => {
-    if (!trainerProfile || ownCalendarFeeds.length === 0) {
-      return [];
-    }
-
-    return buildTrainerFreeDaySlices({
-      busyIntervals: ownBusyIntervals,
-      rangeStart: new Date().toISOString(),
-      rangeEnd: getAvailabilityHorizonEnd(),
-      minimumDurationHours: 1,
-    }).slice(0, 240);
-  }, [ownBusyIntervals, ownCalendarFeeds.length, trainerProfile]);
-  const freeDaySlicesByBucket = useMemo(
-    () =>
-      FREE_SLICE_BUCKETS.reduce<Record<TrainerFreeDaySliceBucket, typeof freeDaySlices>>(
-        (accumulator, bucket) => {
-          accumulator[bucket] = freeDaySlices.filter((slice) => slice.spanBucket === bucket);
-          return accumulator;
-        },
-        {
-          "1-day": [],
-          "2-days": [],
-          "3-days": [],
-          "4-plus-days": [],
-        },
-      ),
-    [freeDaySlices],
-  );
-  const enabledFeedCount = ownCalendarFeeds.filter((feed) => feed.enabled).length;
-  const approvedRelationsById = useMemo(
-    () =>
-      new Map(
-        (store.relations ?? [])
-          .filter((relation) => relation.status === "approved")
-          .map((relation) => [relation.id, relation]),
-      ),
-    [store.relations],
-  );
-  const trainerById = useMemo(
-    () => new Map((store.trainers ?? []).map((trainer) => [trainer.id, trainer])),
-    [store.trainers],
-  );
-  const organizerMatchedSlots = useMemo(() => {
-    const sharedSlotsById = new Map((store.trainerSharedSlots ?? []).map((slot) => [slot.id, slot]));
-
-    return organizerRelationFeeds
-      .flatMap((feed) =>
-        (feed.matchedSharedSlotIds ?? []).map((slotId) => {
-          const slot = sharedSlotsById.get(slotId);
-
-          if (!slot || slot.status === "archived" || slot.archivedAt) {
-            return null;
-          }
-
-          const trainer = trainerById.get(slot.trainerId);
-          const relation = approvedRelationsById.get(feed.relationId);
-          const baseSlot = {
-            ...slot,
-            trainerName: trainer?.displayName ?? "Przekazujący Wiedzę",
-            relation,
-            googleFeedUrl: feed.publicFeedUrl,
-          } satisfies OrganizerMatchedSlotView;
-
-          return {
-            ...baseSlot,
-            travelWarning: buildTrainerTravelWarningForSlot(baseSlot, store.trainingEvents ?? []),
-          } satisfies OrganizerMatchedSlotView;
-        }),
-      )
-      .filter((slot): slot is OrganizerMatchedSlotView => Boolean(slot))
-      .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
-  }, [
-    approvedRelationsById,
-    organizerRelationFeeds,
-    store.trainerSharedSlots,
-    store.trainingEvents,
-    trainerById,
-  ]);
-  const organizerGroupMemberCounts = useMemo(
-    () =>
-      (store.groupMembers ?? []).reduce<Record<string, number>>((accumulator, member) => {
-        if (member.membershipStatus !== "active") {
-          return accumulator;
-        }
-
-        accumulator[member.groupId] = (accumulator[member.groupId] ?? 0) + 1;
-        return accumulator;
-      }, {}),
-    [store.groupMembers],
-  );
-  const organizerGroups = useMemo(
-    () =>
-      (store.groups ?? [])
-        .filter(
-          (group) =>
-            group.organizerId === organizerProfile?.id &&
-            group.status === "active" &&
-            approvedRelationsById.has(`${group.trainerId}__${group.organizerId}`),
-        )
-        .map((group) => ({
-          id: group.id,
-          name: group.name,
-          trainerId: group.trainerId,
-          trainerName: trainerById.get(group.trainerId)?.displayName,
-          activeMembersCount: organizerGroupMemberCounts[group.id] ?? 0,
-        }))
-        .sort((left, right) => left.name.localeCompare(right.name, "pl")),
-    [
-      approvedRelationsById,
-      organizerGroupMemberCounts,
-      organizerProfile?.id,
-      store.groups,
-      trainerById,
-    ],
-  );
-  const organizerDrafts = useMemo(() => {
-    const matchedSlotsById = new Map(organizerMatchedSlots.map((slot) => [slot.id, slot]));
-
-    return sortEventsByDate(
-      (store.trainingEvents ?? [])
-        .filter((event) => event.organizerId === organizerProfile?.id && Boolean(event.sharedSlotId))
-        .map((event) => ({
-          ...event,
-          trainerName: trainerById.get(event.trainerId ?? "")?.displayName,
-          slot: event.sharedSlotId ? matchedSlotsById.get(event.sharedSlotId) ?? null : null,
-        })),
-    ) as OrganizerTrainingDraftListItem[];
-  }, [organizerMatchedSlots, organizerProfile?.id, store.trainingEvents, trainerById]);
-  const visibleFreeSliceBuckets = useMemo(() => {
-    if (activeFreeSliceBucket !== "all") {
-      return [activeFreeSliceBucket];
-    }
-
-    return FREE_SLICE_BUCKETS.filter(
-      (bucket) => (freeDaySlicesByBucket[bucket] ?? []).length > 0,
-    );
-  }, [activeFreeSliceBucket, freeDaySlicesByBucket]);
-
-  useEffect(() => {
-    if (!hasOrganizerAvailabilityScope || !organizerProfile) {
-      return;
-    }
-
-    const params = new URLSearchParams(location.search);
-    const slotId = params.get("slotId");
-
-    if (!slotId) {
-      return;
-    }
-
-    const slot = organizerMatchedSlots.find((item) => item.id === slotId);
-    if (!slot) {
-      return;
-    }
-
-    const requestedGroupId = params.get("groupId");
-    const matchingGroups = organizerGroups.filter((group) => group.trainerId === slot.trainerId);
-    const resolvedGroupId =
-      requestedGroupId && matchingGroups.some((group) => group.id === requestedGroupId)
-        ? requestedGroupId
-        : matchingGroups.length === 1
-          ? matchingGroups[0].id
-          : "";
-
-    setDraftEditorMode("create");
-    setEditingDraftId(null);
-    setDraftFormValues({
-      ...createOrganizerDraftFormValuesFromSlot(slot),
-      groupId: resolvedGroupId,
-    });
-    void navigate("/panel/terminy", { replace: true });
-  }, [
-    hasOrganizerAvailabilityScope,
-    location.search,
-    navigate,
-    organizerGroups,
-    organizerMatchedSlots,
-    organizerProfile,
-  ]);
-
-  async function handleSyncTrainerFeeds() {
-    try {
-      setSyncingTrainerFeeds(true);
-      await syncOwnTrainerCalendarFeeds();
-      toast.success("Feedy iCal zostaly zsynchronizowane.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac kalendarzy.",
-      );
-    } finally {
-      setSyncingTrainerFeeds(false);
-    }
-  }
-
-  async function handleSyncOrganizerFeeds() {
-    try {
-      setSyncingOrganizerFeeds(true);
-      await syncOwnOrganizerCalendarFeeds();
-      toast.success("Feedy organizatora zostaly zsynchronizowane.");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Nie udalo sie zsynchronizowac feedow organizatora.",
-      );
-    } finally {
-      setSyncingOrganizerFeeds(false);
-    }
-  }
-
-  async function handleCopyLink(value: string, label = "Skopiowano link.") {
-    if (!value) {
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(value);
-      toast.success(label);
-    } catch {
-      toast.error("Nie udało się skopiować linku.");
-    }
-  }
-
-  async function handleAddTrainerFeed(
-    input: { provider: TrainerCalendarFeedProvider; url: string },
-  ) {
-    try {
-      await addTrainerCalendarFeed(input);
-      toast.success("Dodano feed iCal.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu iCal.");
-    }
-  }
-
-  async function handleAddOrganizerFeed(
-    input: { provider: TrainerCalendarFeedProvider; url: string },
-  ) {
-    try {
-      await addOrganizerCalendarFeed(input);
-      setOrganizerFeedForm((current) => ({
-        ...current,
-        url: "",
-      }));
-      toast.success("Dodano feed organizatora.");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie dodac feedu.");
-    }
-  }
-
-  async function handleCreateDraft(values: OrganizerTrainingDraftFormValues) {
-    if (!values.groupId) {
-      toast.error("Wybierz grupę dla draftu.");
-      return;
-    }
-
-    try {
-      setSavingDraft(true);
-      await createOrganizerTrainingDraft({
-        groupId: values.groupId,
-        sharedSlotId: values.sharedSlotId,
-        title: values.title,
-        summary: values.summary,
-        description: values.description,
-        type: values.type,
-        location: values.location,
-        capacity: values.capacity,
-        minimumParticipants: values.minimumParticipants,
-        status: values.status,
-        publishAutomaticallyAfterTrainerApproval: values.publishAutomaticallyAfterTrainerApproval,
-        tags: parseEventTags(values.tagsText),
-        scheduleDays: values.scheduleDays,
-      });
-      toast.success("Utworzono draft szkolenia.");
-      setDraftEditorMode(null);
-      setDraftFormValues(null);
-      setEditingDraftId(null);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie utworzyc draftu.");
-    } finally {
-      setSavingDraft(false);
-    }
-  }
-
-  async function handleUpdateDraft(values: OrganizerTrainingDraftFormValues) {
-    if (!editingDraftId) {
-      return;
-    }
-
-    if (!values.groupId) {
-      toast.error("Wybierz grupę dla draftu.");
-      return;
-    }
-
-    try {
-      setSavingDraft(true);
-      await updateOrganizerTrainingDraft({
-        eventId: editingDraftId,
-        groupId: values.groupId,
-        sharedSlotId: values.sharedSlotId,
-        title: values.title,
-        summary: values.summary,
-        description: values.description,
-        type: values.type,
-        location: values.location,
-        capacity: values.capacity,
-        minimumParticipants: values.minimumParticipants,
-        status: values.status,
-        publishAutomaticallyAfterTrainerApproval: values.publishAutomaticallyAfterTrainerApproval,
-        tags: parseEventTags(values.tagsText),
-        scheduleDays: values.scheduleDays,
-      });
-      toast.success("Zapisano draft szkolenia.");
-      setDraftEditorMode(null);
-      setDraftFormValues(null);
-      setEditingDraftId(null);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie zapisac draftu.");
-    } finally {
-      setSavingDraft(false);
-    }
-  }
-
-  async function handleWithdrawDraft(eventId: string) {
-    try {
-      setWithdrawingDraftId(eventId);
-      await withdrawOrganizerTrainingDraft(eventId);
-      toast.success("Wycofano draft szkolenia.");
-      if (editingDraftId === eventId) {
-        setDraftEditorMode(null);
-        setDraftFormValues(null);
-        setEditingDraftId(null);
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Nie udalo sie wycofac draftu.");
-    } finally {
-      setWithdrawingDraftId(null);
-    }
-  }
-
-  return (
-    <PanelSection
-      eyebrow="Terminy"
-      title="Terminy i feedy"
-      description="Jeden ekran zbiera terminy i feedy dla wszystkich warstw, które masz odblokowane. Wyższy poziom nie ukrywa już niższych workflowów."
-    >
-      {hasTrainerAvailabilityScope && (
-        <div className="space-y-6">
-          <TrainerAvailabilityWorkspace
-            currentUserRole="trainer"
-            feeds={ownCalendarFeeds}
-            sharedSlots={ownSharedSlots}
-            drafts={trainerDrafts}
-            syncingFeeds={syncingTrainerFeeds}
-            onSyncFeeds={() => void handleSyncTrainerFeeds()}
-            onAddFeed={(input) => handleAddTrainerFeed(input)}
-            onToggleFeedEnabled={(feedId, enabled) =>
-              updateTrainerCalendarFeedEnabled(feedId, enabled)
-            }
-            onRemoveFeed={(feedId) => removeTrainerCalendarFeed(feedId)}
-            onCreateSlot={(input) => addTrainerSharedSlot(input)}
-            onUpdateSlot={(input) => updateTrainerSharedSlot(input)}
-            onArchiveSlot={(slotId) => archiveTrainerSharedSlot(slotId)}
-            onAcceptDraft={(draft) =>
-              decideOrganizerTrainingDraft({
-                eventId: draft.id,
-                decision: "accepted",
-              }).then(() => toast.success("Zaakceptowano draft szkolenia."))
-            }
-            onRejectDraft={(draft, reason) =>
-              decideOrganizerTrainingDraft({
-                eventId: draft.id,
-                decision: "rejected",
-                message: reason,
-              }).then(() => toast.success("Odrzucono draft szkolenia."))
-            }
-          />
-
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <SectionBlockHeading
-              title="Wolne przedzialy z prywatnego kalendarza"
-              description="To warstwa pomocnicza dla trenera. Zrodlowe wydarzenia iCal pozostaja ukryte, a tutaj widac tylko przyszle wolne okna do publikacji jako sloty."
-            />
-            <div className="mt-6 flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setActiveFreeSliceBucket("all")}
-                className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                  activeFreeSliceBucket === "all"
-                    ? "bg-brand-navy text-white"
-                    : "border border-brand-line text-brand-navy"
-                }`}
-              >
-                Wszystkie ({freeDaySlices.length})
-              </button>
-              {FREE_SLICE_BUCKETS.map((bucket) => (
-                <button
-                  key={bucket}
-                  type="button"
-                  onClick={() => setActiveFreeSliceBucket(bucket)}
-                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
-                    activeFreeSliceBucket === bucket
-                      ? "bg-brand-navy text-white"
-                      : "border border-brand-line text-brand-navy"
-                  }`}
-                >
-                  {getFreeSliceBucketLabel(bucket)} ({freeDaySlicesByBucket[bucket].length})
-                </button>
-              ))}
-            </div>
-
-            {enabledFeedCount === 0 ? (
-              <div className="mt-6">
-                <EmptyPanelState
-                  title="Brak aktywnego feedu"
-                  description="Aktywuj przynajmniej jeden prywatny feed iCal, aby zobaczyc przyszle wolne przedzialy."
-                />
-              </div>
-            ) : freeDaySlices.length === 0 ? (
-              <div className="mt-6">
-                <EmptyPanelState
-                  title="Brak wolnych przedzialow"
-                  description="W aktualnym horyzoncie nie ma jeszcze wolnych dziennych okien spelniajacych minimum jednej godziny."
-                />
-              </div>
-            ) : (
-              <div className="mt-6 space-y-6">
-                {visibleFreeSliceBuckets.map((bucket) => (
-                  <section key={bucket}>
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="text-lg font-semibold text-brand-navy">
-                        {getFreeSliceBucketLabel(bucket)}
-                      </h4>
-                      <p className="text-sm text-brand-muted">
-                        {freeDaySlicesByBucket[bucket].length} przedzialow
-                      </p>
-                    </div>
-                    <div className="mt-3 space-y-3">
-                      {freeDaySlicesByBucket[bucket].map((slice) => (
-                        <article
-                          key={`${slice.startsAt}-${slice.endsAt}`}
-                          className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4"
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <p className="text-lg font-semibold text-brand-navy">
-                                {formatDate(slice.startsAt)}
-                              </p>
-                              <p className="mt-1 text-brand-muted">
-                                {formatShortTime(slice.startsAt)} - {formatShortTime(slice.endsAt)}
-                              </p>
-                            </div>
-                            <div className="text-right text-sm text-brand-muted">
-                              <p>{formatDurationHours(slice.durationHours)}</p>
-                              <p className="mt-1">
-                                Luka: {slice.spanDays} {slice.spanDays === 1 ? "dzien" : "dni"}
-                              </p>
-                            </div>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            )}
-          </article>
-        </div>
-      )}
-
-      {hasOrganizerAvailabilityScope && organizerProfile && (
-        <div className="space-y-6">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-            <OrganizerCalendarFeedsPanel
-              feeds={organizerFeeds}
-              draft={organizerFeedForm}
-              onDraftChange={setOrganizerFeedForm}
-              onCreateFeed={(input) => void handleAddOrganizerFeed(input)}
-              onToggleEnabled={(feedId, enabled) =>
-                updateOrganizerCalendarFeedEnabled(feedId, enabled)
-              }
-              onRemoveFeed={(feedId) => removeOrganizerCalendarFeed(feedId)}
-              onSync={() => void handleSyncOrganizerFeeds()}
-              syncing={syncingOrganizerFeeds}
-            />
-            <OrganizerMatchedSlotsPanel
-              slots={organizerMatchedSlots}
-              onCreateDraft={(slotId) => {
-                const slot = organizerMatchedSlots.find((item) => item.id === slotId);
-                if (!slot) {
-                  return;
-                }
-
-                const matchingGroups = organizerGroups.filter(
-                  (group) => group.trainerId === slot.trainerId,
-                );
-                setDraftEditorMode("create");
-                setEditingDraftId(null);
-                setDraftFormValues({
-                  ...createOrganizerDraftFormValuesFromSlot(slot),
-                  groupId: matchingGroups.length === 1 ? matchingGroups[0].id : "",
-                });
-              }}
-              onCopyFeedLink={(feedUrl) => void handleCopyLink(feedUrl, "Skopiowano adres feedu.")}
-            />
-          </div>
-
-          {draftFormValues && (
-            <OrganizerTrainingDraftEditorPanel
-              mode={draftEditorMode ?? "create"}
-              values={draftFormValues}
-              availableSlots={organizerMatchedSlots}
-              availableGroups={organizerGroups}
-              onChange={setDraftFormValues}
-              onSubmit={(values) =>
-                draftEditorMode === "edit"
-                  ? void handleUpdateDraft(values)
-                  : void handleCreateDraft(values)
-              }
-              onCancel={() => {
-                setDraftEditorMode(null);
-                setDraftFormValues(null);
-                setEditingDraftId(null);
-              }}
-              onWithdraw={
-                draftEditorMode === "edit" && editingDraftId
-                  ? (_values) => void handleWithdrawDraft(editingDraftId)
-                  : undefined
-              }
-              submitting={savingDraft}
-              withdrawing={Boolean(editingDraftId && withdrawingDraftId === editingDraftId)}
-            />
-          )}
-
-          <OrganizerTrainingDraftListPanel
-            drafts={organizerDrafts}
-            onEdit={(draft) => {
-              if (resolveTrainingEventWorkflowStatus(draft) !== "draft-requested") {
-                toast.error("Edytować można tylko draft oczekujący na decyzję trenera.");
-                return;
-              }
-
-              setDraftEditorMode("edit");
-              setEditingDraftId(draft.id);
-              setDraftFormValues(createOrganizerDraftFormValuesFromEvent(draft));
-            }}
-            onWithdraw={(draft) => void handleWithdrawDraft(draft.id)}
-          />
-
-          {organizerRelationFeeds.length > 0 && (
-            <div className="grid gap-4 xl:grid-cols-2">
-              {organizerRelationFeeds.map((feed) => {
-                const trainerName =
-                  trainerById.get(feed.trainerId)?.displayName ?? "Przekazujący Wiedzę";
-
-                return (
-                  <OrganizerGoogleCalendarExportPanel
-                    key={feed.id}
-                    title={`Google Calendar · ${trainerName}`}
-                    description="Subskrybuj dopasowany feed tej relacji, aby widzieć tylko sloty zgodne z Twoim kalendarzem."
-                    feedUrl={feed.publicFeedUrl ?? ""}
-                    onCopyLink={(subscribeUrl) =>
-                      void handleCopyLink(subscribeUrl, "Skopiowano link do Google Calendar.")
-                    }
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {currentUser.role === "admin" && (
-        <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <SectionBlockHeading
-            title="Nowy model terminow"
-            description="Admin widzi tu stan techniczny wdrozenia nowego flow slotow, feedow i draftow."
-          />
-          <div className="mt-6 grid gap-4 md:grid-cols-4">
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Sloty trenerow</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {store.trainerSharedSlots?.length ?? 0}
-              </p>
-            </div>
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Feedy organizatorow</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {store.organizerCalendarFeeds?.length ?? 0}
-              </p>
-            </div>
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Feedy relacji</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {store.trainerOrganizerCalendarFeeds?.length ?? 0}
-              </p>
-            </div>
-            <div className="rounded-3xl border border-brand-line bg-brand-shell/60 p-4">
-              <p className="text-sm text-brand-muted">Drafty szkoleń</p>
-              <p className="mt-2 text-2xl font-semibold text-brand-navy">
-                {
-                  (store.trainingEvents ?? []).filter(
-                    (event) => Boolean(event.sharedSlotId),
-                  ).length
-                }
-              </p>
-            </div>
-          </div>
-        </article>
-      )}
-    </PanelSection>
-  );
-}
-
 export function EventsPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const {
     createTrainingEvent,
     currentUser,
@@ -8688,6 +8326,10 @@ export function EventsPage() {
     () =>
       participantEnrollmentRecords.filter((record) => !isCommunityPanelEvent(record.event)),
     [participantEnrollmentRecords],
+  );
+  const participantOfficialSections = useMemo(
+    () => buildParticipantOfficialEnrollmentSections(participantOfficialRecords),
+    [participantOfficialRecords],
   );
   const participantCommunityRecords = useMemo(
     () =>
@@ -8802,6 +8444,8 @@ export function EventsPage() {
   const [trainerEventForm, setTrainerEventForm] = useState<TrainingEventFormState>(
     createEmptyTrainingEventFormState(),
   );
+  const scheduleStartInputRef = useRef<HTMLInputElement | null>(null);
+  const hasFocusedGroupCreatorScheduleRef = useRef(false);
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [uploadingCreatorImages, setUploadingCreatorImages] = useState(false);
   const [savingEventId, setSavingEventId] = useState<string | null>(null);
@@ -8839,6 +8483,12 @@ export function EventsPage() {
   ]);
   const selectedOfficialGroup =
     availableOfficialGroups.find((group) => group.id === trainerEventForm.groupId) ?? null;
+  const creatorSearchParams = useMemo(
+    () => new URLSearchParams(location.search),
+    [location.search],
+  );
+  const requestedOfficialGroupId = creatorSearchParams.get("groupId") ?? "";
+  const returnToGroupId = creatorSearchParams.get("returnToGroupId") ?? "";
   const selectedOfficialGroupTrainerName = selectedOfficialGroup
     ? store.trainers.find((trainer) => trainer.id === selectedOfficialGroup.trainerId)?.displayName ??
       "Przekazujący Wiedzę"
@@ -8875,28 +8525,9 @@ export function EventsPage() {
   function applyOfficialGroupToTrainingForm(groupId: string) {
     const nextGroup = availableOfficialGroups.find((group) => group.id === groupId) ?? null;
 
-    setTrainerEventForm((previous) => ({
-      ...previous,
-      groupId,
-      trainerId: nextGroup?.trainerId ?? previous.trainerId,
-      location:
-        nextGroup?.defaultLocation && previous.location !== nextGroup.defaultLocation
-          ? nextGroup.defaultLocation
-          : previous.location,
-      capacity:
-        typeof nextGroup?.defaultCapacity === "number"
-          ? String(nextGroup.defaultCapacity)
-          : previous.capacity,
-      confirmationLeadTimeDays:
-        typeof nextGroup?.defaultConfirmationLeadTimeDays === "number"
-          ? String(nextGroup.defaultConfirmationLeadTimeDays)
-          : previous.confirmationLeadTimeDays,
-      joinAudience: nextGroup?.defaultJoinAudience ?? previous.joinAudience,
-      tags:
-        nextGroup?.defaultTags && nextGroup.defaultTags.length > 0
-          ? nextGroup.defaultTags.join(", ")
-          : previous.tags,
-    }));
+    setTrainerEventForm((previous) =>
+      applyOfficialGroupDefaultsToTrainingForm(previous, nextGroup, store.trainingEvents),
+    );
   }
 
   useEffect(() => {
@@ -8927,6 +8558,7 @@ export function EventsPage() {
     }
 
     const nextGroupId =
+      availableOfficialGroups.find((group) => group.id === requestedOfficialGroupId)?.id ??
       availableOfficialGroups.find((group) => group.id === trainerEventForm.groupId)?.id ??
       availableOfficialGroups[0]?.id ??
       "";
@@ -8940,8 +8572,28 @@ export function EventsPage() {
     availableOfficialGroups,
     hasOfficialManagementScope,
     isCommunitySection,
+    requestedOfficialGroupId,
     trainerEventForm.groupId,
   ]);
+
+  useEffect(() => {
+    if (!isOfficialCreatorView || !returnToGroupId) {
+      hasFocusedGroupCreatorScheduleRef.current = false;
+      return;
+    }
+
+    if (
+      hasFocusedGroupCreatorScheduleRef.current ||
+      trainerEventForm.groupId !== returnToGroupId
+    ) {
+      return;
+    }
+
+    hasFocusedGroupCreatorScheduleRef.current = true;
+    window.requestAnimationFrame(() => {
+      scheduleStartInputRef.current?.focus();
+    });
+  }, [isOfficialCreatorView, returnToGroupId, trainerEventForm.groupId]);
 
   if (isOfficialCreatorView && !canCreateOfficialTraining) {
     return <Navigate to="/panel/szkolenia" replace />;
@@ -8980,9 +8632,43 @@ export function EventsPage() {
 
       {isCreatorView ? (
         isCommunitySection ? (
-          <form
-            onSubmit={async (event) => {
-              event.preventDefault();
+          <CommunityEventMutationForm
+            values={getCommunityEventEditorValuesFromTrainingForm(trainerEventForm)}
+            uploadingImages={uploadingCreatorImages}
+            submitting={creatingEvent}
+            submitLabel="Wyślij wydarzenie do moderacji"
+            helperMessage="Po zapisie wydarzenie trafi do moderacji admina. Publikacja następuje dopiero po akceptacji Dariusza albo roli admin."
+            onChange={(updater) =>
+              setTrainerEventForm((previous) =>
+                applyCommunityEventEditorValuesToTrainingForm(
+                  previous,
+                  updater(getCommunityEventEditorValuesFromTrainingForm(previous)),
+                ),
+              )
+            }
+            onUploadImages={async (files) => {
+              const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
+              const filesToUpload = files.slice(0, availableSlots);
+
+              if (filesToUpload.length === 0) {
+                toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                return;
+              }
+
+              setUploadingCreatorImages(true);
+
+              try {
+                const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                setTrainerEventForm((previous) => ({
+                  ...previous,
+                  eventImages: [...previous.eventImages, ...uploadedImages],
+                }));
+              } finally {
+                setUploadingCreatorImages(false);
+              }
+            }}
+            onSubmit={async (submitEvent) => {
+              submitEvent.preventDefault();
               setCreatingEvent(true);
 
               try {
@@ -9022,56 +8708,7 @@ export function EventsPage() {
                 setCreatingEvent(false);
               }
             }}
-            className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-          >
-            <CommunityEventEditorFields
-              values={getCommunityEventEditorValuesFromTrainingForm(trainerEventForm)}
-              uploadingImages={uploadingCreatorImages}
-              disabled={creatingEvent}
-              onChange={(updater) =>
-                setTrainerEventForm((previous) =>
-                  applyCommunityEventEditorValuesToTrainingForm(
-                    previous,
-                    updater(getCommunityEventEditorValuesFromTrainingForm(previous)),
-                  ),
-                )
-              }
-              onUploadImages={async (files) => {
-                const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
-                const filesToUpload = files.slice(0, availableSlots);
-
-                if (filesToUpload.length === 0) {
-                  toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
-                  return;
-                }
-
-                setUploadingCreatorImages(true);
-
-                try {
-                  const uploadedImages = await uploadCommunityEventImages(filesToUpload);
-                  setTrainerEventForm((previous) => ({
-                    ...previous,
-                    eventImages: [...previous.eventImages, ...uploadedImages],
-                  }));
-                } finally {
-                  setUploadingCreatorImages(false);
-                }
-              }}
-            />
-
-            <div className="mt-4 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted">
-              Po zapisie wydarzenie trafi do moderacji admina. Publikacja następuje dopiero po
-              akceptacji Dariusza albo roli admin.
-            </div>
-
-            <button
-              type="submit"
-              disabled={creatingEvent}
-              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-            >
-              {creatingEvent ? "Zapisywanie..." : "Wyślij wydarzenie do moderacji"}
-            </button>
-          </form>
+          />
         ) : !isCommunitySection && hasOfficialManagementScope && availableOfficialGroups.length === 0 ? (
           <EmptyPanelState
             title="Najpierw utwórz grupę"
@@ -9084,6 +8721,24 @@ export function EventsPage() {
               setCreatingEvent(true);
 
               try {
+                const officialCapacity = Math.max(
+                  1,
+                  Number(trainerEventForm.capacity) || selectedOfficialGroup?.defaultCapacity || 20,
+                );
+                const officialMinimumParticipants = Math.max(
+                  1,
+                  Number(trainerEventForm.minimumParticipants) || officialCapacity,
+                );
+                const officialConfirmationLeadTimeDays = Math.max(
+                  0,
+                  Number(trainerEventForm.confirmationLeadTimeDays) ||
+                    selectedOfficialGroup?.defaultConfirmationLeadTimeDays ||
+                    5,
+                );
+                const officialLocation =
+                  trainerEventForm.location.trim() || selectedOfficialGroup?.defaultLocation || "";
+                const officialType = trainerEventForm.type.trim() || "Warsztat stacjonarny";
+
                 await createTrainingEvent({
                   groupId:
                     !isCommunitySection && trainerEventForm.groupId
@@ -9107,12 +8762,18 @@ export function EventsPage() {
                   ),
                   type: isCommunitySection
                     ? "Wydarzenie społeczności"
-                    : trainerEventForm.type,
+                    : officialType,
                   status: trainerEventForm.status,
-                  location: trainerEventForm.location,
-                  capacity: Number(trainerEventForm.capacity),
-                  minimumParticipants: Number(trainerEventForm.minimumParticipants),
-                  confirmationLeadTimeDays: Number(trainerEventForm.confirmationLeadTimeDays),
+                  location: isCommunitySection ? trainerEventForm.location : officialLocation,
+                  capacity: isCommunitySection
+                    ? Number(trainerEventForm.capacity)
+                    : officialCapacity,
+                  minimumParticipants: isCommunitySection
+                    ? Number(trainerEventForm.minimumParticipants)
+                    : officialMinimumParticipants,
+                  confirmationLeadTimeDays: isCommunitySection
+                    ? Number(trainerEventForm.confirmationLeadTimeDays)
+                    : officialConfirmationLeadTimeDays,
                   isPublished: isCommunitySection ? false : trainerEventForm.isPublished,
                   brandStatus: isCommunitySection ? "supported" : undefined,
                   joinAudienceSetting:
@@ -9133,39 +8794,22 @@ export function EventsPage() {
                     ? "Wydarzenie zostało wysłane do moderacji."
                     : "Szkolenie zostało dodane.",
                 );
+                if (!isCommunitySection && returnToGroupId) {
+                  navigate(`/panel/grupy/${returnToGroupId}`);
+                  return;
+                }
+
                 setTrainerEventForm((previous) => ({
                   ...createEmptyTrainingEventFormState(),
-                  groupId:
-                    !isCommunitySection &&
-                    hasOfficialManagementScope
-                      ? previous.groupId
-                      : "",
-                  trainerId:
-                    !isCommunitySection && selectedOfficialGroup
-                      ? selectedOfficialGroup.trainerId
-                      : !isCommunitySection && isOrganizerManager
-                        ? availableTrainers[0]?.id ?? ""
-                      : previous.trainerId,
-                  location:
-                    !isCommunitySection && selectedOfficialGroup?.defaultLocation
-                      ? selectedOfficialGroup.defaultLocation
-                      : "",
-                  capacity:
-                    !isCommunitySection &&
-                    typeof selectedOfficialGroup?.defaultCapacity === "number"
-                      ? String(selectedOfficialGroup.defaultCapacity)
-                      : "20",
-                  confirmationLeadTimeDays:
-                    !isCommunitySection &&
-                    typeof selectedOfficialGroup?.defaultConfirmationLeadTimeDays === "number"
-                      ? String(selectedOfficialGroup.defaultConfirmationLeadTimeDays)
-                      : "5",
-                  tags:
-                    !isCommunitySection &&
-                    selectedOfficialGroup?.defaultTags &&
-                    selectedOfficialGroup.defaultTags.length > 0
-                      ? selectedOfficialGroup.defaultTags.join(", ")
-                      : "",
+                  ...(isCommunitySection
+                    ? {}
+                    : applyOfficialGroupDefaultsToTrainingForm(
+                        createEmptyTrainingEventFormState(),
+                        selectedOfficialGroup,
+                        store.trainingEvents,
+                      )),
+                  summary: isCommunitySection ? "" : previous.summary,
+                  description: isCommunitySection ? "" : previous.description,
                   isPublished: !isCommunitySection,
                   selfManagedByTrainer: false,
                 }));
@@ -9244,7 +8888,7 @@ export function EventsPage() {
                   ) : null}
 
                   <p className="mt-4 text-sm text-brand-muted">
-                    Wybierz jedną z istniejących rezerwacji tej grupy albo ustaw nową datę niżej.
+                    Formularz startuje z trenerem i ustawieniami tej grupy. Datę oraz godziny ustawisz niżej.
                   </p>
                 </div>
               )}
@@ -9280,7 +8924,6 @@ export function EventsPage() {
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
                   <input
-                    required
                     value={trainerEventForm.type}
                     onChange={(event) =>
                       setTrainerEventForm((previous) => ({
@@ -9316,7 +8959,7 @@ export function EventsPage() {
                   {isCommunitySection ? "Lokalizacja" : "Nagłówek miejsca"}
                 </span>
                 <input
-                  required
+                  required={isCommunitySection}
                   value={trainerEventForm.location}
                   onChange={(event) =>
                     setTrainerEventForm((previous) => ({
@@ -9351,10 +8994,10 @@ export function EventsPage() {
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunitySection
                     ? "Krótka informacja o wydarzeniu"
-                    : "Krótka informacja od organizatora"}
+                    : "Krótka informacja od organizatora (opcjonalnie)"}
                 </span>
                 <textarea
-                  required
+                  required={isCommunitySection}
                   rows={3}
                   maxLength={180}
                   value={trainerEventForm.summary}
@@ -9372,10 +9015,10 @@ export function EventsPage() {
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunitySection
                     ? "Informacja do prośby o dołączenie"
-                    : "Dłuższy opis na widoku szczegółowym"}
+                    : "Dłuższy opis na widoku szczegółowym (opcjonalnie)"}
                 </span>
                 <textarea
-                  required
+                  required={isCommunitySection}
                   rows={6}
                   value={trainerEventForm.description}
                   onChange={(event) =>
@@ -9468,6 +9111,7 @@ export function EventsPage() {
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Pierwszy dzień szkolenia</span>
                 <input
+                  ref={scheduleStartInputRef}
                   required
                   type="date"
                   value={trainerEventForm.firstDayDate}
@@ -9484,7 +9128,6 @@ export function EventsPage() {
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
                 <input
-                  required
                   min={1}
                   type="number"
                   value={trainerEventForm.scheduleDays.length}
@@ -9572,7 +9215,6 @@ export function EventsPage() {
               <label className="grid gap-2">
                 <span className="text-sm font-semibold text-brand-navy">Limit miejsc</span>
                 <input
-                  required
                   min={1}
                   type="number"
                   value={trainerEventForm.capacity}
@@ -9610,7 +9252,6 @@ export function EventsPage() {
                   SMS potwierdzenia udziału
                 </span>
                 <input
-                  required
                   min={0}
                   type="number"
                   value={trainerEventForm.confirmationLeadTimeDays}
@@ -9688,26 +9329,41 @@ export function EventsPage() {
         )
       ) : !isCreatorView && isOfficialJoinedView ? (
         <div className="space-y-6">
-          {participantOfficialRecords.length === 0 ? (
+          {participantOfficialSections.length === 0 ? (
             <EmptyPanelState
-              title="Nie masz jeszcze żadnych szkoleń"
-              description="Kiedy zapiszesz się na szkolenie Emandar, pojawi się ono tutaj."
+              title="Brak aktywnych szkoleń"
+              description="Gdy zgłosisz się na szkolenie Emandar albo trafisz na roster, pojawi się ono tutaj w odpowiedniej sekcji."
             />
           ) : (
-            <div className="space-y-4">
-              <SectionBlockHeading />
-              {participantOfficialRecords.map((record) => (
-                record.kind === "request" ? (
-                  <ParticipantPendingEnrollmentRequestCard
-                    key={record.request.id}
-                    record={record}
-                  />
-                ) : (
-                  <ParticipantGroupEventCard
-                    key={record.eventParticipant.id}
-                    record={record}
-                  />
-                )
+            <div className="-mx-6 space-y-5 sm:mx-0 sm:space-y-6">
+              {participantOfficialSections.map((section) => (
+                <section key={section.key} className="space-y-1.5 sm:space-y-3">
+                  <div className="flex items-center gap-2 px-6 sm:px-1">
+                    <span className="rounded-full bg-brand-navy/8 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:px-3 sm:py-1 sm:text-[11px] sm:tracking-[0.2em]">
+                      {section.title}
+                    </span>
+                    <div className="h-px flex-1 bg-brand-line/80" />
+                    <span className="text-[11px] text-brand-muted sm:text-xs">
+                      {section.records.length}
+                    </span>
+                  </div>
+
+                  <div className="space-y-4 px-6 sm:px-0">
+                    {section.records.map((record) =>
+                      record.kind === "request" ? (
+                        <ParticipantPendingEnrollmentRequestCard
+                          key={record.request.id}
+                          record={record}
+                        />
+                      ) : (
+                        <ParticipantGroupEventCard
+                          key={record.eventParticipant.id}
+                          record={record}
+                        />
+                      ),
+                    )}
+                  </div>
+                </section>
               ))}
             </div>
           )}
@@ -9968,7 +9624,13 @@ export function EventsPage() {
                 <div className="mt-5 space-y-3 text-sm text-brand-muted">
                   <div className="flex flex-wrap gap-x-5 gap-y-2">
                     <span>{scheduleRangeLabel}</span>
-                    <span>{event.enrolledCount}/{event.capacity} miejsc</span>
+                    <span>{getEventParticipantCountLabel(event)} miejsc</span>
+                    {getEventConfirmedCountLabel(event) ? (
+                      <span>{getEventConfirmedCountLabel(event)}</span>
+                    ) : null}
+                    {getEventCapacityOverflowLabel(event) ? (
+                      <span>{getEventCapacityOverflowLabel(event)}</span>
+                    ) : null}
                     <span>Próg: {resolveMinimumParticipants(event)} osób</span>
                     <span>Chcą wziąć udział: {activeRequestsCount}</span>
                     {isCommunitySection ? (
@@ -10091,9 +9753,15 @@ export function EventManagementPage() {
   const hydratedSettingsSnapshotRef = useRef<string | null>(null);
   const [isSettingsDirty, setIsSettingsDirty] = useState(false);
   const [communityDetailTab, setCommunityDetailTab] = useState<
-    "requests" | "participants" | "edit"
+    "requests" | "participants" | "reserve"
   >("requests");
   const [publishingEvent, setPublishingEvent] = useState(false);
+  const {
+    dialog: acceptedRequestGroupDialog,
+    openDialog: openAcceptedRequestGroupDialog,
+  } = useAcceptedRequestGroupDialog({
+    addGroupMember,
+  });
   const [settingsDraft, setSettingsDraft] = useState<EventManagementSettingsDraft>({
     status: "active" as TrainingEventStatus,
     capacity: "1",
@@ -10103,6 +9771,8 @@ export function EventManagementPage() {
     location: "",
     eventImages: [] as TrainingEventImage[],
     useEventImageAsCover: false,
+    summary: "",
+    description: "",
     enrollmentPhotoRequirement: "default" as "default" | "required" | "optional",
     joinAudience: "new-people",
     tags: "",
@@ -10132,6 +9802,7 @@ export function EventManagementPage() {
       : fallbackListPath === "/panel/wydarzenia-spolecznosci"
         ? "Wróć do wydarzeń społeczności"
         : "Wróć do listy szkoleń";
+  const isCommunityEditRoute = location.pathname.endsWith("/edytuj");
 
   function createEventManagementSettingsDraft(sourceEvent: TrainingEvent) {
     return {
@@ -10143,6 +9814,8 @@ export function EventManagementPage() {
       location: sourceEvent.location ?? "",
       eventImages: sourceEvent.eventImages ?? [],
       useEventImageAsCover: sourceEvent.useEventImageAsCover === true,
+      summary: sourceEvent.summary,
+      description: sourceEvent.description,
       enrollmentPhotoRequirement: sourceEvent.enrollmentPhotoRequirement ?? "default",
       joinAudience: resolveTrainingJoinAudienceForEvent(sourceEvent, eventGroup),
       tags: (sourceEvent.tags ?? []).join(", "),
@@ -10245,6 +9918,22 @@ export function EventManagementPage() {
   const groupEventParticipants = (store.eventParticipants ?? []).filter(
     (item) => item.eventId === event.id,
   );
+  const communityParticipantSections = useMemo(
+    () => buildCommunityParticipantSections(groupEventParticipants),
+    [groupEventParticipants],
+  );
+  const communityReserveSections = useMemo(
+    () => buildCommunityReserveSections(groupEventParticipants),
+    [groupEventParticipants],
+  );
+  const communityParticipantCount = communityParticipantSections.reduce(
+    (sum, section) => sum + section.participants.length,
+    0,
+  );
+  const communityReserveCount = communityReserveSections.reduce(
+    (sum, section) => sum + section.participants.length,
+    0,
+  );
   const managedParticipantSections = buildManagedEventParticipantSections(
     event,
     groupEventParticipants,
@@ -10273,18 +9962,6 @@ export function EventManagementPage() {
       }),
     [currentUser, event, store],
   );
-  const futureOpenGroupEvents = event.groupId
-    ? sortEventsByDate(
-        store.trainingEvents.filter(
-          (item) =>
-            item.groupId === event.groupId &&
-            item.id !== event.id &&
-            !isTrainingEventArchived(item) &&
-            !item.rosterFinalizedAt &&
-            new Date(item.startsAt).getTime() > Date.now(),
-        ),
-      )
-    : [];
   const requestSections = splitEnrollmentRequestsByIntent(requests);
   const pendingRequestsCount =
     requestSections.find((section) => section.key === "active")?.requests.length ?? 0;
@@ -10305,49 +9982,6 @@ export function EventManagementPage() {
     );
   }
 
-  async function maybeAddAcceptedRequestToGroup(request: EnrollmentRequest) {
-    if (
-      !event.groupId ||
-      !request.participantProfileId ||
-      activeGroupMembersByParticipantProfileId.has(request.participantProfileId)
-    ) {
-      return false;
-    }
-
-    const shouldAddToGroup = window.confirm(
-      "Osoba trafiła na roster wydarzenia. Dopisać ją też do grupy?",
-    );
-    if (!shouldAddToGroup) {
-      return false;
-    }
-
-    const priorityValue = window.prompt(
-      "Podaj rangę w grupie: stali, regularni albo rezerwowi.",
-      "regularni",
-    );
-    const priority = parseGroupMemberPriorityPromptValue(priorityValue);
-    if (!priority) {
-      toast.error("Osoba została dodana do rosteru. Do grupy wpisz: stali, regularni albo rezerwowi.");
-      return false;
-    }
-
-    const shouldSyncFutureEvents =
-      futureOpenGroupEvents.length > 0
-        ? window.confirm(
-            `Dodać tę osobę automatycznie także do ${futureOpenGroupEvents.length} przyszłych otwartych szkoleń tej grupy?`,
-          )
-        : false;
-
-    await addGroupMember({
-      groupId: event.groupId,
-      participantProfileId: request.participantProfileId,
-      priority,
-      syncFutureEvents: shouldSyncFutureEvents,
-    });
-
-    return true;
-  }
-
   async function handleEnrollmentDecision(
     request: EnrollmentRequest,
     decision: DecisionStatus,
@@ -10355,10 +9989,25 @@ export function EventManagementPage() {
     setUpdatingRequestId(request.id);
 
     try {
+      const acceptedTargetStatus =
+        decision === "accepted" ? resolveEnrollmentAcceptanceTargetStatus(event) : null;
+
       await manageEnrollmentRequest(request.id, decision);
 
       if (decision === "accepted") {
-        const addedToGroup = await maybeAddAcceptedRequestToGroup(request);
+        if (acceptedTargetStatus === "rezerwowy") {
+          toast.success("Zaakceptowano zgłoszenie i dodano osobę do listy rezerwowych.");
+          return;
+        }
+
+        const groupAssignmentTarget = getAcceptedRequestGroupAssignmentTarget({
+          request,
+          event,
+          store,
+        });
+        const addedToGroup = groupAssignmentTarget
+          ? await openAcceptedRequestGroupDialog(groupAssignmentTarget)
+          : false;
         toast.success(
           event.groupId
             ? addedToGroup
@@ -10430,8 +10079,97 @@ export function EventManagementPage() {
   if (isCommunityEvent) {
     const communityEditorValues = getCommunityEventEditorValuesFromManagementDraft(
       settingsDraft,
-      event,
     );
+
+    if (isCommunityEditRoute) {
+      if (!canManageEvent || eventIsArchived) {
+        return <Navigate to={getPanelEventDetailPath(event)} replace />;
+      }
+
+      return (
+        <PanelSection
+          eyebrow={sectionEyebrow}
+          title="Edytuj wydarzenie społeczności"
+          description="Tutaj edytujesz istniejące wydarzenie społeczności tym samym formularzem co przy tworzeniu."
+        >
+          <CommunityEventMutationForm
+            values={communityEditorValues}
+            uploadingImages={uploadingSettingsImages}
+            submitting={savingSettings}
+            submitLabel="Zapisz zmiany w wydarzeniu społeczności"
+            helperMessage="Edytujesz istniejące wydarzenie społeczności."
+            onChange={(updater) =>
+              updateSettingsDraft((previous) =>
+                applyCommunityEventEditorValuesToManagementDraft(
+                  previous,
+                  updater(getCommunityEventEditorValuesFromManagementDraft(previous)),
+                ),
+              )
+            }
+            onUploadImages={async (files) => {
+              const availableSlots = Math.max(0, 8 - settingsDraft.eventImages.length);
+              const filesToUpload = files.slice(0, availableSlots);
+
+              if (filesToUpload.length === 0) {
+                toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                return;
+              }
+
+              setUploadingSettingsImages(true);
+
+              try {
+                const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                updateSettingsDraft((previous) => ({
+                  ...previous,
+                  eventImages: [...previous.eventImages, ...uploadedImages],
+                }));
+              } finally {
+                setUploadingSettingsImages(false);
+              }
+            }}
+            onSubmit={async (submitEvent) => {
+              submitEvent.preventDefault();
+              setSavingSettings(true);
+
+              try {
+                await updateTrainingEventManagement(
+                  event.id,
+                  settingsDraft.status,
+                  Number(settingsDraft.capacity) || event.capacity,
+                  Number(settingsDraft.minimumParticipants) || resolveMinimumParticipants(event),
+                  Number(settingsDraft.confirmationLeadTimeDays) || 0,
+                  settingsDraft.title,
+                  settingsDraft.location,
+                  settingsDraft.summary,
+                  settingsDraft.description,
+                  parseEventTags(settingsDraft.tags),
+                  settingsDraft.eventImages,
+                  settingsDraft.useEventImageAsCover,
+                  buildScheduleDaysFromDrafts(
+                    settingsDraft.firstDayDate,
+                    settingsDraft.scheduleDays,
+                  ),
+                  undefined,
+                  settingsDraft.enrollmentPhotoRequirement,
+                  undefined,
+                );
+                toast.success("Zapisano zmiany w wydarzeniu społeczności.");
+                setIsSettingsDirty(false);
+                navigate(getPanelEventDetailPath(event), { replace: true });
+              } catch (error) {
+                toast.error(
+                  error instanceof Error
+                    ? error.message
+                    : "Nie udało się zapisać zmian w wydarzeniu.",
+                );
+              } finally {
+                setSavingSettings(false);
+              }
+            }}
+          />
+        </PanelSection>
+      );
+    }
 
     return (
       <PanelSection
@@ -10460,6 +10198,14 @@ export function EventManagementPage() {
                 ))}
               </div>
             </div>
+            {canManageEvent && !eventIsArchived ? (
+              <Link
+                to={getCommunityEventEditPath(event.id)}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
+              >
+                Edytuj wydarzenie
+              </Link>
+            ) : null}
           </div>
 
           <div
@@ -10653,118 +10399,20 @@ export function EventManagementPage() {
           activeTab={communityDetailTab}
           onChange={setCommunityDetailTab}
           requestCount={pendingRequestsCount}
-          participantCountLabel={`${event.enrolledCount}/${event.capacity}`}
+          participantCountLabel={`${communityParticipantCount}/${event.capacity}`}
+          reserveCount={communityReserveCount}
         />
-
-        {communityDetailTab === "edit" ? (
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-            <CommunityEventEditorFields
-              values={communityEditorValues}
-              disabled={!canManageEvent || eventIsArchived}
-              uploadingImages={uploadingSettingsImages}
-              onChange={(updater) =>
-                updateSettingsDraft((previous) =>
-                  applyCommunityEventEditorValuesToManagementDraft(
-                    previous,
-                    updater(getCommunityEventEditorValuesFromManagementDraft(previous, event)),
-                  ),
-                )
-              }
-              onUploadImages={async (files) => {
-                const availableSlots = Math.max(0, 8 - settingsDraft.eventImages.length);
-                const filesToUpload = files.slice(0, availableSlots);
-
-                if (filesToUpload.length === 0) {
-                  toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
-                  return;
-                }
-
-                setUploadingSettingsImages(true);
-
-                try {
-                  const uploadedImages = await uploadCommunityEventImages(filesToUpload);
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    eventImages: [...previous.eventImages, ...uploadedImages],
-                  }));
-                } finally {
-                  setUploadingSettingsImages(false);
-                }
-              }}
-            />
-
-            {canManageEvent && !eventIsArchived ? (
-              <>
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    disabled={savingSettings}
-                    onClick={async () => {
-                      setSavingSettings(true);
-
-                      try {
-                        await updateTrainingEventManagement(
-                          event.id,
-                          settingsDraft.status,
-                          Number(settingsDraft.capacity) || event.capacity,
-                          Number(settingsDraft.minimumParticipants) ||
-                            resolveMinimumParticipants(event),
-                          Number(settingsDraft.confirmationLeadTimeDays) || 0,
-                          settingsDraft.title,
-                          settingsDraft.location,
-                          communityEditorValues.summary,
-                          communityEditorValues.description,
-                          parseEventTags(settingsDraft.tags),
-                          settingsDraft.eventImages,
-                          settingsDraft.useEventImageAsCover,
-                          buildScheduleDaysFromDrafts(
-                            settingsDraft.firstDayDate,
-                            settingsDraft.scheduleDays,
-                          ),
-                          undefined,
-                          settingsDraft.enrollmentPhotoRequirement,
-                          undefined,
-                        );
-                        toast.success("Zapisano ustawienia wydarzenia.");
-                        setIsSettingsDirty(false);
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zapisać ustawień wydarzenia.",
-                        );
-                      } finally {
-                        setSavingSettings(false);
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-                  >
-                    {savingSettings ? "Zapisywanie..." : "Zapisz ustawienia"}
-                  </button>
-                </div>
-                <p className="mt-3 text-sm text-brand-muted">
-                  Po osiągnięciu minimalnego progu status zmieni się automatycznie na potwierdzone.
-                </p>
-              </>
-            ) : (
-              <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
-                Moderator widzi ten formularz poglądowo. Edycja danych wydarzenia pozostaje po
-                stronie twórcy albo admina.
-              </p>
-            )}
-          </article>
-        ) : null}
 
         {communityDetailTab === "participants" ? (
           <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
             <SectionBlockHeading
               title="Uczestnicy wydarzenia"
-              description="Zaakceptowane osoby trafiają tutaj automatycznie po decyzji organizatora."
+              description="Tutaj widać osoby, które są obecnie na liście uczestników wydarzenia."
             />
-            {managedParticipantSections.length === 0 ? (
+            {communityParticipantSections.length === 0 ? (
               <EmptyPanelState
-                title="Brak potwierdzonych uczestników"
-                description="Zaakceptowane osoby pojawią się tutaj automatycznie."
+                title="Brak uczestników wydarzenia"
+                description="Zaakceptowane osoby pojawią się tutaj po przeniesieniu na listę uczestników."
               />
             ) : (
               <ManagedEventParticipantSections
@@ -10774,7 +10422,33 @@ export function EventManagementPage() {
                 onExpandedChange={toggleExpandedRosterParticipant}
                 onStatusChange={handleEventParticipantStatusChange}
                 participantProfilesById={participantProfilesById}
-                sections={managedParticipantSections}
+                sections={communityParticipantSections}
+                updatingParticipantId={updatingEventParticipantId}
+              />
+            )}
+          </article>
+        ) : null}
+
+        {communityDetailTab === "reserve" ? (
+          <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
+            <SectionBlockHeading
+              title="Lista rezerwowych"
+              description="Tutaj widać osoby odłożone na listę rezerwowych tego wydarzenia."
+            />
+            {communityReserveSections.length === 0 ? (
+              <EmptyPanelState
+                title="Brak rezerwowych"
+                description="Gdy kogoś przeniesiesz na rezerwę, pojawi się tutaj."
+              />
+            ) : (
+              <ManagedEventParticipantSections
+                canManageParticipant={canManageEvent}
+                eventIsArchived={eventIsArchived}
+                expandedParticipantIds={expandedRosterParticipantIds}
+                onExpandedChange={toggleExpandedRosterParticipant}
+                onStatusChange={handleEventParticipantStatusChange}
+                participantProfilesById={participantProfilesById}
+                sections={communityReserveSections}
                 updatingParticipantId={updatingEventParticipantId}
               />
             )}
@@ -10782,33 +10456,37 @@ export function EventManagementPage() {
         ) : null}
 
         {communityDetailTab === "requests" ? (
-          <ManagedEnrollmentRequestsSection
-            canManageRequests={canManageEvent && !eventIsArchived}
-            event={event}
-            eventGroup={eventGroup}
-            movingRequestId={movingRequestId}
-            onDecision={handleEnrollmentDecision}
-            onTransfer={handleTransferEnrollmentRequest}
-            onTransferSelectionChange={(requestId, nextValue) =>
-              setTransferSelections((previous) => ({
-                ...previous,
-                [requestId]: nextValue,
-              }))
-            }
-            requestSections={requestSections}
-            requestTransferOptions={requestTransferOptions}
-            transferSelections={transferSelections}
-            updatingRequestId={updatingRequestId}
-            expandedRequestIds={expandedRequestIds}
-            expandedRequestSections={expandedRequestSections}
-            onExpandedRequestChange={toggleExpandedRequest}
-            onExpandedSectionChange={(key, open) =>
-              setExpandedRequestSections((previous) => ({
-                ...previous,
-                [key]: open,
-              }))
-            }
-          />
+          <>
+            <ManagedEnrollmentRequestsSection
+              canManageRequests={canManageEvent && !eventIsArchived}
+              title="Zgłoszenia"
+              event={event}
+              eventGroup={eventGroup}
+              movingRequestId={movingRequestId}
+              onDecision={handleEnrollmentDecision}
+              onTransfer={handleTransferEnrollmentRequest}
+              onTransferSelectionChange={(requestId, nextValue) =>
+                setTransferSelections((previous) => ({
+                  ...previous,
+                  [requestId]: nextValue,
+                }))
+              }
+              requestSections={requestSections}
+              requestTransferOptions={requestTransferOptions}
+              transferSelections={transferSelections}
+              updatingRequestId={updatingRequestId}
+              expandedRequestIds={expandedRequestIds}
+              expandedRequestSections={expandedRequestSections}
+              onExpandedRequestChange={toggleExpandedRequest}
+              onExpandedSectionChange={(key, open) =>
+                setExpandedRequestSections((previous) => ({
+                  ...previous,
+                  [key]: open,
+                }))
+              }
+            />
+            {acceptedRequestGroupDialog}
+          </>
         ) : null}
       </PanelSection>
     );
@@ -10847,10 +10525,17 @@ export function EventManagementPage() {
           </div>
         </div>
 
-          <div className="mt-5 space-y-3 text-sm text-brand-muted">
+        <div className="mt-5 space-y-3 text-sm text-brand-muted">
           <div className="flex flex-wrap gap-x-5 gap-y-2">
             <span>{scheduleRangeLabel}</span>
             <span>Maks. miejsc: {event.capacity}</span>
+            <span>Na rosterze: {getEventParticipantCountLabel(event)}</span>
+            {getEventConfirmedCountLabel(event) ? (
+              <span>{getEventConfirmedCountLabel(event)}</span>
+            ) : null}
+            {getEventCapacityOverflowLabel(event) ? (
+              <span>{getEventCapacityOverflowLabel(event)}</span>
+            ) : null}
             <span>Minimalny prog: {resolveMinimumParticipants(event)}</span>
             {!isCommunityEvent ? (
               <span>Mogą dołączyć: {getTrainingJoinAudienceLabel(resolvedEventJoinAudience)}</span>
@@ -11487,7 +11172,7 @@ export function EventManagementPage() {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <SectionBlockHeading
               title="Roster wydarzenia grupowego"
-              description="To jest administracyjny skład wydarzenia oparty o grupę i priorytety członków, niezależny od publicznych zgłoszeń."
+              description="To jest administracyjna lista uczestników szkolenia i osób odłożonych na listę rezerwowych."
             />
             <div className="flex flex-col items-start gap-2 sm:items-end">
               {event.rosterFinalizedAt ? (
@@ -11579,7 +11264,7 @@ export function EventManagementPage() {
           {managedParticipantSections.length === 0 ? (
             <EmptyPanelState
               title="Roster jest pusty"
-              description="Po akceptacji zgłoszeń osoby pojawią się tutaj w sekcjach według rangi grupowej lub jako dołączający."
+              description="Po akceptacji zgłoszeń osoby pojawią się tutaj na liście uczestników albo rezerwowych."
             />
           ) : (
             <ManagedEventParticipantSections
@@ -11597,33 +11282,36 @@ export function EventManagementPage() {
       ) : null}
 
       {canManageEvent && !eventIsArchived ? (
-        <ManagedEnrollmentRequestsSection
-          canManageRequests={true}
-          event={event}
-          eventGroup={eventGroup}
-          movingRequestId={movingRequestId}
-          onDecision={handleEnrollmentDecision}
-          onTransfer={handleTransferEnrollmentRequest}
-          onTransferSelectionChange={(requestId, nextValue) =>
-            setTransferSelections((previous) => ({
-              ...previous,
-              [requestId]: nextValue,
-            }))
-          }
-          requestSections={requestSections}
-          requestTransferOptions={requestTransferOptions}
-          transferSelections={transferSelections}
-          updatingRequestId={updatingRequestId}
-          expandedRequestIds={expandedRequestIds}
-          expandedRequestSections={expandedRequestSections}
-          onExpandedRequestChange={toggleExpandedRequest}
-          onExpandedSectionChange={(key, open) =>
-            setExpandedRequestSections((previous) => ({
-              ...previous,
-              [key]: open,
-            }))
-          }
-        />
+        <>
+          <ManagedEnrollmentRequestsSection
+            canManageRequests={true}
+            event={event}
+            eventGroup={eventGroup}
+            movingRequestId={movingRequestId}
+            onDecision={handleEnrollmentDecision}
+            onTransfer={handleTransferEnrollmentRequest}
+            onTransferSelectionChange={(requestId, nextValue) =>
+              setTransferSelections((previous) => ({
+                ...previous,
+                [requestId]: nextValue,
+              }))
+            }
+            requestSections={requestSections}
+            requestTransferOptions={requestTransferOptions}
+            transferSelections={transferSelections}
+            updatingRequestId={updatingRequestId}
+            expandedRequestIds={expandedRequestIds}
+            expandedRequestSections={expandedRequestSections}
+            onExpandedRequestChange={toggleExpandedRequest}
+            onExpandedSectionChange={(key, open) =>
+              setExpandedRequestSections((previous) => ({
+                ...previous,
+                [key]: open,
+              }))
+            }
+          />
+          {acceptedRequestGroupDialog}
+        </>
       ) : null}
     </PanelSection>
   );
@@ -12674,17 +12362,12 @@ export function ProfileSettingsPage() {
     setSaving(true);
 
     try {
-      await Promise.all([
-        updateOrganizerProfile({
-          ...organizerForm,
-          contactName: organizerForm.contactName.trim() || organizerForm.displayName.trim(),
-        }),
-        updateCommunityOrganizerProfile({
-          ...communityOrganizerForm,
-          contactName:
-            communityOrganizerForm.contactName.trim() || communityOrganizerForm.displayName.trim(),
-        }),
-      ]);
+      await saveOrganizerProfiles({
+        officialProfile: organizerForm,
+        communityProfile: communityOrganizerForm,
+        updateOrganizerProfile,
+        updateCommunityOrganizerProfile,
+      });
       toast.success("Profile organizatora zostały zapisane.");
     } catch (error) {
       toast.error(

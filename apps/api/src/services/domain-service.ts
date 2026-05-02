@@ -571,9 +571,12 @@ export class DomainService {
         const input = (args[0] ?? {}) as RecordAny;
         return this.mutate(actorUserId, (store, actor) => {
           if (!actor) throw new Error("Musisz być zalogowany.");
+          const isCommunityEvent = input.brandStatus === "supported" || input.type === "Wydarzenie społeczności";
           const trainer = findById(store, "trainers", input.trainerId ?? actor.trainerProfileId);
           const organizer = findById(store, "organizers", input.organizerId ?? actor.organizerProfileId);
-          if (!hasRole(actor, "organizer") && !hasRole(actor, "trainer")) throw new Error("Brak uprawnień.");
+          if (!isCommunityEvent && !hasRole(actor, "organizer") && !hasRole(actor, "trainer")) {
+            throw new Error("Brak uprawnień.");
+          }
           const eventId = createId("event");
           const scheduleDays = Array.isArray(input.scheduleDays) ? input.scheduleDays : [];
           const firstDay = scheduleDays[0] ?? {};

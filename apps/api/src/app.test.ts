@@ -223,6 +223,54 @@ describe("emandar api", () => {
     await app.close();
   });
 
+  it("allows participant accounts to create community events but not official trainings", async () => {
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(testStoreForPermissions("participant")),
+    });
+    const csrfToken = await csrf(app);
+    const participantSession = await loginWithSms(app, "+48 600 000 003", csrfToken);
+
+    const official = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/events",
+      headers: {
+        cookie: mergeCookies(participantSession, csrfToken.cookie),
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: {
+        title: "Participant official",
+        type: "Szkolenie Emandar",
+        brandStatus: "official",
+        scheduleDays: [{ startsAt: "2026-07-01T10:00:00.000Z", endsAt: "2026-07-01T12:00:00.000Z" }],
+      },
+    });
+    expect(official.statusCode).toBe(400);
+
+    const community = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/events",
+      headers: {
+        cookie: mergeCookies(participantSession, csrfToken.cookie),
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: {
+        title: "Participant community",
+        type: "Wydarzenie społeczności",
+        brandStatus: "supported",
+        isPublished: false,
+        scheduleDays: [{ startsAt: "2026-07-02T10:00:00.000Z", endsAt: "2026-07-02T12:00:00.000Z" }],
+      },
+    });
+    expect(community.statusCode).toBe(200);
+
+    const snapshot = await app.inject("/emandar/api/mock/state");
+    const event = snapshot.json().store.trainingEvents.find((item: { title?: string }) => item.title === "Participant community");
+    expect(event.creatorUserId).toBe("user-actor");
+    expect(event.brandStatus).toBe("supported");
+    await app.close();
+  });
+
   it("confirms SMS code and creates an HTTP-only session cookie", async () => {
     const seed = await readSeedStore(config.seedStorePath);
     const app = await buildApp({

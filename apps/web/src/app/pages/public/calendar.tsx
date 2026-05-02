@@ -529,6 +529,22 @@ function EventFeedSection({
     loading?: boolean;
   };
 }) {
+  function handlePageChange(nextPage: number) {
+    if (!pagination || nextPage === pagination.page) {
+      return;
+    }
+
+    pagination.onPageChange(nextPage);
+
+    if (typeof window !== "undefined") {
+      window.scrollTo({
+        top: 0,
+        left: 0,
+        behavior: "auto",
+      });
+    }
+  }
+
   return (
     <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
       <div className="mb-6 max-w-3xl">
@@ -557,7 +573,7 @@ function EventFeedSection({
             <button
               type="button"
               disabled={pagination.page <= 1 || pagination.loading}
-              onClick={() => pagination.onPageChange(Math.max(1, pagination.page - 1))}
+              onClick={() => handlePageChange(Math.max(1, pagination.page - 1))}
               className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ChevronLeft size={16} />
@@ -566,7 +582,7 @@ function EventFeedSection({
             <button
               type="button"
               disabled={pagination.page >= pagination.totalPages || pagination.loading}
-              onClick={() => pagination.onPageChange(Math.min(pagination.totalPages, pagination.page + 1))}
+              onClick={() => handlePageChange(Math.min(pagination.totalPages, pagination.page + 1))}
               className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
             >
               Następna

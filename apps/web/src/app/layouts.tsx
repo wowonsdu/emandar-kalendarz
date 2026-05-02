@@ -142,7 +142,7 @@ export function PublicLayout() {
       left: 0,
       behavior: "auto",
     });
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -537,6 +537,18 @@ export function PanelLayout() {
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [location.pathname, currentUser?.role]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.scrollTo({
+      top: 0,
+      left: 0,
+      behavior: "auto",
+    });
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     if (typeof document === "undefined") {

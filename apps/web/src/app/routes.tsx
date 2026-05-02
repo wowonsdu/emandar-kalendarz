@@ -1,30 +1,110 @@
+import { Suspense, lazy, type ComponentType } from "react";
 import { Navigate, createBrowserRouter } from "react-router";
 import { PanelLayout, PublicLayout, RequireAuth } from "./layouts";
-import { AttendanceConfirmationPage } from "./pages/attendance-confirmation";
-import { NotificationsSettingsPage } from "./pages/notifications";
-import {
-  CalendarPage,
-  CommunityEventReviewPage,
-  CommunityEventsPage,
-  EventDetailsPage,
-  LandingPage,
-  LoginPage,
-  RegisterPage,
-  TrainerDetailsPage,
-  TrainersPage,
-} from "./pages/public";
-import {
-  DashboardPage,
-  EventManagementPage,
-  EventsPage,
-  GroupsPage,
-  OrganizerDirectoryPage,
-  ProfileSettingsPage,
-  RelationsPage,
-  RequestsPage,
-  TrainerDirectoryPage,
-  UserManagementPage,
-} from "./pages/panel";
+
+const CalendarPage = createLazyRoute(() =>
+  import("./pages/public/calendar").then((module) => ({ default: module.CalendarPage })),
+);
+const CommunityEventsPage = createLazyRoute(() =>
+  import("./pages/public/calendar").then((module) => ({ default: module.CommunityEventsPage })),
+);
+const LandingPage = createLazyRoute(() =>
+  import("./pages/public/calendar").then((module) => ({ default: module.LandingPage })),
+);
+const EventDetailsPage = createLazyRoute(() =>
+  import("./pages/public/event-detail").then((module) => ({ default: module.EventDetailsPage })),
+);
+const CommunityEventReviewPage = createLazyRoute(() =>
+  import("./pages/public/signed-actions").then((module) => ({
+    default: module.CommunityEventReviewPage,
+  })),
+);
+const AttendanceConfirmationPage = createLazyRoute(() =>
+  import("./pages/attendance-confirmation").then((module) => ({
+    default: module.AttendanceConfirmationPage,
+  })),
+);
+const TrainersPage = createLazyRoute(() =>
+  import("./pages/public/trainers").then((module) => ({ default: module.TrainersPage })),
+);
+const TrainerDetailsPage = createLazyRoute(() =>
+  import("./pages/public/trainers").then((module) => ({
+    default: module.TrainerDetailsPage,
+  })),
+);
+const LoginPage = createLazyRoute(() =>
+  import("./pages/public/auth").then((module) => ({ default: module.LoginPage })),
+);
+const RegisterPage = createLazyRoute(() =>
+  import("./pages/public/auth").then((module) => ({ default: module.RegisterPage })),
+);
+const DashboardPage = createLazyRoute(() =>
+  import("./pages/panel/dashboard").then((module) => ({ default: module.DashboardPage })),
+);
+const GroupsPage = createLazyRoute(() =>
+  import("./pages/panel/groups").then((module) => ({ default: module.GroupsPage })),
+);
+const EventsPage = createLazyRoute(() =>
+  import("./pages/panel/events").then((module) => ({ default: module.EventsPage })),
+);
+const EventManagementPage = createLazyRoute(() =>
+  import("./pages/panel/events").then((module) => ({
+    default: module.EventManagementPage,
+  })),
+);
+const RequestsPage = createLazyRoute(() =>
+  import("./pages/panel/requests-relations").then((module) => ({
+    default: module.RequestsPage,
+  })),
+);
+const RelationsPage = createLazyRoute(() =>
+  import("./pages/panel/requests-relations").then((module) => ({
+    default: module.RelationsPage,
+  })),
+);
+const ProfileSettingsPage = createLazyRoute(() =>
+  import("./pages/panel/settings").then((module) => ({
+    default: module.ProfileSettingsPage,
+  })),
+);
+const NotificationsSettingsPage = createLazyRoute(() =>
+  import("./pages/notifications").then((module) => ({
+    default: module.NotificationsSettingsPage,
+  })),
+);
+const UserManagementPage = createLazyRoute(() =>
+  import("./pages/panel/admin").then((module) => ({ default: module.UserManagementPage })),
+);
+const TrainerDirectoryPage = createLazyRoute(() =>
+  import("./pages/panel/admin").then((module) => ({
+    default: module.TrainerDirectoryPage,
+  })),
+);
+const OrganizerDirectoryPage = createLazyRoute(() =>
+  import("./pages/panel/admin").then((module) => ({
+    default: module.OrganizerDirectoryPage,
+  })),
+);
+
+function RouteLoader() {
+  return (
+    <div className="mx-auto max-w-7xl px-4 py-10 text-sm text-brand-muted sm:px-6 lg:px-8">
+      Ladowanie...
+    </div>
+  );
+}
+
+function createLazyRoute(loader: () => Promise<{ default: ComponentType }>) {
+  const LazyRoute = lazy(loader);
+
+  return function LazyRouteWithSuspense() {
+    return (
+      <Suspense fallback={<RouteLoader />}>
+        <LazyRoute />
+      </Suspense>
+    );
+  };
+}
 
 function NotFoundPage() {
   return (

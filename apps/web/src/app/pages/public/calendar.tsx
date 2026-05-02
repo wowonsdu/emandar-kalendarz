@@ -1,0 +1,1119 @@
+import { Fragment, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import {
+  ArrowRight,
+  CalendarDays,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ImagePlus,
+  Images,
+  MapPin,
+  Phone,
+  ShieldCheck,
+  Sparkles,
+  Users,
+  X,
+} from "lucide-react";
+import { useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { Link, Navigate, useNavigate, useParams } from "react-router";
+import { toast } from "sonner";
+import type {
+  AppUser,
+  DemoStore,
+  EmandarBrandStatus,
+  EnrollmentIntent,
+  TrainingEvent,
+  TrainingEventImage,
+} from "@/domain/types";
+import {
+  confirmSmsCode,
+  type ConfirmSmsCodeResult,
+  fetchAppUser,
+  fetchPublicEventsPage,
+  getCurrentSessionPhone,
+  getVerifiedPhonePreAuth,
+  requestSmsCode,
+} from "@/data/apiClient";
+import {
+  getParticipantEnrollmentViewRecords,
+} from "@/app/dashboard";
+import {
+  buildRegistrationPath,
+  getInitialVerifiedRegistrationPhone,
+  resolveLoginSmsConfirmAction,
+  shouldResetVerifiedPhone,
+} from "../public-auth-flow";
+import {
+  canManageTrainingEvent,
+  buildPhoneHref,
+  getTrainingEventScheduleBounds,
+  getTrainingEventScheduleDays,
+  isPhotoModeEnabled,
+  isPhotoModeRequired,
+  isTrainingEventArchived,
+  isSelfManagedTrainingEvent,
+  isTrainingEventCollaborationAccepted,
+  isCommunityBrandStatus,
+  isTrainingEventPubliclyVisible,
+  getTrainingJoinAudienceLabel,
+  resolveEventOwnerDisplayLabels,
+  resolveCommunityEventOrganizerPhone,
+  resolveEnrollmentPhotoModeForEvent,
+  resolveBrandStatus,
+  resolveTrainingJoinAudienceForEvent,
+  resolveTrainingEventStatus,
+  sortEventsByDate,
+} from "@/domain/utils";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+} from "@/app/components/ui/dialog";
+import { AvatarMedia } from "@/app/components/avatar-media";
+import { CommunityEventCard } from "@/app/components/community-event-card";
+import { useAppState } from "../../providers/AppProviders";
+
+const emandarCalendarLogoUrl = `${import.meta.env.BASE_URL}brand-assets/emandar-logo.png`;
+
+type ConfirmationResult = {
+  confirm: (code: string) => Promise<ConfirmSmsCodeResult>;
+};
+
+class RecaptchaVerifier {
+  clear() {}
+}
+
+function formatDate(date: string) {
+  return new Intl.DateTimeFormat("pl-PL", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(date));
+}
+
+function formatTime(date: string) {
+  return new Intl.DateTimeFormat("pl-PL", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(date));
+}
+
+function getScheduleRows(event: TrainingEvent) {
+  return getTrainingEventScheduleDays(event).map((day, index) => ({
+    key: `day-${index + 1}`,
+    title: `Dzien ${index + 1}`,
+    label: formatDate(day.startsAt),
+    range: `${formatTime(day.startsAt)} - ${formatTime(day.endsAt)}`,
+  }));
+}
+
+function getScheduleRangeLabel(event: TrainingEvent) {
+  const bounds = getTrainingEventScheduleBounds(event);
+
+  if (bounds.dayCount <= 1) {
+    return formatDate(bounds.startsAt);
+  }
+
+  return `od ${formatDate(bounds.startsAt)} do ${formatDate(bounds.endsAt)}`;
+}
+
+function getEventDurationDaysLabel(event: TrainingEvent) {
+  const bounds = getTrainingEventScheduleBounds(event);
+  return bounds.dayCount === 1 ? "1 dzień" : `${bounds.dayCount} dni`;
+}
+
+function getCompactLocationTitle(location: string) {
+  const [primary = location] = location.split("/");
+  return primary.trim();
+}
+
+function getCompactCommunityEventTitle(title: string | null | undefined, location: string) {
+  const normalizedTitle = title?.trim();
+  if (!normalizedTitle) {
+    return location;
+  }
+
+  const [primaryLocation = ""] = location.split("/");
+  const normalizedLocation = primaryLocation.trim();
+  if (!normalizedLocation) {
+    return normalizedTitle;
+  }
+
+  const escapedLocation = normalizedLocation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const withoutDuplicatedLocation = normalizedTitle.replace(
+    new RegExp(`^${escapedLocation}\\s*[•\\-:]\\s*`, "i"),
+    "",
+  );
+
+  return withoutDuplicatedLocation.trim() || normalizedTitle;
+}
+
+function firstName(value?: string) {
+  if (!value) {
+    return "";
+  }
+
+  return value.trim().split(/\s+/)[0] ?? "";
+}
+
+function hasCompletedParticipantRegistration(user: AppUser | null) {
+  if (!user) {
+    return false;
+  }
+
+  if (user.role !== "participant") {
+    return true;
+  }
+
+  return typeof user.participantOnboardingCompletedAt === "string";
+}
+
+const demoLoginPassword = "kocham";
+const isDemoLoginEnabled = import.meta.env.DEV;
+
+const demoLoginSections = [
+  {
+    title: "Admin",
+    description: "Szybkie wejście na konto zarządzające całym systemem.",
+    accounts: [
+      { label: "Dariusz", email: "dariusz@emandar.pl", accent: "Admin", role: "admin" },
+    ],
+  },
+  {
+    title: "Przekazujący Wiedzę",
+    description: "Jedno kliknięcie loguje od razu na wybrany profil trenera.",
+    accounts: [
+      { label: "Jacek", email: "jacek@emandar.pl", accent: "Trener", role: "trainer" },
+      { label: "Marcin", email: "marcin@emandar.pl", accent: "Trener", role: "trainer" },
+      { label: "Dorota", email: "dorota@emandar.pl", accent: "Trener", role: "trainer" },
+      { label: "Asia", email: "asia@emandar.pl", accent: "Trener", role: "trainer" },
+      { label: "Krzysiu", email: "krzysiu@emandar.pl", accent: "Trener", role: "trainer" },
+      { label: "Klaudia", email: "klaudia@emandar.pl", accent: "Trener", role: "trainer" },
+      { label: "Beata", email: "beata@emandar.pl", accent: "Trener", role: "trainer" },
+    ],
+  },
+  {
+    title: "Organizatorzy",
+    description: "Konta organizatorów do testowania relacji, wydarzeń i zgłoszeń.",
+    accounts: [
+      { label: "Anita", email: "anita@emandar.pl", accent: "Organizator", role: "organizer" },
+      { label: "Karolina", email: "karolina@emandar.pl", accent: "Organizator", role: "organizer" },
+      { label: "Marek", email: "marek@emandar.pl", accent: "Organizator", role: "organizer" },
+      { label: "Organizator Demo", email: "organizator-demo@emandar.pl", accent: "Organizator", role: "organizer" },
+    ],
+  },
+  {
+    title: "Uczestnicy",
+    description: "Konta uczestników do testowania własnego dashboardu i bieżących szkoleń.",
+    accounts: [
+      { label: "Grzegorz Emanowicz", email: "grzegorz.emanowicz@emandar.pl", accent: "Uczestnik", role: "participant" },
+      { label: "Grzegorz Chotnicki", email: "grzegorz.chotnicki@emandar.pl", accent: "Uczestnik", role: "participant" },
+      { label: "Ola Chotnicka", email: "ola.chotnicka@emandar.pl", accent: "Uczestnik", role: "participant" },
+    ],
+  },
+] as const;
+
+function getPublicOrganizerName(
+  event: TrainingEvent,
+  ownerLabels: ReturnType<typeof resolveEventOwnerDisplayLabels>,
+) {
+  if (isSelfManagedTrainingEvent(event)) {
+    return firstName(ownerLabels.trainerName);
+  }
+
+  return firstName(ownerLabels.organizerName) || "Zespół Emandar";
+}
+
+function getPublicLeadName(ownerLabels: ReturnType<typeof resolveEventOwnerDisplayLabels>) {
+  return ownerLabels.trainerName;
+}
+
+function getEventTags(event: TrainingEvent) {
+  return (event.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+}
+
+function getTrainingJoinAudienceBadgeText(value: "existing-practitioners" | "new-people") {
+  return getTrainingJoinAudienceLabel(value);
+}
+
+function getTrainingJoinAudienceBadgeClassName(value: "existing-practitioners" | "new-people") {
+  return value === "existing-practitioners"
+    ? "border border-violet-200 bg-violet-50 text-violet-800"
+    : "border border-emerald-200 bg-emerald-50 text-emerald-800";
+}
+
+function canManagePublicEvent(event: TrainingEvent, currentUser: AppUser | null) {
+  return currentUser ? canManageTrainingEvent(event, currentUser) : false;
+}
+
+function isOfficialTrainerProfile(
+  status: EmandarBrandStatus | undefined,
+) {
+  return resolveBrandStatus(status) === "official";
+}
+
+function getPublicEventCollection(store: Pick<DemoStore, "publicTrainingEvents" | "trainingEvents">) {
+  return store.publicTrainingEvents.length > 0 ? store.publicTrainingEvents : store.trainingEvents;
+}
+
+function EmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <article className="rounded-[2rem] border border-dashed border-brand-line bg-white/80 p-8 text-center shadow-soft">
+      <h3 className="text-2xl font-semibold text-brand-navy">{title}</h3>
+      <p className="mt-3 text-brand-muted">{description}</p>
+    </article>
+  );
+}
+
+function EmandarTrainingBadge({ className = "" }: { className?: string }) {
+  return (
+    <img
+      src={emandarCalendarLogoUrl}
+      alt="Emandar"
+      className={["h-11 w-11 object-contain drop-shadow-[0_8px_18px_rgba(12,63,128,0.35)]", className].join(" ")}
+    />
+  );
+}
+
+function getEventImagePreviewWidth(image: TrainingEventImage, height = 112) {
+  const ratio = image.width > 0 && image.height > 0 ? image.width / image.height : 1;
+  return Math.max(88, Math.round(height * ratio));
+}
+
+function PublicDetailEyebrow({
+  children,
+  className = "",
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <p
+      className={[
+        "text-sm font-semibold uppercase tracking-[0.25em] text-brand-sky-deep",
+        className,
+      ].join(" ")}
+    >
+      {children}
+    </p>
+  );
+}
+
+function getCommunityEventCoverImageIndex(
+  event: Pick<TrainingEvent, "eventImages" | "useEventImageAsCover">,
+) {
+  return event.useEventImageAsCover === true && (event.eventImages?.length ?? 0) > 0 ? 0 : null;
+}
+
+function getCommunityEventImageAlt(eventTitle: string, index: number) {
+  return `${eventTitle} zdjęcie ${index + 1}`;
+}
+
+function CommunityEventGalleryThumbnail({
+  image,
+  alt,
+  onClick,
+  height = 112,
+  width,
+  isActive = false,
+}: {
+  image: TrainingEventImage;
+  alt: string;
+  onClick: () => void;
+  height?: number;
+  width?: number;
+  isActive?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Powiększ ${alt}`}
+      className={`group relative shrink-0 overflow-hidden rounded-[1.4rem] border bg-brand-shell text-left shadow-soft transition hover:-translate-y-0.5 ${
+        isActive ? "border-brand-navy ring-2 ring-brand-sky/40" : "border-brand-line"
+      }`}
+      style={{
+        height: `${height}px`,
+        width: `${width ?? getEventImagePreviewWidth(image, height)}px`,
+      }}
+    >
+      <img
+        src={image.url}
+        alt={alt}
+        className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]"
+      />
+      <span className="pointer-events-none absolute inset-0 bg-brand-navy/0 transition group-hover:bg-brand-navy/10" />
+    </button>
+  );
+}
+
+function CommunityEventGalleryLightbox({
+  eventTitle,
+  images,
+  openIndex,
+  onOpenIndexChange,
+}: {
+  eventTitle: string;
+  images: TrainingEventImage[];
+  openIndex: number | null;
+  onOpenIndexChange: (nextIndex: number | null) => void;
+}) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  useEffect(() => {
+    if (openIndex === null) {
+      return;
+    }
+
+    setCurrentIndex(Math.max(0, Math.min(images.length - 1, openIndex)));
+  }, [images.length, openIndex]);
+
+  useEffect(() => {
+    if (openIndex === null || images.length < 2) {
+      return;
+    }
+
+    function handleKeyDown(keyboardEvent: KeyboardEvent) {
+      if (keyboardEvent.key === "ArrowLeft") {
+        setCurrentIndex((previous) => Math.max(previous - 1, 0));
+      }
+
+      if (keyboardEvent.key === "ArrowRight") {
+        setCurrentIndex((previous) => Math.min(previous + 1, images.length - 1));
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [images.length, openIndex]);
+
+  const currentImage = images[currentIndex];
+
+  if (!currentImage) {
+    return null;
+  }
+
+  const canGoPrev = currentIndex > 0;
+  const canGoNext = currentIndex < images.length - 1;
+
+  return (
+    <Dialog
+      open={openIndex !== null}
+      onOpenChange={(nextOpen) => onOpenIndexChange(nextOpen ? currentIndex : null)}
+    >
+      <DialogPortal>
+        <DialogOverlay className="bg-brand-navy/12 backdrop-blur-[2px]" />
+
+        <DialogPrimitive.Content
+          className="fixed left-1/2 top-1/2 z-50 w-[min(90vw,780px)] max-w-none max-h-[92vh] -translate-x-1/2 -translate-y-1/2 outline-none"
+        >
+          <DialogHeader className="sr-only">
+            <DialogTitle>Galeria wydarzenia społeczności</DialogTitle>
+            <DialogDescription>
+              Przeglądaj zdjęcia wydarzenia {eventTitle}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex max-h-[92vh] flex-col overflow-hidden rounded-[1.75rem] border border-white/75 bg-white/96 p-2.5 text-brand-navy shadow-[0_18px_56px_rgba(21,52,105,0.14)] backdrop-blur-xl sm:p-4">
+            <div className="mb-2 flex justify-end sm:mb-3">
+              <DialogClose className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-brand-line/70 bg-white/90 text-brand-navy shadow-[0_10px_24px_rgba(21,52,105,0.10)] transition hover:bg-white">
+                <X size={20} />
+                <span className="sr-only">Zamknij galerię</span>
+              </DialogClose>
+            </div>
+
+            <div className="relative h-[min(44vh,360px)] overflow-hidden rounded-[1.35rem] border border-brand-line/60 bg-[#f7fbff] sm:h-[min(62vh,520px)]">
+              <div className="flex h-full w-full items-center justify-center p-3 sm:p-4">
+                <img
+                  src={currentImage.url}
+                  alt={getCommunityEventImageAlt(eventTitle, currentIndex)}
+                  className="max-h-full max-w-full object-contain"
+                />
+              </div>
+
+              {images.length > 1 && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentIndex((previous) => Math.max(previous - 1, 0))}
+                    disabled={!canGoPrev}
+                    aria-label="Poprzednie zdjęcie"
+                    className="absolute left-3 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 text-brand-navy shadow-[0_8px_20px_rgba(21,52,105,0.10)] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:left-4"
+                  >
+                    <ChevronLeft size={22} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCurrentIndex((previous) => Math.min(previous + 1, images.length - 1))
+                    }
+                    disabled={!canGoNext}
+                    aria-label="Następne zdjęcie"
+                    className="absolute right-3 top-1/2 inline-flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/92 text-brand-navy shadow-[0_8px_20px_rgba(21,52,105,0.10)] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-35 sm:right-4"
+                  >
+                    <ChevronRight size={22} />
+                  </button>
+                </>
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-end justify-between gap-3 px-1">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
+                  Galeria wydarzenia
+                </p>
+                <p className="mt-1 text-base font-semibold text-brand-navy sm:text-lg">{eventTitle}</p>
+              </div>
+              <span className="rounded-full border border-brand-line/70 bg-white px-3 py-1 text-xs font-semibold text-brand-muted shadow-[0_8px_20px_rgba(21,52,105,0.06)] sm:text-sm">
+                {currentIndex + 1} / {images.length}
+              </span>
+            </div>
+
+            {images.length > 1 && (
+              <div className="mt-2 flex gap-2 overflow-x-auto px-1 pb-1 sm:mt-3 sm:gap-3">
+                {images.map((image, index) => (
+                  <CommunityEventGalleryThumbnail
+                    key={image.id}
+                    image={image}
+                    alt={getCommunityEventImageAlt(eventTitle, index)}
+                    onClick={() => setCurrentIndex(index)}
+                    height={56}
+                    width={68}
+                    isActive={index === currentIndex}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
+  );
+}
+
+function EventFeedSection({
+  eyebrow,
+  title,
+  description,
+  emptyTitle,
+  emptyDescription,
+  events,
+  pagination,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  emptyTitle: string;
+  emptyDescription: string;
+  events: TrainingEvent[];
+  pagination?: {
+    page: number;
+    totalPages: number;
+    totalItems: number;
+    onPageChange: (page: number) => void;
+    loading?: boolean;
+  };
+}) {
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+      <div className="mb-6 max-w-3xl">
+        <p className="text-base font-semibold uppercase tracking-[0.28em] text-brand-navy sm:text-lg">
+          {eyebrow}
+        </p>
+        <p className="mt-2 text-lg text-brand-muted">
+          <span className="text-brand-muted">{title}. </span>
+          {description}
+        </p>
+      </div>
+
+      <div className="grid gap-6">
+        {events.length === 0 ? (
+          <EmptyState title={emptyTitle} description={emptyDescription} />
+        ) : (
+          events.map((event) => <EventCard key={event.id} eventId={event.id} eventOverride={event} />)
+        )}
+      </div>
+      {pagination && pagination.totalPages > 1 ? (
+        <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm text-brand-muted shadow-soft">
+          <span>
+            Strona {pagination.page} z {pagination.totalPages}. Razem: {pagination.totalItems}.
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={pagination.page <= 1 || pagination.loading}
+              onClick={() => pagination.onPageChange(Math.max(1, pagination.page - 1))}
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ChevronLeft size={16} />
+              Poprzednia
+            </button>
+            <button
+              type="button"
+              disabled={pagination.page >= pagination.totalPages || pagination.loading}
+              onClick={() => pagination.onPageChange(Math.min(pagination.totalPages, pagination.page + 1))}
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Następna
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function EventCard({
+  eventId,
+  eventOverride,
+  showTrainerImage = true,
+}: {
+  eventId: string;
+  eventOverride?: TrainingEvent;
+  showTrainerImage?: boolean;
+}) {
+  const { currentUser, store } = useAppState();
+  const publicEvents = getPublicEventCollection(store);
+  const event = publicEvents.find((item) => item.id === eventId) ?? eventOverride;
+
+  if (!event) {
+    return null;
+  }
+
+  const trainer = store.trainers.find((item) => item.id === event.trainerId);
+  const organizer = store.organizers.find((item) => item.id === event.organizerId);
+  const eventGroup = event.groupId
+    ? store.groups.find((item) => item.id === event.groupId) ?? null
+    : null;
+  const eventTags = getEventTags(event);
+  const scheduleRows = getScheduleRows(event);
+  const scheduleRangeLabel = getScheduleRangeLabel(event);
+  const scheduleStartLabel = formatDate(getTrainingEventScheduleBounds(event).startsAt);
+  const isCommunityEvent = isCommunityBrandStatus(event.brandStatus);
+  const ownerLabels = resolveEventOwnerDisplayLabels(event, store);
+  const eventImages = event.eventImages ?? [];
+  const canManage = canManagePublicEvent(event, currentUser);
+  const leadName = getPublicLeadName(ownerLabels);
+  const leadAvatarUrl = isCommunityEvent
+    ? event.useEventImageAsCover === true
+      ? eventImages[0]?.url || event.creatorAvatarUrl
+      : event.creatorAvatarUrl
+    : trainer?.avatarUrl;
+  const managementPath = isCommunityEvent
+    ? `/panel/wydarzenia-spolecznosci/${event.id}`
+    : `/panel/szkolenia/${event.id}`;
+  const [isMobileExpanded, setIsMobileExpanded] = useState(false);
+  const compactTitle = isCommunityEvent
+    ? getCompactCommunityEventTitle(event.title, event.location)
+    : getCompactLocationTitle(event.location);
+  const compactLocation = event.location;
+  const desktopGroupName = eventGroup?.name?.trim() || event.groupName?.trim() || null;
+  const desktopTitle = desktopGroupName || event.location;
+  const shouldShowDesktopLocationRow = Boolean(desktopGroupName && event.location.trim());
+  const durationDaysLabel = getEventDurationDaysLabel(event);
+  const resolvedJoinAudience = resolveTrainingJoinAudienceForEvent(event, eventGroup);
+  const joinAudienceBadgeText = getTrainingJoinAudienceBadgeText(resolvedJoinAudience);
+  const joinAudienceBadgeClassName = getTrainingJoinAudienceBadgeClassName(resolvedJoinAudience);
+  const mobileSummarySchedule = scheduleRows.slice(0, 2);
+  const compactTags = eventTags.slice(0, 2);
+  const hasMoreCompactTags = eventTags.length > compactTags.length;
+  const shouldShowExpandedTagsIndicator = hasMoreCompactTags || isMobileExpanded;
+
+  const mobileCard = (
+    <article className="overflow-hidden rounded-[1.75rem] border border-brand-line bg-white shadow-soft md:hidden">
+      <button
+        type="button"
+        onClick={() => setIsMobileExpanded((value) => !value)}
+        className="flex w-full items-stretch text-left"
+        aria-expanded={isMobileExpanded}
+      >
+        <div className="relative w-[6.1rem] shrink-0 self-stretch overflow-hidden bg-brand-shell">
+          <div className="absolute inset-0 flex items-center justify-center">
+            {leadAvatarUrl ? (
+              <img
+                src={leadAvatarUrl}
+                alt={leadName}
+                className="h-full w-full object-cover object-top"
+              />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-brand-sky/35 to-white text-2xl font-semibold text-brand-navy">
+                {leadName.slice(0, 1)}
+              </div>
+            )}
+          </div>
+          {!isCommunityEvent ? (
+            <EmandarTrainingBadge className="absolute right-2 top-2 z-10" />
+          ) : null}
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/88 via-brand-navy/52 to-transparent px-2.5 py-2.5 text-white">
+            <p className="line-clamp-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/95">
+              {leadName}
+            </p>
+          </div>
+        </div>
+        <div className="min-w-0 flex-1 px-3.5 py-3">
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <h3 className="break-words pr-1 text-[1.52rem] font-semibold leading-[1.08] text-brand-navy">
+                {compactTitle}
+              </h3>
+            </div>
+            <span
+              className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-brand-line bg-brand-shell text-brand-navy transition-transform ${
+                isMobileExpanded ? "rotate-180" : ""
+              }`}
+            >
+              <ChevronDown size={16} />
+            </span>
+          </div>
+          <div className="mt-2.5 grid gap-1.5 text-sm text-brand-muted">
+            <div className="flex items-center gap-2">
+              <MapPin size={14} className="shrink-0 text-brand-sky-deep" />
+              <span className="min-w-0 truncate">{compactLocation}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-medium text-brand-navy">{scheduleStartLabel}</span>
+              <span className="rounded-full bg-brand-shell px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-muted">
+                {durationDaysLabel}
+              </span>
+            </div>
+            {!isCommunityEvent ? (
+              <div>
+                <span
+                  className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${joinAudienceBadgeClassName}`}
+                >
+                  {joinAudienceBadgeText}
+                </span>
+              </div>
+            ) : null}
+          </div>
+          {compactTags.length > 0 && !isMobileExpanded && (
+            <div className="mt-3 flex flex-nowrap gap-2 overflow-hidden">
+              {compactTags.map((tag) => (
+                <span
+                  key={`${event.id}-compact-${tag}`}
+                  className="truncate rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy"
+                >
+                  {tag}
+                </span>
+              ))}
+              {shouldShowExpandedTagsIndicator ? (
+                <span className="shrink-0 rounded-full bg-brand-sky/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+                  {isMobileExpanded ? `${eventTags.length} tagów` : "..."}
+                </span>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </button>
+
+      {isMobileExpanded ? (
+        <div className="border-t border-brand-line px-3.5 pb-4 pt-4">
+          <p className="text-sm leading-6 text-brand-muted">{event.summary}</p>
+          <div
+            className={`mt-4 grid gap-2 ${
+              mobileSummarySchedule.length > 1 ? "grid-cols-2" : "grid-cols-1"
+            }`}
+          >
+            {mobileSummarySchedule.map((row) => (
+              <div
+                key={`${event.id}-mobile-${row.key}`}
+                className="min-w-0 rounded-2xl bg-brand-shell px-3 py-3 text-sm text-brand-muted"
+              >
+                <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
+                  <CalendarDays size={15} />
+                  {row.title}
+                </div>
+                <p>{row.label}</p>
+                <p>{row.range}</p>
+              </div>
+            ))}
+          </div>
+          {eventTags.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {eventTags.map((tag) => (
+                <span
+                  key={`${event.id}-mobile-expanded-${tag}`}
+                  className="rounded-full bg-brand-sky/20 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-navy"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+          {!(isCommunityEvent || isSelfManagedTrainingEvent(event)) && (
+            <p className="mt-4 text-sm text-brand-muted">
+              Organizator:{" "}
+              <span className="font-semibold text-brand-navy">
+                {getPublicOrganizerName(event, ownerLabels)}
+              </span>
+            </p>
+          )}
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+            {canManage && (
+              <Link
+                to={managementPath}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+              >
+                Edytuj
+              </Link>
+            )}
+            <Link
+              to={`/kalendarz/${event.id}`}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
+            >
+              Chcę wziąć udział
+              <ArrowRight size={16} />
+            </Link>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+
+  if (isCommunityEvent) {
+    return <CommunityEventCard event={event} showTrainerImage={showTrainerImage} />;
+  }
+
+  return (
+    <>
+      {mobileCard}
+      <article className="hidden overflow-hidden rounded-[2rem] border border-brand-line bg-white shadow-soft md:block">
+      <div
+        className={`grid md:items-stretch ${
+          showTrainerImage
+            ? isCommunityEvent
+              ? "md:grid-cols-[228px_minmax(0,1fr)]"
+              : "md:grid-cols-[252px_minmax(0,1fr)]"
+            : "md:grid-cols-1"
+        }`}
+      >
+        {showTrainerImage && (
+          <div className="relative h-full min-h-[21rem] overflow-hidden bg-brand-shell">
+            {leadAvatarUrl ? (
+              <img
+                src={leadAvatarUrl}
+                alt={leadName}
+                className="h-full w-full object-cover object-top"
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center bg-gradient-to-br from-brand-sky/40 to-white text-4xl font-semibold text-brand-navy">
+                {leadName.slice(0, 1)}
+              </div>
+            )}
+            {!isCommunityEvent ? (
+              <EmandarTrainingBadge className="absolute right-3 top-3 z-10" />
+            ) : null}
+            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-brand-navy/85 via-brand-navy/45 to-transparent px-4 py-5 text-white">
+              <p className="text-sm uppercase tracking-[0.2em] text-white/75">
+                {isCommunityEvent ? "Gospodarz wydarzenia" : "Przekazujący Wiedzę"}
+              </p>
+              <p className="text-lg font-semibold">{leadName}</p>
+            </div>
+          </div>
+        )}
+
+        <div className="flex h-full flex-col p-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <h3 className="break-words text-2xl font-semibold text-brand-navy">
+                {isCommunityEvent ? event.title || event.location : desktopTitle}
+              </h3>
+              {isCommunityEvent && (
+                <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                  {event.location}
+                </p>
+              )}
+              {!isCommunityEvent && shouldShowDesktopLocationRow && (
+                <div className="mt-2 flex items-center gap-2 text-sm text-brand-muted">
+                  <MapPin size={15} className="shrink-0 text-brand-sky-deep" />
+                  <span>{event.location}</span>
+                </div>
+              )}
+              <p className="mt-2 text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                {scheduleRangeLabel}
+              </p>
+              <p className="mt-3 line-clamp-2 text-brand-muted">{event.summary}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {canManage && (
+                <Link
+                  to={managementPath}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                >
+                  Edytuj szkolenie
+                </Link>
+              )}
+              <Link
+                to={`/kalendarz/${event.id}`}
+                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+              >
+                Chcę wziąć udział
+                <ArrowRight size={16} />
+              </Link>
+            </div>
+          </div>
+          <div
+            className={`mt-6 grid gap-3 ${
+              scheduleRows.length > 1
+                ? "grid-cols-2 xl:[grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]"
+                : "grid-cols-1"
+            }`}
+          >
+            {scheduleRows.map((row) => (
+              <div
+                key={row.key}
+                className="rounded-2xl bg-brand-shell px-4 py-3 text-sm text-brand-muted"
+              >
+                <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
+                  <CalendarDays size={16} />
+                  {row.title}
+                </div>
+                <p>{row.label}</p>
+                <p>{row.range}</p>
+              </div>
+            ))}
+          </div>
+          {isCommunityEvent && eventImages.length > 0 && (
+            <div className="mt-5 flex flex-wrap gap-4">
+              {eventImages.map((image, index) => (
+                <img
+                  key={image.id}
+                  src={image.url}
+                  alt={`${event.title || event.location} ${index + 1}`}
+                  className="rounded-[1.4rem] border border-brand-line bg-brand-shell object-cover shadow-soft"
+                  style={{
+                    height: "112px",
+                    width: `${Math.max(88, Math.round(112 * (image.width / image.height || 1)))}px`,
+                  }}
+                />
+              ))}
+            </div>
+          )}
+          <div className="mt-auto pt-5">
+            {eventTags.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {!isCommunityEvent ? (
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${joinAudienceBadgeClassName}`}
+                  >
+                    {joinAudienceBadgeText}
+                  </span>
+                ) : null}
+                {eventTags.map((tag) => (
+                  <span
+                    key={`${event.id}-${tag}`}
+                    className="rounded-full bg-brand-sky/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div>
+                {!isCommunityEvent ? (
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${joinAudienceBadgeClassName}`}
+                  >
+                    {joinAudienceBadgeText}
+                  </span>
+                ) : null}
+              </div>
+            )}
+            {!(isCommunityEvent || isSelfManagedTrainingEvent(event)) && (
+              <div className="mt-5 text-sm text-brand-muted">
+                <div>
+                  Organizator:{" "}
+                  <span className="font-semibold text-brand-navy">
+                    {getPublicOrganizerName(event, ownerLabels)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      </article>
+    </>
+  );
+}
+
+export function LandingPage() {
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
+      <div className="grid gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:items-center">
+        <div>
+          <div className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-2 text-sm font-semibold text-brand-navy shadow-soft">
+            <Sparkles size={16} />
+            Kalendarz i panel Emandar w trybie prototypowym
+          </div>
+          <h1 className="mt-6 max-w-4xl text-5xl font-semibold leading-tight text-brand-navy sm:text-6xl">
+            Publiczny kalendarz szkoleń i panel współpracy dla Przekazujących
+            Wiedzę oraz organizatorów.
+          </h1>
+          <p className="mt-6 max-w-3xl text-lg text-brand-muted">
+            W tej wersji dane publiczne, logowanie, zgłoszenia i zdjęcia trafiają
+            do wspólnego API Emandar. Możesz przejść do kalendarza, sprawdzić
+            Przekazujących Wiedzę albo zalogować się do panelu.
+          </p>
+          <div className="mt-10 flex flex-wrap gap-4">
+            <Link
+              to="/kalendarz"
+              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft"
+            >
+              Przejdź do kalendarza
+              <ArrowRight size={18} />
+            </Link>
+            <Link
+              to="/trenerzy"
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-6 py-3.5 text-sm font-semibold text-brand-navy"
+            >
+              Poznaj Przekazujących Wiedzę
+            </Link>
+            <Link
+              to="/login"
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-sky/15 px-6 py-3.5 text-sm font-semibold text-brand-navy"
+            >
+              Zaloguj się do panelu
+            </Link>
+          </div>
+        </div>
+
+        <div className="grid gap-4">
+          {[
+            {
+              title: "Kalendarz",
+              description:
+                "Lista najbliższych szkoleń, szybki detal i formularz zgłoszenia ze zdjęciem.",
+              icon: CalendarDays,
+              to: "/kalendarz",
+            },
+            {
+              title: "Przekazujący Wiedzę",
+              description:
+                "Publiczne profile Przekazujących Wiedzę oraz ich najbliższe wydarzenia.",
+              icon: Users,
+              to: "/trenerzy",
+            },
+            {
+              title: "Panel",
+              description:
+                "Osobny obszar dla admina, Przekazującego Wiedzę i organizatora z logowaniem SMS i wspólnymi danymi systemu.",
+              icon: ShieldCheck,
+              to: "/login",
+            },
+          ].map((card) => {
+            const Icon = card.icon;
+            return (
+              <Link
+                key={card.title}
+                to={card.to}
+                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft transition-transform hover:-translate-y-1"
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-sky/15 text-brand-navy">
+                  <Icon size={22} />
+                </div>
+                <h2 className="mt-4 text-2xl font-semibold text-brand-navy">
+                  {card.title}
+                </h2>
+                <p className="mt-2 text-brand-muted">{card.description}</p>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+export function CalendarPage() {
+  const { store } = useAppState();
+  const [page, setPage] = useState(1);
+  const eventsPageQuery = useQuery({
+    queryKey: ["public", "events", "official", page],
+    queryFn: () => fetchPublicEventsPage("official", { page, pageSize: 25 }),
+    staleTime: 30_000,
+  });
+  const publicEvents = getPublicEventCollection(store);
+  const fallbackEvents = useMemo(
+    () => sortEventsByDate(publicEvents.filter((item) => resolveBrandStatus(item.brandStatus) === "official")),
+    [publicEvents],
+  );
+  const events = eventsPageQuery.data?.items ?? fallbackEvents;
+
+  return (
+    <EventFeedSection
+      eyebrow="Szkolenia Emandar"
+      title="Spotkania z Przekazującymi wiedzę"
+      description="Kalendarz oficjalnych szkoleń będzie uzupełniany przez zespół Emandar."
+      emptyTitle="Brak opublikowanych szkoleń"
+      emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
+      events={events}
+      pagination={
+        eventsPageQuery.data
+          ? {
+              page: eventsPageQuery.data.page,
+              totalPages: eventsPageQuery.data.totalPages,
+              totalItems: eventsPageQuery.data.totalItems,
+              loading: eventsPageQuery.isFetching,
+              onPageChange: setPage,
+            }
+          : undefined
+      }
+    />
+  );
+}
+
+export function CommunityEventsPage() {
+  const { store } = useAppState();
+  const [page, setPage] = useState(1);
+  const eventsPageQuery = useQuery({
+    queryKey: ["public", "events", "community", page],
+    queryFn: () => fetchPublicEventsPage("community", { page, pageSize: 25 }),
+    staleTime: 30_000,
+  });
+  const publicEvents = getPublicEventCollection(store);
+  const fallbackEvents = useMemo(
+    () => sortEventsByDate(publicEvents.filter((item) => resolveBrandStatus(item.brandStatus) === "supported")),
+    [publicEvents],
+  );
+  const events = eventsPageQuery.data?.items ?? fallbackEvents;
+
+  return (
+    <EventFeedSection
+      eyebrow="Wydarzenia społeczności"
+      title="Wydarzenia społeczności"
+      description="Przeglądaj otwarte wydarzenia społeczności i zgłaszaj chęć udziału u osoby prowadzącej."
+      emptyTitle="Brak wydarzeń społeczności"
+      emptyDescription="Po opublikowaniu nowych wydarzeń pojawią się właśnie tutaj."
+      events={events}
+      pagination={
+        eventsPageQuery.data
+          ? {
+              page: eventsPageQuery.data.page,
+              totalPages: eventsPageQuery.data.totalPages,
+              totalItems: eventsPageQuery.data.totalItems,
+              loading: eventsPageQuery.isFetching,
+              onPageChange: setPage,
+            }
+          : undefined
+      }
+    />
+  );
+}

@@ -11,8 +11,8 @@
       "displayName": "Dariusz",
       "email": "dariusz@emandar.pl",
       "phone": "+48 601 100 100",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/dariusz.jpg",
+      "avatarPath": "/emandar/trainer-avatars/dariusz.jpg",
       "status": "active",
       "trainerProfileId": "trainer-11",
       "password": "kocham"
@@ -27,8 +27,8 @@
       "displayName": "Jacek",
       "email": "jacek@emandar.pl",
       "phone": "+48 601 100 101",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/jacek.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/jacek.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/jacek.jpg",
+      "avatarPath": "/emandar/trainer-avatars/jacek.jpg",
       "status": "active",
       "trainerProfileId": "trainer-1",
       "password": "kocham"
@@ -43,8 +43,8 @@
       "displayName": "Marcin",
       "email": "marcin@emandar.pl",
       "phone": "+48 601 100 102",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/marcin.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/marcin.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/marcin.jpg",
+      "avatarPath": "/emandar/trainer-avatars/marcin.jpg",
       "status": "active",
       "trainerProfileId": "trainer-2",
       "password": "kocham"
@@ -59,8 +59,8 @@
       "displayName": "Dorota",
       "email": "dorota@emandar.pl",
       "phone": "+48 601 909 808",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/dorota.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/dorota.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/dorota.jpg",
+      "avatarPath": "/emandar/trainer-avatars/dorota.jpg",
       "status": "active",
       "trainerProfileId": "trainer-10",
       "password": "kocham"
@@ -73,8 +73,8 @@
       ],
       "primaryRole": "trainer",
       "displayName": "Asia",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/asia.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/asia.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/asia.jpg",
+      "avatarPath": "/emandar/trainer-avatars/asia.jpg",
       "email": "asia@emandar.pl",
       "phone": "+48 601 100 104",
       "status": "active",
@@ -91,8 +91,8 @@
       "displayName": "Krzysiu",
       "email": "krzysiu@emandar.pl",
       "phone": "+48 601 100 105",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/krzysiu.jpg",
+      "avatarPath": "/emandar/trainer-avatars/krzysiu.jpg",
       "status": "active",
       "trainerProfileId": "trainer-5",
       "password": "kocham"
@@ -107,8 +107,8 @@
       "displayName": "Klaudia",
       "email": "klaudia@emandar.pl",
       "phone": "+48 601 100 106",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/klaudia.jpg",
+      "avatarPath": "/emandar/trainer-avatars/klaudia.jpg",
       "status": "active",
       "trainerProfileId": "trainer-6",
       "password": "kocham"
@@ -123,8 +123,8 @@
       "displayName": "Beata",
       "email": "beata@emandar.pl",
       "phone": "+48 601 100 103",
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/beata.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/beata.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/beata.jpg",
+      "avatarPath": "/emandar/trainer-avatars/beata.jpg",
       "status": "active",
       "trainerProfileId": "trainer-3",
       "password": "kocham"
@@ -239,8 +239,8 @@
       "slug": "dariusz",
       "displayName": "Dariusz",
       "sortOrder": 1,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/dariusz.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/dariusz.jpg",
+      "avatarPath": "/emandar/trainer-avatars/dariusz.jpg",
       "bio": "Opiekuje się prototypem i całym układem demonstracyjnym.",
       "specialties": [
         "architektura",
@@ -262,8 +262,8 @@
       "slug": "jacek",
       "displayName": "Jacek",
       "sortOrder": 2,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/jacek.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/jacek.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/jacek.jpg",
+      "avatarPath": "/emandar/trainer-avatars/jacek.jpg",
       "bio": "Pracuje z oddechem, rytmem grupy i regularną praktyką.",
       "specialties": [
         "oddech",
@@ -286,8 +286,8 @@
       "slug": "marcin",
       "displayName": "Marcin",
       "sortOrder": 3,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/marcin.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/marcin.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/marcin.jpg",
+      "avatarPath": "/emandar/trainer-avatars/marcin.jpg",
       "bio": "Łączy szkolenia regeneracyjne z prostą, uporządkowaną organizacją.",
       "specialties": [
         "regeneracja",
@@ -309,8 +309,8 @@
       "slug": "dorota",
       "displayName": "Dorota",
       "sortOrder": 90,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/dorota.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/dorota.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/dorota.jpg",
+      "avatarPath": "/emandar/trainer-avatars/dorota.jpg",
       "bio": "Prowadzi wydarzenia społecznościowe i formaty online.",
       "specialties": [
         "online",
@@ -333,8 +333,8 @@
       "slug": "asia",
       "displayName": "Asia",
       "sortOrder": 4,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/asia.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/asia.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/asia.jpg",
+      "avatarPath": "/emandar/trainer-avatars/asia.jpg",
       "bio": "Profil demo do szybkiego logowania.",
       "specialties": [
         "demo"
@@ -352,8 +352,8 @@
       "slug": "krzysiu",
       "displayName": "Krzysiu",
       "sortOrder": 5,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/krzysiu.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/krzysiu.jpg",
+      "avatarPath": "/emandar/trainer-avatars/krzysiu.jpg",
       "bio": "Profil demo do szybkiego logowania.",
       "specialties": [
         "demo"
@@ -371,8 +371,8 @@
       "slug": "klaudia",
       "displayName": "Klaudia",
       "sortOrder": 6,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/klaudia.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/klaudia.jpg",
+      "avatarPath": "/emandar/trainer-avatars/klaudia.jpg",
       "bio": "Profil demo do szybkiego logowania.",
       "specialties": [
         "demo"
@@ -390,8 +390,8 @@
       "slug": "beata",
       "displayName": "Beata",
       "sortOrder": 7,
-      "avatarUrl": "/emandar/mock-data/trainer-avatars/beata.jpg",
-      "avatarPath": "/emandar/mock-data/trainer-avatars/beata.jpg",
+      "avatarUrl": "/emandar/trainer-avatars/beata.jpg",
+      "avatarPath": "/emandar/trainer-avatars/beata.jpg",
       "bio": "Profil demo do szybkiego logowania.",
       "specialties": [
         "demo"

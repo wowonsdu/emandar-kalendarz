@@ -30,7 +30,7 @@ DATABASE_URL=postgres://emandar_prod:change-me@127.0.0.1:5432/emandar_prod pnpm 
 DATABASE_URL=postgres://emandar_prod:change-me@127.0.0.1:5432/emandar_prod pnpm --filter @emandar/api db:seed
 ```
 
-The seed source is `apps/web/public/mock-data/seed-store.json`. The production seed importer filters it to admin plus visible trainer profiles/users only. It does not import organizers, participants, groups, events, relations, enrollments, rosters, or notifications. Use `pnpm --filter @emandar/api db:seed -- --full-demo` only for a disposable demo database.
+The seed source is `seed-data/seed-store.json`. The production seed importer filters it to admin plus visible trainer profiles/users only. It does not import organizers, participants, groups, events, relations, enrollments, rosters, or notifications. Use `pnpm --filter @emandar/api db:seed -- --full-demo` only for a disposable demo database.
 
 Production SMS auth requires `SMSAPI_TOKEN` and optionally `SMSAPI_FROM`. Keep `SMSAPI_TEST_MODE=true` for smoke environments; set `SMSAPI_TEST_MODE=false` only after sender and billing are verified.
 
@@ -78,7 +78,7 @@ Before replacing live files, create timestamped backups of:
 
 Run `pg_dump` and upload backup before applying migrations because the release writes new auth/session/upload/audit rows during normal smoke tests.
 
-Deploy static web build from `apps/web/dist/`. Deploy the API build plus root workspace files needed for production install, copy `apps/web/public/mock-data/seed-store.json` to `/opt/panel.ceo/emandar-api/seed-store.json`, then run migrations and seed import.
+Deploy static web build from `apps/web/dist/`. Deploy the API build plus root workspace files needed for production install, copy `seed-data/seed-store.json` to `/opt/panel.ceo/emandar-api/seed-data/seed-store.json`, then run migrations and seed import.
 
 Use `deploy/emandar-api.env.example`, `deploy/emandar-api.service`, and `deploy/nginx-emandar.conf.example` as the server-side templates. Always inspect the existing `panel.ceo` Nginx config first, back up the edited config, run `nginx -t`, reload only after it passes, and verify the target route plus a neighboring route.
 

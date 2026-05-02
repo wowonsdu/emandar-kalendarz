@@ -20,7 +20,7 @@ Ten dokument opisuje:
 - Tailwind CSS `4`
 - Radix UI + lokalne wrappery w `src/app/components/ui`
 - aplikacyjny context w `src/app/providers/AppProviders.tsx`
-- lokalny mock backend i persistence przez `src/data/mockRepository.ts`
+- klient API w `src/data/apiClient.ts`, React Query i backend Fastify/PostgreSQL
 
 ## Wzorce, które już są w projekcie
 
@@ -29,7 +29,7 @@ Projekt nie jest przypadkowy. Ma kilka sensownych fundamentów:
 - Warstwowy podział `app / data / domain`
 - Routing oddzielony od layoutów w `src/app/routes.tsx` i `src/app/layouts.tsx`
 - Część logiki domenowej jest czysta i testowalna w `src/domain/utils.ts`
-- Dostęp do danych jest schowany za repozytorium w `src/data/mockRepository.ts`
+- Dostęp do danych jest schowany za klientem API w `src/data/apiClient.ts`
 - UI primitives są wydzielone do `src/app/components/ui`
 - Są testy domeny, repo i części helperów UI
 - Jest rozróżnienie public/private store oraz auth/session flow
@@ -43,7 +43,6 @@ To oznacza, że projekt ma bazę pod dobrą architekturę. Problem nie leży w b
 Największe pliki:
 
 - `src/app/pages/panel.tsx` -> `12715` linii
-- `src/data/mockRepository.ts` -> `3269` linii
 - `src/app/pages/public.tsx` -> `3147` linii
 - `src/app/providers/AppProviders.tsx` -> `782` linii
 - `src/domain/utils.ts` -> `978` linii
@@ -117,23 +116,20 @@ To jest klasyczny "fat context facade". Działa, ale bardzo utrudnia:
 - mockowanie pojedynczych capabilities
 - czytelność zależności
 
-### 5. `mockRepository.ts` jest jednocześnie persistence, service layer i use-case layer
+### 5. Warstwa danych nadal jest zbyt szeroka
 
-W `src/data/mockRepository.ts` są naraz:
+Aktywne `src/data/mockRepository.ts` nie jest juz runtime persistence. Aktualny dlug siedzi glownie w `src/data/apiClient.ts`, `AppProviders.tsx` i zbyt szerokich panelowych read modelach. W jednym miejscu sa nadal naraz:
 
 - auth/session helpers
-- storage helpers
-- patch/versioning logic
+- CSRF, upload i SMS helpers
 - CRUD dla grup
 - CRUD dla wydarzeń
 - flow rejestracji i SMS
-- logika rosterów
-- notyfikacje
-- pochodne przeliczenia store
+- signed action token calls
+- invalidacja szerokiego store po mutacjach
 
 To oznacza brak wyraźnych granic między:
 
-- persistence
 - data access
 - application actions
 - domain workflows
@@ -176,7 +172,7 @@ Przykłady:
 To warto zachować i doprecyzować:
 
 - Layered architecture: `app -> data -> domain`
-- Repository pattern dla mock backendu
+- API client facade dla backendu
 - Context facade dla akcji aplikacyjnych
 - Pure function utilities dla domeny
 - Role/capability driven UI zamiast czysto route-based UI
@@ -292,18 +288,18 @@ Docelowo `AppProviders.tsx` powinien zostać rozbity na:
 
 To ograniczy rerender scope i zmniejszy wagę jednego centralnego contextu.
 
-### 7. Data modules zamiast jednego repozytorium
+### 7. Data modules zamiast jednego klienta/facade
 
-`mockRepository.ts` powinno zostać podzielone co najmniej na:
+`apiClient.ts` i provider akcji powinny zostać podzielone co najmniej na:
 
-- `data/mock/store.ts`
-- `data/mock/persistence.ts`
-- `data/mock/auth.ts`
-- `data/mock/groups.ts`
-- `data/mock/events.ts`
-- `data/mock/enrollments.ts`
-- `data/mock/notifications.ts`
-- `data/mock/trainers.ts`
+- `data/auth.ts`
+- `data/public-events.ts`
+- `data/panel-events.ts`
+- `data/groups.ts`
+- `data/enrollments.ts`
+- `data/notifications.ts`
+- `data/trainers.ts`
+- `data/uploads.ts`
 
 Na górze może zostać facade eksportujące API zgodne wstecznie.
 
@@ -323,7 +319,7 @@ To jest szczególnie ważne dla `panel.tsx` i `public.tsx`.
 - `src/app/pages/panel.tsx`
 - `src/app/pages/public.tsx`
 - `src/app/providers/AppProviders.tsx`
-- `src/data/mockRepository.ts`
+- `src/data/apiClient.ts`
 
 ### Priorytet 2
 
@@ -459,9 +455,9 @@ Do dodania:
 - events
 - auth/enrollment
 
-### Etap 4: Podział `mockRepository.ts`
+### Etap 4: Podział warstwy danych
 
-- najpierw persistence/store helpers
+- najpierw publiczne listy wydarzen i hooki read-modeli
 - potem auth
 - potem groups/events/enrollments
 

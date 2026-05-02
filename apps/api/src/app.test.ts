@@ -331,6 +331,82 @@ describe("emandar api", () => {
     await app.close();
   });
 
+  it("rate limits SMS requests by phone and limits wrong code attempts", async () => {
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(),
+      authStore,
+    });
+    const csrfToken = await csrf(app);
+    const phone = "+48 600 700 801";
+
+    for (let index = 0; index < 5; index += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/emandar/api/auth/sms/request",
+        headers: {
+          cookie: csrfToken.cookie,
+          "x-emandar-csrf": csrfToken.token,
+          "x-forwarded-for": `10.0.0.${index}`,
+        },
+        payload: { phone },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const limited = await app.inject({
+      method: "POST",
+      url: "/emandar/api/auth/sms/request",
+      headers: {
+        cookie: csrfToken.cookie,
+        "x-emandar-csrf": csrfToken.token,
+        "x-forwarded-for": "10.0.0.99",
+      },
+      payload: { phone },
+    });
+    expect(limited.statusCode).toBe(429);
+
+    const attemptsPhone = "+48 600 700 802";
+    await app.inject({
+      method: "POST",
+      url: "/emandar/api/auth/sms/request",
+      headers: {
+        cookie: csrfToken.cookie,
+        "x-emandar-csrf": csrfToken.token,
+        "x-forwarded-for": "10.0.1.1",
+      },
+      payload: { phone: attemptsPhone },
+    });
+
+    for (let index = 0; index < 4; index += 1) {
+      const wrong = await app.inject({
+        method: "POST",
+        url: "/emandar/api/auth/sms/confirm",
+        headers: {
+          cookie: csrfToken.cookie,
+          "x-emandar-csrf": csrfToken.token,
+        },
+        payload: { phone: attemptsPhone, code: "000000" },
+      });
+      expect(wrong.statusCode).toBe(401);
+    }
+
+    const tooMany = await app.inject({
+      method: "POST",
+      url: "/emandar/api/auth/sms/confirm",
+      headers: {
+        cookie: csrfToken.cookie,
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: { phone: attemptsPhone, code: "000000" },
+    });
+    expect(tooMany.statusCode).toBe(429);
+    expect(authStore.auditLog.some((item) => item.action === "sms.request.rate-limited")).toBe(true);
+    expect(authStore.auditLog.some((item) => item.action === "sms.confirm.too-many-attempts")).toBe(true);
+    await app.close();
+  });
+
   it("rejects cookie-based mutations without CSRF", async () => {
     const app = await buildApp({
       config,
@@ -564,6 +640,63 @@ describe("emandar api", () => {
 
     const response = await app.inject("/emandar/api/mock/state");
     expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("paginates public and panel event read models with a capped page size", async () => {
+    const trainingEvents = Array.from({ length: 130 }, (_, index) => ({
+      id: `event-${index + 1}`,
+      title: `Event ${index + 1}`,
+      brandStatus: index % 2 === 0 ? "official" : "supported",
+      status: "active",
+      isPublished: true,
+      startsAt: `2026-07-${String((index % 28) + 1).padStart(2, "0")}T10:00:00.000Z`,
+      endsAt: `2026-07-${String((index % 28) + 1).padStart(2, "0")}T12:00:00.000Z`,
+    }));
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository({
+        ...testStoreForPermissions("admin", ["admin"]),
+        trainingEvents,
+        publicTrainingEvents: trainingEvents,
+      }),
+      authStore,
+    });
+
+    const publicPage = await app.inject("/emandar/api/public/events");
+    expect(publicPage.statusCode).toBe(200);
+    expect(publicPage.json()).toMatchObject({
+      page: 1,
+      pageSize: 25,
+      totalItems: 65,
+      totalPages: 3,
+    });
+    expect(publicPage.json().items).toHaveLength(25);
+
+    const capped = await app.inject("/emandar/api/public/community-events?pageSize=500");
+    expect(capped.json()).toMatchObject({
+      pageSize: 100,
+      totalItems: 65,
+      totalPages: 1,
+    });
+
+    const csrfToken = await csrf(app);
+    const adminSession = await loginWithSms(app, "+48 600 000 001", csrfToken);
+    const panelPage = await app.inject({
+      url: "/emandar/api/panel/read-models/events-page?kind=community&page=2&pageSize=10",
+      headers: {
+        cookie: mergeCookies(adminSession, csrfToken.cookie),
+      },
+    });
+    expect(panelPage.statusCode).toBe(200);
+    expect(panelPage.json()).toMatchObject({
+      page: 2,
+      pageSize: 10,
+      totalItems: 65,
+      totalPages: 7,
+    });
+    expect(panelPage.json().items).toHaveLength(10);
     await app.close();
   });
 

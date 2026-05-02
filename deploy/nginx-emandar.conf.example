@@ -1,4 +1,6 @@
-# Add these locations to the existing panel.ceo server block.
+# Legacy/reference Nginx template.
+# Current production uses the container/proxy deployment documented in docs/production-migration.md.
+# If this template is used for recovery or a non-container install, add these locations to the existing panel.ceo server block.
 # Keep existing TLS, server_name, headers and sibling locations unchanged.
 
 location = /emandar {

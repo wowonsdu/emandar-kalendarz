@@ -59,7 +59,7 @@ export type ParticipantDashboardUpcomingItem = {
 
 export type ParticipantDashboardConfirmationItem = {
   id: string;
-  token: string;
+  entityId: string;
   event: TrainingEvent;
   groupName: string;
 };
@@ -420,7 +420,7 @@ export function getParticipantDashboardModel({
       .filter((record) => record.eventParticipant.attendanceConfirmationStatus === "pending")
       .map((record) => ({
         id: record.eventParticipant.id,
-        token: record.eventParticipant.id,
+        entityId: record.eventParticipant.id,
         event: record.event,
         groupName: getParticipantDashboardGroupLabel(record.event, record.group),
       })),

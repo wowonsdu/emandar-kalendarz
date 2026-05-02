@@ -92,6 +92,14 @@ export const publicEventListResponseSchema = z.object({
   events: z.array(z.record(z.unknown())),
 });
 
+export const paginatedRecordsResponseSchema = z.object({
+  items: z.array(z.record(z.unknown())),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+  totalItems: z.number().int().nonnegative(),
+  totalPages: z.number().int().nonnegative(),
+});
+
 export const publicEventDetailResponseSchema = z.object({
   event: z.record(z.unknown()).nullable(),
 });

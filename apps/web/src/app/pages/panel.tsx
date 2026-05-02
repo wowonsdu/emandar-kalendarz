@@ -35,6 +35,7 @@ import {
 } from "recharts";
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
+import { createAttendanceConfirmationTokens } from "@/data/apiClient";
 import { useAppState } from "../providers/AppProviders";
 import {
   type DashboardPerspective,
@@ -4613,12 +4614,13 @@ function ParticipantDashboardPerspectiveView({
                     </div>
                     <button
                       type="button"
-                      disabled={confirmingToken === item.token}
+                      disabled={confirmingToken === item.entityId}
                       onClick={async () => {
-                        setConfirmingToken(item.token);
+                        setConfirmingToken(item.entityId);
 
                         try {
-                          await confirmEnrollmentAttendance(item.token, "confirm");
+                          const tokens = await createAttendanceConfirmationTokens(item.entityId);
+                          await confirmEnrollmentAttendance(tokens.confirmToken, "confirm");
                           toast.success("Udział został potwierdzony.");
                         } catch (error) {
                           toast.error(
@@ -4628,13 +4630,13 @@ function ParticipantDashboardPerspectiveView({
                           );
                         } finally {
                           setConfirmingToken((current) =>
-                            current === item.token ? null : current,
+                            current === item.entityId ? null : current,
                           );
                         }
                       }}
                       className="inline-flex items-center rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
                     >
-                      {confirmingToken === item.token ? "Potwierdzanie..." : "Potwierdź udział"}
+                      {confirmingToken === item.entityId ? "Potwierdzanie..." : "Potwierdź udział"}
                     </button>
                   </div>
                 </article>

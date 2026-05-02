@@ -1,5 +1,5 @@
 [Unit]
-Description=Emandar API
+Description=Emandar API (legacy/reference systemd template)
 After=network.target postgresql.service
 
 [Service]

@@ -10,6 +10,7 @@ import {
   commandRequestSchema,
   communityEventReviewMutationSchema,
   eventParticipantStatusMutationSchema,
+  persistedCollectionKeySchema,
   participantRegistrationRequestSchema,
   publicEnrollmentRequestSchema,
   signedAttendanceRequestSchema,
@@ -236,6 +237,11 @@ async function runAuthedCommand(
   }
 }
 
+function sendSse(reply: FastifyReply, event: string, data: unknown) {
+  reply.raw.write(`event: ${event}\n`);
+  reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
 export async function buildApp(options: AppOptions) {
   const config = options.config ?? readConfig();
   const authStore = options.authStore ?? new InMemoryAuthStore();
@@ -302,12 +308,21 @@ export async function buildApp(options: AppOptions) {
     }
   }
 
-  registerAll(app, "get", config, "/api/public/bootstrap", async () => domain.publicStore());
+  registerAll(app, "get", config, "/api/public/catalog", async () => domain.publicStore());
+  if (config.allowLegacyStoreApi) {
+    registerAll(app, "get", config, "/api/public/bootstrap", async () => domain.publicStore());
+  }
   registerAll(app, "get", config, "/api/public/trainers", async () => ({
     trainers: (await domain.publicStore()).trainers,
   }));
   registerAll(app, "get", config, "/api/public/events", async () => ({
     events: (await domain.publicStore()).publicTrainingEvents,
+  }));
+  registerAll(app, "get", config, "/api/public/events/:eventId", async (request) => ({
+    event: await domain.publicEvent(String((request.params as { eventId?: string }).eventId ?? "")),
+  }));
+  registerAll(app, "get", config, "/api/public/community-events", async () => ({
+    events: await domain.publicCommunityEvents(),
   }));
   registerAll(app, "post", config, "/api/public/enrollments", async (request, reply) => {
     if (!requireCsrf(request, reply)) return reply;
@@ -464,13 +479,54 @@ export async function buildApp(options: AppOptions) {
     return { user: await domain.user(session.userId) };
   });
 
-  registerAll(app, "get", config, "/api/panel/bootstrap", async (request, reply) => {
-    const session = await authStore.getSession(request.cookies.emandar_session);
-    if (!session) {
-      return reply.status(401).send({ error: "unauthorized" });
-    }
-    return domain.privateStore(session.userId);
+  const panelCollectionRoutes: Array<[string, PersistedCollectionKey[]]> = [
+    ["/api/panel/read-models/users", ["users"]],
+    ["/api/panel/read-models/trainers", ["trainers"]],
+    ["/api/panel/read-models/organizers", ["organizers"]],
+    ["/api/panel/read-models/participant-profiles", ["participantProfiles"]],
+    ["/api/panel/read-models/groups", ["groups"]],
+    ["/api/panel/read-models/group-members", ["groupMembers"]],
+    ["/api/panel/read-models/event-participants", ["eventParticipants"]],
+    ["/api/panel/read-models/relations", ["relations"]],
+    ["/api/panel/read-models/events", ["trainingEvents", "publicTrainingEvents"]],
+    ["/api/panel/read-models/enrollments", ["enrollmentRequests"]],
+    ["/api/panel/read-models/notifications", ["notifications"]],
+    ["/api/panel/read-models/settings", ["appSettings"]],
+  ];
+
+  registerAll(app, "get", config, "/api/panel/read-models/navigation", async (request, reply) => {
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    return domain.panelNavigation(actorUserId);
   });
+
+  for (const [routePath, keys] of panelCollectionRoutes) {
+    registerAll(app, "get", config, routePath, async (request, reply) => {
+      const actorUserId = await requireSessionUser(request, reply, authStore);
+      if (!actorUserId) return reply;
+      return domain.panelCollections(actorUserId, keys);
+    });
+  }
+
+  registerAll(app, "get", config, "/api/panel/read-models/:collection", async (request, reply) => {
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const parsed = persistedCollectionKeySchema.safeParse((request.params as { collection?: string }).collection);
+    if (!parsed.success) {
+      return reply.status(404).send({ error: "read-model-not-found" });
+    }
+    return domain.panelCollections(actorUserId, [parsed.data]);
+  });
+
+  if (config.allowLegacyStoreApi) {
+    registerAll(app, "get", config, "/api/panel/bootstrap", async (request, reply) => {
+      const session = await authStore.getSession(request.cookies.emandar_session);
+      if (!session) {
+        return reply.status(401).send({ error: "unauthorized" });
+      }
+      return domain.privateStore(session.userId);
+    });
+  }
 
   registerAll(app, "post", config, "/api/public/signed-actions/attendance", async (request, reply) => {
     const parsed = signedAttendanceRequestSchema.safeParse(request.body);
@@ -625,6 +681,98 @@ export async function buildApp(options: AppOptions) {
     };
   });
 
+  function registerAuthedMutation(
+    routePath: string,
+    commandName: string,
+    argsFromRequest: (request: FastifyRequest) => unknown[],
+  ) {
+    registerAll(app, "post", config, routePath, async (request, reply) => {
+      if (!requireCsrf(request, reply)) return reply;
+      const actorUserId = await requireSessionUser(request, reply, authStore);
+      if (!actorUserId) return reply;
+      return runAuthedCommand(
+        reply,
+        authStore,
+        domain,
+        actorUserId,
+        commandName,
+        argsFromRequest(request),
+        { source: "explicit-endpoint" },
+      );
+    });
+  }
+
+  registerAuthedMutation(
+    "/api/panel/participants/ensure-phone-profile",
+    "ensurePhoneParticipantProfileForFlow",
+    (request) => [(request.body as { seedTrainerId?: unknown } | undefined)?.seedTrainerId],
+  );
+  registerAuthedMutation("/api/panel/enrollments/manage", "manageEnrollmentRequest", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/participants/group-event-participation", "manageOwnGroupEventParticipation", (request) => [
+    request.body,
+  ]);
+  registerAuthedMutation("/api/panel/groups", "createGroup", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/groups/:groupId", "updateGroup", (request) => [
+    { ...(request.body as Record<string, unknown>), groupId: (request.params as { groupId?: string }).groupId },
+  ]);
+  registerAuthedMutation("/api/panel/groups/:groupId/archive", "archiveGroup", (request) => [
+    (request.params as { groupId?: string }).groupId,
+  ]);
+  registerAuthedMutation("/api/panel/participant-profiles/organizer-upsert", "createOrUpdateOrganizerParticipantProfile", (request) => [
+    request.body,
+  ]);
+  registerAuthedMutation("/api/panel/group-members", "addGroupMember", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/group-members/:memberId", "updateGroupMember", (request) => [
+    { ...(request.body as Record<string, unknown>), memberId: (request.params as { memberId?: string }).memberId },
+  ]);
+  registerAuthedMutation("/api/panel/group-members/:memberId/remove", "removeGroupMember", (request) => [
+    (request.params as { memberId?: string }).memberId,
+  ]);
+  registerAuthedMutation("/api/panel/event-participants", "addEventParticipant", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/event-participants/status", "updateEventParticipantStatus", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/events", "createTrainingEvent", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/events/:eventId/archive", "archiveTrainingEvent", (request) => [
+    (request.params as { eventId?: string }).eventId,
+  ]);
+  registerAuthedMutation("/api/panel/events/:eventId/management", "updateTrainingEventManagement", (request) => [
+    { ...(request.body as Record<string, unknown>), eventId: (request.params as { eventId?: string }).eventId },
+  ]);
+  registerAuthedMutation("/api/panel/events/:eventId/brand-status", "updateTrainingEventBrandStatus", (request) => [
+    { ...(request.body as Record<string, unknown>), eventId: (request.params as { eventId?: string }).eventId },
+  ]);
+  registerAuthedMutation("/api/panel/events/:eventId/collaboration", "decideTrainingEventCollaboration", (request) => [
+    { ...(request.body as Record<string, unknown>), eventId: (request.params as { eventId?: string }).eventId },
+  ]);
+  registerAuthedMutation("/api/panel/trainers/:trainerId/brand-status", "updateTrainerBrandStatus", (request) => [
+    { ...(request.body as Record<string, unknown>), trainerId: (request.params as { trainerId?: string }).trainerId },
+  ]);
+  registerAuthedMutation("/api/panel/profile/trainer", "updateTrainerProfile", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/profile/organizer", "updateOrganizerProfile", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/profile/community-organizer", "updateCommunityOrganizerProfile", (request) => [
+    request.body,
+  ]);
+  registerAuthedMutation("/api/panel/profile/participant", "updateParticipantProfile", (request) => [request.body]);
+  registerAuthedMutation("/api/panel/profile/participant/onboarding", "completeParticipantOnboarding", (request) => [
+    request.body,
+  ]);
+  registerAuthedMutation("/api/panel/notification-settings/user", "updateUserNotificationSettings", (request) => [
+    request.body,
+  ]);
+  registerAuthedMutation("/api/panel/notification-settings/trainer", "updateTrainerNotificationSettings", (request) => [
+    request.body,
+  ]);
+  registerAuthedMutation("/api/panel/notification-settings/organizer", "updateOrganizerNotificationSettings", (request) => [
+    request.body,
+  ]);
+  registerAuthedMutation("/api/panel/relations/connect-code", "connectOrganizerToTrainerWithCode", (request) => [
+    (request.body as { trainerAuthorizationCode?: unknown } | undefined)?.trainerAuthorizationCode,
+    (request.body as { expectedTrainerId?: unknown } | undefined)?.expectedTrainerId,
+  ]);
+  registerAuthedMutation("/api/panel/relations/:relationId/detach", "detachRelation", (request) => [
+    (request.params as { relationId?: string }).relationId,
+    (request.body as { archiveLinkedEvents?: unknown } | undefined)?.archiveLinkedEvents,
+  ]);
+
   registerAll(app, "post", config, "/api/panel/users/:userId/moderator-role", async (request, reply) => {
     if (!requireCsrf(request, reply)) return reply;
     const actorUserId = await requireSessionUser(request, reply, authStore);
@@ -760,43 +908,71 @@ export async function buildApp(options: AppOptions) {
     }
   });
 
-  registerAll(app, "post", config, "/api/panel/command/:name", async (request, reply) => {
-    if (!requireCsrf(request, reply)) return reply;
-    const session = await authStore.getSession(request.cookies.emandar_session);
-    if (!session) {
-      return reply.status(401).send({ error: "unauthorized" });
-    }
-    const commandName = (request.params as { name?: string }).name ?? "";
-    const parsed = commandRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: "invalid-command" });
-    }
-
-    try {
-      if (commandName === "registerParticipant") {
-        return reply.status(403).send({ error: "use-registration-endpoint" });
+  if (config.allowLegacyStoreApi) {
+    registerAll(app, "post", config, "/api/panel/command/:name", async (request, reply) => {
+      if (!requireCsrf(request, reply)) return reply;
+      const session = await authStore.getSession(request.cookies.emandar_session);
+      if (!session) {
+        return reply.status(401).send({ error: "unauthorized" });
       }
-      await assertCommandUploads(authStore, commandName, parsed.data.args, session.userId);
-      const result = await domain.runCommand(commandName, parsed.data.args, session.userId);
-      const entity = auditEntity(commandName, result, parsed.data.args);
-      await authStore.recordAudit({
-        actorUserId: session.userId,
-        action: commandName,
-        entityType: entity.entityType,
-        entityId: entity.entityId,
-        payload: { argCount: parsed.data.args.length },
-      });
+      const commandName = (request.params as { name?: string }).name ?? "";
+      const parsed = commandRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "invalid-command" });
+      }
 
-      return {
-        ok: true,
-        result,
-      };
-    } catch (error) {
-      return reply.status(400).send({
-        error: "command-failed",
-        message: error instanceof Error ? error.message : "Nie udało się wykonać operacji.",
+      try {
+        if (commandName === "registerParticipant") {
+          return reply.status(403).send({ error: "use-registration-endpoint" });
+        }
+        await assertCommandUploads(authStore, commandName, parsed.data.args, session.userId);
+        const result = await domain.runCommand(commandName, parsed.data.args, session.userId);
+        const entity = auditEntity(commandName, result, parsed.data.args);
+        await authStore.recordAudit({
+          actorUserId: session.userId,
+          action: commandName,
+          entityType: entity.entityType,
+          entityId: entity.entityId,
+          payload: { argCount: parsed.data.args.length },
+        });
+
+        return {
+          ok: true,
+          result,
+        };
+      } catch (error) {
+        return reply.status(400).send({
+          error: "command-failed",
+          message: error instanceof Error ? error.message : "Nie udało się wykonać operacji.",
+        });
+      }
+    });
+  }
+
+  registerAll(app, "get", config, "/api/panel/events/stream", async (request, reply) => {
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const navigation = await domain.panelNavigation(actorUserId);
+    reply.raw.writeHead(200, {
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive",
+      "content-type": "text/event-stream; charset=utf-8",
+      "x-accel-buffering": "no",
+    });
+    sendSse(reply, "notification.count", {
+      type: "notification.count",
+      userId: actorUserId,
+      count: navigation.notificationsCount,
+    });
+    const heartbeat = setInterval(() => {
+      sendSse(reply, "job.updated", {
+        type: "job.updated",
+        jobId: "panel-stream",
+        status: "alive",
       });
-    }
+    }, 25_000);
+    request.raw.on("close", () => clearInterval(heartbeat));
+    reply.hijack();
   });
 
   registerAll(app, "post", config, "/api/uploads", async (request, reply) => {

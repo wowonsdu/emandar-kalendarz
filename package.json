@@ -8,8 +8,8 @@
     "build": "turbo run build",
     "dev": "turbo run dev --parallel",
     "lint": "turbo run lint",
-    "mock:reset": "pnpm --filter @emandar/web mock:reset",
-    "mock:seed:from-runtime": "pnpm --filter @emandar/web mock:seed:from-runtime",
+    "seed:reset": "pnpm --filter @emandar/web seed:reset",
+    "seed:from-runtime": "pnpm --filter @emandar/web seed:from-runtime",
     "release:check": "pnpm test && pnpm build",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"

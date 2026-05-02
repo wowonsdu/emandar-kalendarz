@@ -1,3 +1,16 @@
+import { QueryObserver } from "@tanstack/react-query";
+import {
+  authSessionResponseSchema,
+  csrfResponseSchema,
+  okMutationResponseSchema,
+  panelNavigationResponseSchema,
+  panelReadModelResponseSchema,
+  publicCatalogResponseSchema,
+  smsConfirmResponseSchema,
+  smsRequestResponseSchema,
+  sseEventSchema,
+  uploadResponseSchema,
+} from "@emandar/shared";
 import type {
   AppSettings,
   AppUser,
@@ -27,6 +40,7 @@ import type {
   TrainerProfileUpdateInput,
 } from "@/domain/types";
 import { sortTrainerProfiles } from "@/domain/utils";
+import { invalidateAppData, invalidateForSseEvent, queryClient, queryKeys } from "./queryClient";
 
 export type Unsubscribe = () => void;
 type StorePatch = Partial<DemoStore>;
@@ -50,22 +64,14 @@ export type ConfirmSmsCodeResult =
       registrationToken: string;
     };
 
+export type PanelNavigationReadModel = {
+  notificationsCount: number;
+  pendingEnrollmentRequestsCount: number;
+  pendingCommunityEventsCount: number;
+};
+
 const verifiedPhoneSessionKey = "emandar:verified-phone-preauth";
-
-let cachedPublicStore: StorePatch | null = null;
-let cachedPrivateStore: DemoStore | null = null;
-let cachedCurrentUser: AppUser | null = null;
-let cachedPublicStoreSignature = "";
-let cachedPrivateStoreSignature = "";
-let cachedCurrentUserSignature = "";
-let cachedAuthUserId: string | null | undefined;
 let cachedCsrfToken: string | null = null;
-let nextListenerId = 1;
-
-const publicListeners = new Map<number, (patch: StorePatch) => void>();
-const privateListeners = new Map<number, (patch: StorePatch) => void>();
-const userProfileListeners = new Map<number, { userId: string; callback: (user: AppUser | null) => void }>();
-const authListeners = new Map<number, (userId: string | null) => void>();
 
 export function createEmptyStore(): DemoStore {
   return {
@@ -92,8 +98,8 @@ function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function serializeForChangeCheck(value: unknown) {
-  return JSON.stringify(value);
+function asDomain<T>(value: unknown): T {
+  return value as T;
 }
 
 function getBasePath() {
@@ -115,8 +121,7 @@ function buildApiUrl(basePath: string, path: string) {
 
 function resolveApiUrls(path: string, options: { baseUrl?: string; pathname?: string } = {}) {
   const configuredBasePath = normalizeBasePath(options.baseUrl ?? getBasePath());
-  const pathname =
-    options.pathname ?? (typeof window !== "undefined" ? window.location.pathname : "");
+  const pathname = options.pathname ?? (typeof window !== "undefined" ? window.location.pathname : "");
   const prefersEmandarBase = configuredBasePath === "/" && pathname.startsWith("/emandar/");
   const basePathCandidates = Array.from(
     new Set(
@@ -168,7 +173,7 @@ async function ensureCsrfToken() {
   if (cachedCsrfToken) {
     return cachedCsrfToken;
   }
-  const response = await fetchFirst<{ token: string }>("auth/csrf");
+  const response = csrfResponseSchema.parse(await fetchFirst<unknown>("auth/csrf"));
   cachedCsrfToken = response.token;
   return response.token;
 }
@@ -191,86 +196,11 @@ async function postPublicJson<T>(path: string, payload: unknown) {
   });
 }
 
-async function refreshAuth() {
-  const session = await fetchFirst<{ userId: string | null }>("auth/session").catch(() => ({ userId: null }));
-  if (session.userId !== cachedAuthUserId) {
-    cachedAuthUserId = session.userId;
-    authListeners.forEach((listener) => listener(session.userId));
-  }
-  if (!session.userId) {
-    cachedPrivateStore = null;
-    cachedPrivateStoreSignature = "";
-    cachedCurrentUser = null;
-    cachedCurrentUserSignature = "";
-    userProfileListeners.forEach(({ callback }) => callback(null));
-    return null;
-  }
-
-  const me = await fetchFirst<{ user: AppUser }>("me").catch(() => null);
-  const nextCurrentUser = me?.user ?? null;
-  const nextCurrentUserSignature = serializeForChangeCheck(nextCurrentUser);
-  if (nextCurrentUserSignature !== cachedCurrentUserSignature) {
-    cachedCurrentUser = nextCurrentUser;
-    cachedCurrentUserSignature = nextCurrentUserSignature;
-    userProfileListeners.forEach(({ userId, callback }) => {
-      callback(userId === cachedCurrentUser?.id ? cloneValue(cachedCurrentUser) : null);
-    });
-  }
-  return session.userId;
-}
-
-async function refreshPublicStore() {
-  const patch = await fetchFirst<StorePatch>("public/bootstrap");
-  patch.trainers = sortTrainerProfiles(patch.trainers ?? []);
-  const nextSignature = serializeForChangeCheck(patch);
-  if (nextSignature === cachedPublicStoreSignature) {
-    return;
-  }
-  cachedPublicStore = patch;
-  cachedPublicStoreSignature = nextSignature;
-  publicListeners.forEach((listener) => listener(cloneValue(patch)));
-}
-
-async function refreshPrivateStore() {
-  if (!cachedCurrentUser) {
-    return;
-  }
-  const store = await fetchFirst<DemoStore>("panel/bootstrap").catch(() => null);
-  if (!store) {
-    return;
-  }
-  const nextSignature = serializeForChangeCheck(store);
-  if (nextSignature === cachedPrivateStoreSignature) {
-    return;
-  }
-  cachedPrivateStore = store;
-  cachedPrivateStoreSignature = nextSignature;
-  privateListeners.forEach((listener) => listener(cloneValue(store)));
-  userProfileListeners.forEach(({ userId, callback }) => {
-    callback(cloneValue(store.users.find((item) => item.id === userId) ?? null));
-  });
-}
-
-async function refreshAll() {
-  await refreshPublicStore().catch(() => undefined);
-  await refreshAuth();
-  await refreshPrivateStore();
-}
-
-function maybeStartPolling() {
-  // Subscriptions load initial data, and commands call refreshAll after writes.
-  // Avoid background full-store polling because it causes visible panel refreshes.
-}
-
-function maybeStopPolling() {
-}
-
-async function runCommand<T>(name: string, args: unknown[] = []) {
-  const response = await postJson<{ ok: true; result: T }>(`panel/command/${name}`, { args }).catch((error) => {
-    throw error;
-  });
-  await refreshAll();
-  return response.result;
+function stripFileFields<T extends Record<string, unknown>>(input: T): T {
+  const next = { ...input };
+  delete next.avatarFile;
+  delete next.photoFile;
+  return next;
 }
 
 function readVerifiedPhoneState(): VerifiedPhonePreAuthState | null {
@@ -299,13 +229,6 @@ function writeVerifiedPhoneState(value: VerifiedPhonePreAuthState | null) {
   window.sessionStorage.setItem(verifiedPhoneSessionKey, JSON.stringify(value));
 }
 
-function stripFileFields<T extends Record<string, unknown>>(input: T): T {
-  const next = { ...input };
-  delete next.avatarFile;
-  delete next.photoFile;
-  return next;
-}
-
 function readFileAsBase64(file: File) {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -318,14 +241,106 @@ function readFileAsBase64(file: File) {
   });
 }
 
+export async function fetchAuthSession() {
+  return authSessionResponseSchema.parse(await fetchFirst<unknown>("auth/session"));
+}
+
+export async function fetchCurrentUser() {
+  const response = await fetchFirst<{ user: AppUser }>("me");
+  return response.user;
+}
+
+export async function fetchPublicCatalogStore(): Promise<DemoStore> {
+  const response = publicCatalogResponseSchema.parse(await fetchFirst<unknown>("public/catalog"));
+  return {
+    ...createEmptyStore(),
+    trainers: sortTrainerProfiles(asDomain<DemoStore["trainers"]>(response.trainers)),
+    organizers: asDomain<DemoStore["organizers"]>(response.organizers),
+    trainingEvents: asDomain<DemoStore["trainingEvents"]>(response.trainingEvents),
+    publicTrainingEvents: asDomain<DemoStore["publicTrainingEvents"]>(response.publicTrainingEvents),
+    appSettings: asDomain<DemoStore["appSettings"]>(response.appSettings),
+  };
+}
+
+export async function fetchPanelNavigation(): Promise<PanelNavigationReadModel> {
+  return panelNavigationResponseSchema.parse(await fetchFirst<unknown>("panel/read-models/navigation"));
+}
+
+export async function fetchPanelStore(): Promise<DemoStore> {
+  const paths = [
+    "panel/read-models/users",
+    "panel/read-models/trainers",
+    "panel/read-models/organizers",
+    "panel/read-models/participant-profiles",
+    "panel/read-models/groups",
+    "panel/read-models/group-members",
+    "panel/read-models/event-participants",
+    "panel/read-models/relations",
+    "panel/read-models/events",
+    "panel/read-models/enrollments",
+    "panel/read-models/notifications",
+    "panel/read-models/settings",
+  ];
+  const parts = await Promise.all(paths.map((path) => fetchFirst<unknown>(path)));
+  const merged = parts.reduce<Record<string, unknown>>(
+    (accumulator, part) => ({ ...accumulator, ...(part as Record<string, unknown>) }),
+    {},
+  );
+  const parsed = panelReadModelResponseSchema.parse(merged);
+  return {
+    users: asDomain<DemoStore["users"]>(parsed.users),
+    trainers: sortTrainerProfiles(asDomain<DemoStore["trainers"]>(parsed.trainers)),
+    organizers: asDomain<DemoStore["organizers"]>(parsed.organizers),
+    participantProfiles: asDomain<DemoStore["participantProfiles"]>(parsed.participantProfiles),
+    groups: asDomain<DemoStore["groups"]>(parsed.groups),
+    groupMembers: asDomain<DemoStore["groupMembers"]>(parsed.groupMembers),
+    eventParticipants: asDomain<DemoStore["eventParticipants"]>(parsed.eventParticipants),
+    relations: asDomain<DemoStore["relations"]>(parsed.relations),
+    trainingEvents: asDomain<DemoStore["trainingEvents"]>(parsed.trainingEvents),
+    publicTrainingEvents: asDomain<DemoStore["publicTrainingEvents"]>(parsed.publicTrainingEvents),
+    enrollmentRequests: asDomain<DemoStore["enrollmentRequests"]>(parsed.enrollmentRequests),
+    notifications: asDomain<DemoStore["notifications"]>(parsed.notifications),
+    appSettings: asDomain<DemoStore["appSettings"]>(parsed.appSettings),
+  };
+}
+
+async function refetchAppData() {
+  await invalidateAppData();
+  await Promise.all([
+    queryClient.refetchQueries({ queryKey: queryKeys.publicCatalog, type: "active" }),
+    queryClient.refetchQueries({ queryKey: queryKeys.panelNavigation, type: "active" }),
+    queryClient.refetchQueries({ queryKey: queryKeys.panelStore, type: "active" }),
+    queryClient.refetchQueries({ queryKey: queryKeys.currentUser, type: "active" }),
+  ]);
+}
+
+async function refreshSessionBoundary() {
+  const session = await fetchAuthSession().catch(() => ({ userId: null }));
+  queryClient.setQueryData(queryKeys.authSession, session);
+  if (session.userId) {
+    const user = await fetchCurrentUser().catch(() => null);
+    if (user) {
+      queryClient.setQueryData(queryKeys.currentUser, user);
+    }
+  }
+}
+
+async function runPanelMutation<T>(path: string, payload: unknown = {}) {
+  const response = okMutationResponseSchema.parse(await postJson<unknown>(path, payload));
+  await refetchAppData();
+  return response.result as T;
+}
+
 async function uploadImage(file: File, purpose: "avatar" | "enrollment-photo" | "event-image") {
-  const response = await postJson<TrainingEventImage>("uploads", {
-    filename: file.name,
-    contentType: file.type,
-    dataBase64: await readFileAsBase64(file),
-    purpose,
-  });
-  return response;
+  const response = uploadResponseSchema.parse(
+    await postJson<unknown>("uploads", {
+      filename: file.name,
+      contentType: file.type,
+      dataBase64: await readFileAsBase64(file),
+      purpose,
+    }),
+  );
+  return response as TrainingEventImage;
 }
 
 async function uploadImageWithSessionRetry(file: File, purpose: "avatar" | "enrollment-photo" | "event-image") {
@@ -336,66 +351,62 @@ async function uploadImageWithSessionRetry(file: File, purpose: "avatar" | "enro
       throw error;
     }
 
-    await refreshAll();
+    await refreshSessionBoundary();
+    await refetchAppData();
     return uploadImage(file, purpose);
   }
 }
 
 export function subscribeAuthState(onAuthState: (userId: string | null) => void): Unsubscribe {
-  const listenerId = nextListenerId++;
-  authListeners.set(listenerId, onAuthState);
-  void refreshAuth();
-  maybeStartPolling();
-  return () => {
-    authListeners.delete(listenerId);
-    maybeStopPolling();
-  };
+  const observer = new QueryObserver(queryClient, {
+    queryKey: queryKeys.authSession,
+    queryFn: fetchAuthSession,
+  });
+  return observer.subscribe((result) => {
+    if (result.data) {
+      onAuthState(result.data.userId);
+    }
+  });
 }
 
 export function subscribePublicStore(onPatch: (patch: StorePatch) => void): Unsubscribe {
-  const listenerId = nextListenerId++;
-  publicListeners.set(listenerId, onPatch);
-  if (cachedPublicStore) {
-    onPatch(cloneValue(cachedPublicStore));
-  }
-  void refreshPublicStore();
-  maybeStartPolling();
-  return () => {
-    publicListeners.delete(listenerId);
-    maybeStopPolling();
-  };
+  const observer = new QueryObserver(queryClient, {
+    queryKey: queryKeys.publicCatalog,
+    queryFn: fetchPublicCatalogStore,
+    staleTime: 60_000,
+  });
+  return observer.subscribe((result) => {
+    if (result.data) {
+      onPatch(cloneValue(result.data));
+    }
+  });
 }
 
 export function subscribeUserProfile(userId: string, onUser: (user: AppUser | null) => void): Unsubscribe {
-  const listenerId = nextListenerId++;
-  userProfileListeners.set(listenerId, { userId, callback: onUser });
-  if (cachedCurrentUser?.id === userId) {
-    onUser(cloneValue(cachedCurrentUser));
-  }
-  void refreshAuth();
-  maybeStartPolling();
-  return () => {
-    userProfileListeners.delete(listenerId);
-    maybeStopPolling();
-  };
+  const observer = new QueryObserver(queryClient, {
+    queryKey: queryKeys.currentUser,
+    queryFn: fetchCurrentUser,
+    enabled: Boolean(userId),
+  });
+  return observer.subscribe((result) => {
+    onUser(result.data?.id === userId ? cloneValue(result.data) : null);
+  });
 }
 
 export function subscribePrivateStore(_currentUser: AppUser, onPatch: (patch: StorePatch) => void): Unsubscribe {
-  const listenerId = nextListenerId++;
-  privateListeners.set(listenerId, onPatch);
-  if (cachedPrivateStore) {
-    onPatch(cloneValue(cachedPrivateStore));
-  }
-  void refreshPrivateStore();
-  maybeStartPolling();
-  return () => {
-    privateListeners.delete(listenerId);
-    maybeStopPolling();
-  };
+  const observer = new QueryObserver(queryClient, {
+    queryKey: queryKeys.panelStore,
+    queryFn: fetchPanelStore,
+  });
+  return observer.subscribe((result) => {
+    if (result.data) {
+      onPatch(cloneValue(result.data));
+    }
+  });
 }
 
 export function getCurrentSessionPhone() {
-  return cachedCurrentUser?.phone ?? "";
+  return queryClient.getQueryData<AppUser>(queryKeys.currentUser)?.phone ?? "";
 }
 
 export function getVerifiedPhonePreAuth() {
@@ -403,15 +414,11 @@ export function getVerifiedPhonePreAuth() {
 }
 
 export async function requestSmsCode(phone: string) {
-  const response = await postJson<{ normalizedPhone: string; code?: string }>("auth/sms/request", { phone });
-  return {
-    normalizedPhone: response.normalizedPhone,
-    code: response.code,
-  };
+  return smsRequestResponseSchema.parse(await postJson<unknown>("auth/sms/request", { phone }));
 }
 
 export async function confirmSmsCode(phone: string, code: string, seedTrainerId?: string) {
-  const result = await postJson<ConfirmSmsCodeResult>("auth/sms/confirm", { phone, code, seedTrainerId });
+  const result = smsConfirmResponseSchema.parse(await postJson<unknown>("auth/sms/confirm", { phone, code, seedTrainerId }));
   if (result.status === "missing-account") {
     writeVerifiedPhoneState({
       phone: result.phone,
@@ -422,42 +429,40 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
   } else {
     writeVerifiedPhoneState(null);
   }
-  await refreshAll();
-  return result;
+  await refetchAppData();
+  return result as ConfirmSmsCodeResult;
 }
 
 export async function fetchAppUser(userId: string) {
-  if (cachedPrivateStore) {
-    const user = cachedPrivateStore.users.find((item) => item.id === userId);
-    if (user) return cloneValue(user);
+  const cached = queryClient.getQueryData<AppUser>(queryKeys.currentUser);
+  if (cached?.id === userId) {
+    return cloneValue(cached);
   }
-  const response = await fetchFirst<{ user: AppUser }>("me");
-  return response.user;
+  return fetchCurrentUser();
 }
 
 export async function signIn(email: string, password: string) {
   const response = await postJson<{ userId: string }>("auth/dev-login", { email, password });
-  await refreshAll();
-  return fetchAppUser(response.userId);
+  queryClient.setQueryData(queryKeys.authSession, { userId: response.userId });
+  const user = await fetchAppUser(response.userId);
+  queryClient.setQueryData(queryKeys.currentUser, user);
+  await refetchAppData();
+  return user;
 }
 
 export async function signOut() {
   await postJson<{ ok: boolean }>("auth/logout", {});
-  cachedCurrentUser = null;
-  cachedCurrentUserSignature = "";
-  cachedPrivateStore = null;
-  cachedPrivateStoreSignature = "";
-  cachedAuthUserId = null;
   writeVerifiedPhoneState(null);
-  authListeners.forEach((listener) => listener(null));
-  privateListeners.forEach((listener) => listener({}));
-  userProfileListeners.forEach(({ callback }) => callback(null));
+  queryClient.setQueryData(queryKeys.authSession, { userId: null });
+  queryClient.setQueryData(queryKeys.currentUser, null);
+  queryClient.removeQueries({ queryKey: queryKeys.panelStore });
+  queryClient.removeQueries({ queryKey: queryKeys.panelNavigation });
 }
 
 export async function ensurePhoneParticipantProfileForFlow(seedTrainerId?: string) {
-  return runCommand<{ ok: true; userId: string; accountCreated?: boolean }>(
-    "ensurePhoneParticipantProfileForFlow",
-    [seedTrainerId],
+  return runPanelMutation<{ ok: true; userId: string; accountCreated?: boolean }>(
+    "panel/participants/ensure-phone-profile",
+    { seedTrainerId },
   );
 }
 
@@ -476,11 +481,12 @@ export async function registerParticipant(input: ParticipantRegistrationInput) {
   });
   const result = response.result;
   writeVerifiedPhoneState(null);
-  await refreshAll();
+  await refreshSessionBoundary();
+  await refetchAppData();
 
   if (input.avatarFile) {
     const avatarUrl = (await uploadImageWithSessionRetry(input.avatarFile, "avatar")).url;
-    await runCommand("updateParticipantProfile", [{ avatarUrl }]);
+    await updateParticipantProfile({ avatarUrl } as unknown as ParticipantProfileUpdateInput, {} as AppUser);
   }
 
   return result;
@@ -491,7 +497,10 @@ export async function submitEnrollment(input: EnrollmentFormInput) {
   if (input.photoFile) {
     photoPath = (await uploadImage(input.photoFile, "enrollment-photo")).url;
   }
-  return runCommand("submitEnrollment", [{ ...stripFileFields(input as unknown as Record<string, unknown>), photoPath }]);
+  const payload = { ...stripFileFields(input as unknown as Record<string, unknown>), photoPath };
+  const response = await postJson<{ ok: true }>("public/enrollments", payload);
+  await refetchAppData();
+  return response;
 }
 
 export const ensurePhoneParticipantProfile = ensurePhoneParticipantProfileForFlow;
@@ -504,8 +513,8 @@ export async function uploadCommunityEventImages(files: File[]) {
   return Promise.all(files.map((file) => uploadImage(file, "event-image")));
 }
 
-export function decideEnrollment(requestId: string, currentUser: AppUser, decision: "accepted" | "rejected") {
-  return runCommand("decideEnrollment", [requestId, currentUser.id, decision]);
+export function decideEnrollment(requestId: string, _currentUser: AppUser, decision: "accepted" | "rejected") {
+  return runPanelMutation("panel/enrollments/manage", { requestId, decision });
 }
 
 export function manageEnrollmentRequest(
@@ -517,7 +526,7 @@ export function manageEnrollmentRequest(
   },
   _currentUser: AppUser,
 ) {
-  return runCommand("manageEnrollmentRequest", [input]);
+  return runPanelMutation("panel/enrollments/manage", input);
 }
 
 export function manageOwnGroupEventParticipation(
@@ -528,137 +537,121 @@ export function manageOwnGroupEventParticipation(
   },
   _currentUser: AppUser,
 ) {
-  return runCommand("manageOwnGroupEventParticipation", [input]);
+  return runPanelMutation("panel/participants/group-event-participation", input);
 }
 
 export function detachRelation(relationId: string, _currentUser: AppUser, archiveLinkedEvents?: boolean) {
-  return runCommand("detachRelation", [relationId, archiveLinkedEvents]);
+  return runPanelMutation(`panel/relations/${relationId}/detach`, { archiveLinkedEvents });
 }
 
 export function createGroup(input: GroupInput, _actor: AppUser) {
-  return runCommand<{ ok: true; groupId: string }>("createGroup", [input]);
+  return runPanelMutation<{ ok: true; groupId: string }>("panel/groups", input);
 }
 
 export function updateGroup(input: GroupUpdateInput, _actor: AppUser) {
-  return runCommand("updateGroup", [input]);
+  return runPanelMutation(`panel/groups/${input.groupId}`, input);
 }
 
 export function archiveGroup(groupId: string, _actor: AppUser) {
-  return runCommand("archiveGroup", [groupId]);
+  return runPanelMutation(`panel/groups/${groupId}/archive`);
 }
 
 export function createOrUpdateOrganizerParticipantProfile(input: OrganizerParticipantProfileInput, _actor: AppUser) {
-  return runCommand("createOrUpdateOrganizerParticipantProfile", [input]);
+  return runPanelMutation("panel/participant-profiles/organizer-upsert", input);
 }
 
 export function addGroupMember(input: GroupMemberInput, _actor: AppUser) {
-  return runCommand("addGroupMember", [input]);
+  return runPanelMutation("panel/group-members", input);
 }
 
 export function updateGroupMember(input: GroupMemberUpdateInput, _actor: AppUser) {
-  return runCommand("updateGroupMember", [input]);
+  return runPanelMutation(`panel/group-members/${input.memberId}`, input);
 }
 
 export function removeGroupMember(memberId: string, _actor: AppUser) {
-  return runCommand("removeGroupMember", [memberId]);
+  return runPanelMutation(`panel/group-members/${memberId}/remove`);
 }
 
 export function addEventParticipant(input: EventParticipantInput, _actor: AppUser) {
-  return runCommand("addEventParticipant", [input]);
+  return runPanelMutation("panel/event-participants", input);
 }
 
 export function updateEventParticipantStatus(input: EventParticipantStatusUpdateInput, _actor: AppUser) {
-  return runCommand("updateEventParticipantStatus", [input]);
+  return runPanelMutation("panel/event-participants/status", input);
 }
 
 export function finalizeEventRoster(eventId: string, _actor: AppUser) {
-  return postJson<{ ok: true }>(`panel/events/${eventId}/roster/finalize`, {}).then(async () => {
-    await refreshAll();
-  });
+  return runPanelMutation(`panel/events/${eventId}/roster/finalize`);
 }
 
 export const createTrainingEvent = (input: TrainingEventInput, _actor: AppUser) =>
-  runCommand("createTrainingEvent", [input]);
+  runPanelMutation("panel/events", input);
 export const createUnifiedTrainingEvent = createTrainingEvent;
 
 export const archiveTrainingEvent = (eventId: string, _actor: AppUser) =>
-  runCommand("archiveTrainingEvent", [eventId]);
+  runPanelMutation(`panel/events/${eventId}/archive`);
 export const publishTrainingEvent = (eventId: string, _actor: AppUser) =>
-  postJson<{ ok: true }>(`panel/events/${eventId}/publish`, {}).then(async () => {
-    await refreshAll();
-  });
+  runPanelMutation(`panel/events/${eventId}/publish`);
 export const unpublishTrainingEvent = (eventId: string, _actor: AppUser) =>
-  postJson<{ ok: true }>(`panel/events/${eventId}/unpublish`, {}).then(async () => {
-    await refreshAll();
-  });
+  runPanelMutation(`panel/events/${eventId}/unpublish`);
 export const deleteTrainingEvent = (eventId: string, _actor: AppUser) =>
-  postJson<{ ok: true }>(`panel/events/${eventId}/delete`, {}).then(async () => {
-    await refreshAll();
-  });
+  runPanelMutation(`panel/events/${eventId}/delete`);
 
 export const updateTrainerProfile = (input: TrainerProfileUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateTrainerProfile", [input]);
+  runPanelMutation("panel/profile/trainer", input);
 export const updateParticipantProfile = (input: ParticipantProfileUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateParticipantProfile", [input]);
+  runPanelMutation("panel/profile/participant", input);
 export const updateOrganizerProfile = (input: OrganizerProfileUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateOrganizerProfile", [input]);
+  runPanelMutation("panel/profile/organizer", input);
 export const updateCommunityOrganizerProfile = (input: CommunityOrganizerProfileUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateCommunityOrganizerProfile", [input]);
+  runPanelMutation("panel/profile/community-organizer", input);
 
 export const updateTrainerNotificationSettings = (input: NotificationSettingsUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateTrainerNotificationSettings", [input]);
+  runPanelMutation("panel/notification-settings/trainer", input);
 export const updateOrganizerNotificationSettings = (input: NotificationSettingsUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateOrganizerNotificationSettings", [input]);
+  runPanelMutation("panel/notification-settings/organizer", input);
 export const updateUserNotificationSettings = (input: NotificationSettingsUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateUserNotificationSettings", [input]);
+  runPanelMutation("panel/notification-settings/user", input);
 
 export const updateTrainerBrandStatus = (
   input: { trainerId: string; brandStatus: EmandarBrandStatus },
   _currentUser: AppUser,
-) => runCommand("updateTrainerBrandStatus", [input]);
+) => runPanelMutation(`panel/trainers/${input.trainerId}/brand-status`, { brandStatus: input.brandStatus });
 
 export const updateTrainingEventBrandStatus = (
   input: { eventId: string; brandStatus: EmandarBrandStatus },
   _currentUser: AppUser,
-) => runCommand("updateTrainingEventBrandStatus", [input]);
+) => runPanelMutation(`panel/events/${input.eventId}/brand-status`, { brandStatus: input.brandStatus });
 
 export const decideTrainingEventCollaboration = (
   input: { eventId: string; status: "accepted" | "rejected" },
   _currentUser: AppUser,
-) => runCommand("decideTrainingEventCollaboration", [input]);
+) => runPanelMutation(`panel/events/${input.eventId}/collaboration`, { status: input.status });
 
 export const updateTrainingEventManagement = (input: TrainingEventManagementUpdateInput, _currentUser: AppUser) =>
-  runCommand("updateTrainingEventManagement", [input]);
+  runPanelMutation(`panel/events/${input.eventId}/management`, input);
 
 export const updateUserModeratorRole = (userId: string, enabled: boolean, _currentUser: AppUser) =>
-  postJson<{ ok: true }>(`panel/users/${userId}/moderator-role`, { enabled }).then(async () => {
-    await refreshAll();
-  });
+  runPanelMutation(`panel/users/${userId}/moderator-role`, { enabled });
+
 export const updateUserOrganizerFunctionsBlocked = (userId: string, blocked: boolean, _currentUser: AppUser) =>
-  postJson<{ ok: true }>(`panel/users/${userId}/organizer-functions-block`, { blocked }).then(async () => {
-    await refreshAll();
-  });
+  runPanelMutation(`panel/users/${userId}/organizer-functions-block`, { blocked });
 
-export const updateAppSettings = (input: AppSettings) =>
-  postJson<{ ok: true }>("panel/settings", { input }).then(async () => {
-    await refreshAll();
-  });
+export const updateAppSettings = (input: AppSettings) => runPanelMutation("panel/settings", { input });
 
-export const connectOrganizerToTrainerWithCode = (
-  trainerAuthorizationCode: string,
-  expectedTrainerId?: string,
-) =>
-  runCommand<{ ok: true; trainerId: string; organizerProfileCreated: boolean }>(
-    "connectOrganizerToTrainerWithCode",
-    [trainerAuthorizationCode, expectedTrainerId],
-  );
+export const connectOrganizerToTrainerWithCode = (trainerAuthorizationCode: string, expectedTrainerId?: string) =>
+  runPanelMutation<{ ok: true; trainerId: string; organizerProfileCreated: boolean }>("panel/relations/connect-code", {
+    trainerAuthorizationCode,
+    expectedTrainerId,
+  });
 
 export const completeParticipantOnboarding = (input: ParticipantOnboardingInput) =>
-  runCommand("completeParticipantOnboarding", [input]);
+  runPanelMutation("panel/profile/participant/onboarding", input);
 
 export const confirmEnrollmentAttendance = (token: string, decision: "confirm" | "decline") =>
-  postPublicJson<{ ok: true }>("public/signed-actions/attendance", { token, decision }).then(async () => {
-    await refreshAll();
+  postPublicJson<{ ok: true }>("public/signed-actions/attendance", { token, decision }).then(async (response) => {
+    await refetchAppData();
+    return response;
   });
 
 export const getCommunityEventReview = (token: string) =>
@@ -669,12 +662,37 @@ export const getCommunityEventReview = (token: string) =>
     creatorPhone: string;
   }>(`public/signed-actions/community-event-review/${token}`);
 
-export const reviewCommunityEvent = (input: {
-  token: string;
-  decision: "accepted" | "rejected";
-  message?: string;
-}) =>
+export const reviewCommunityEvent = (input: { token: string; decision: "accepted" | "rejected"; message?: string }) =>
   postPublicJson<{ ok: true; result: { ok: true; eventId: string } }>(
     "public/signed-actions/community-event-review",
     input,
-  ).then((response) => response.result);
+  ).then(async (response) => {
+    await refetchAppData();
+    return response.result;
+  });
+
+export function openPanelEventsStream(onEvent?: (event: unknown) => void) {
+  if (typeof EventSource === "undefined") {
+    return () => undefined;
+  }
+  const source = new EventSource(resolveApiUrls("panel/events/stream")[0] ?? "/api/panel/events/stream", {
+    withCredentials: true,
+  });
+
+  const handleMessage = (message: MessageEvent) => {
+    try {
+      const parsed = sseEventSchema.parse(JSON.parse(message.data));
+      invalidateForSseEvent(parsed);
+      onEvent?.(parsed);
+    } catch {
+      // Ignore malformed SSE frames; normal queries remain authoritative.
+    }
+  };
+
+  for (const eventType of ["notification.created", "notification.read", "notification.count", "job.updated", "entity.changed"]) {
+    source.addEventListener(eventType, handleMessage);
+  }
+  source.onmessage = handleMessage;
+
+  return () => source.close();
+}

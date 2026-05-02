@@ -49,6 +49,24 @@ export type NotificationDeliveryInput = {
   payload?: Record<string, unknown>;
 };
 
+export type SignedActionTokenInput = {
+  action: string;
+  entityType: string;
+  entityId: string;
+  ttlSeconds: number;
+  payload?: Record<string, unknown>;
+};
+
+export type SignedActionTokenRecord = {
+  action: string;
+  entityType: string;
+  entityId: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt?: string | null;
+  payload: Record<string, unknown>;
+};
+
 export type SecurityStore = {
   close(): Promise<void>;
   cleanupExpiredSessions(): Promise<void>;
@@ -61,6 +79,12 @@ export type SecurityStore = {
   consumeRegistrationToken(token: string, phone: string): Promise<boolean>;
   createUpload(record: UploadRecord): Promise<void>;
   getUploadByIdOrUrl(value: string | undefined | null): Promise<UploadRecord | null>;
+  createSignedActionToken(input: SignedActionTokenInput): Promise<string>;
+  getSignedActionToken(token: string): Promise<SignedActionTokenRecord | null>;
+  consumeSignedActionToken(
+    token: string,
+    expected: { action: string; entityType?: string; entityId?: string },
+  ): Promise<SignedActionTokenRecord | null>;
   recordAudit(input: AuditLogInput): Promise<void>;
   recordNotificationDelivery(input: NotificationDeliveryInput): Promise<void>;
 };
@@ -87,6 +111,7 @@ export class InMemoryAuthStore implements SecurityStore {
   private registrationTokens = new Map<string, { phone: string; expiresAt: string; usedAt?: string }>();
   private uploads = new Map<string, UploadRecord>();
   private uploadsByUrl = new Map<string, UploadRecord>();
+  private signedActionTokens = new Map<string, SignedActionTokenRecord>();
   readonly auditLog: AuditLogInput[] = [];
   readonly notificationDeliveries: NotificationDeliveryInput[] = [];
 
@@ -183,6 +208,47 @@ export class InMemoryAuthStore implements SecurityStore {
       return null;
     }
     return this.uploads.get(value) ?? this.uploadsByUrl.get(value) ?? null;
+  }
+
+  async createSignedActionToken(input: SignedActionTokenInput) {
+    const token = createSecret();
+    this.signedActionTokens.set(hashToken(token), {
+      action: input.action,
+      entityType: input.entityType,
+      entityId: input.entityId,
+      createdAt: nowIso(),
+      expiresAt: expiresAtIso(input.ttlSeconds),
+      usedAt: null,
+      payload: input.payload ?? {},
+    });
+    return token;
+  }
+
+  async getSignedActionToken(token: string) {
+    const record = this.signedActionTokens.get(hashToken(token)) ?? null;
+    if (!record || record.usedAt || Date.parse(record.expiresAt) <= Date.now()) {
+      return null;
+    }
+    return { ...record, payload: { ...record.payload } };
+  }
+
+  async consumeSignedActionToken(
+    token: string,
+    expected: { action: string; entityType?: string; entityId?: string },
+  ) {
+    const record = this.signedActionTokens.get(hashToken(token)) ?? null;
+    if (
+      !record ||
+      record.usedAt ||
+      record.action !== expected.action ||
+      (expected.entityType && record.entityType !== expected.entityType) ||
+      (expected.entityId && record.entityId !== expected.entityId) ||
+      Date.parse(record.expiresAt) <= Date.now()
+    ) {
+      return null;
+    }
+    record.usedAt = nowIso();
+    return { ...record, payload: { ...record.payload } };
   }
 
   async recordAudit(input: AuditLogInput) {
@@ -370,6 +436,92 @@ export class PgAuthStore implements SecurityStore {
       publicUrl: row.public_url,
       width: Number(row.payload?.width ?? 0),
       height: Number(row.payload?.height ?? 0),
+    };
+  }
+
+  async createSignedActionToken(input: SignedActionTokenInput) {
+    const token = createSecret();
+    await this.pool.query(
+      `insert into signed_action_tokens (token_hash, action, entity_type, entity_id, expires_at, payload)
+       values ($1, $2, $3, $4, $5, $6::jsonb)`,
+      [
+        hashToken(token),
+        input.action,
+        input.entityType,
+        input.entityId,
+        expiresAtIso(input.ttlSeconds),
+        JSON.stringify(input.payload ?? {}),
+      ],
+    );
+    return token;
+  }
+
+  async getSignedActionToken(token: string) {
+    const result = await this.pool.query<{
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      created_at: Date;
+      expires_at: Date;
+      used_at: Date | null;
+      payload: Record<string, unknown>;
+    }>(
+      `select action, entity_type, entity_id, created_at, expires_at, used_at, payload
+       from signed_action_tokens
+       where token_hash = $1 and used_at is null and expires_at > now()`,
+      [hashToken(token)],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      action: row.action,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      createdAt: row.created_at.toISOString(),
+      expiresAt: row.expires_at.toISOString(),
+      usedAt: row.used_at?.toISOString() ?? null,
+      payload: row.payload ?? {},
+    };
+  }
+
+  async consumeSignedActionToken(
+    token: string,
+    expected: { action: string; entityType?: string; entityId?: string },
+  ) {
+    const result = await this.pool.query<{
+      action: string;
+      entity_type: string;
+      entity_id: string;
+      created_at: Date;
+      expires_at: Date;
+      used_at: Date | null;
+      payload: Record<string, unknown>;
+    }>(
+      `update signed_action_tokens
+       set used_at = now()
+       where token_hash = $1
+         and action = $2
+         and ($3::text is null or entity_type = $3)
+         and ($4::text is null or entity_id = $4)
+         and used_at is null
+         and expires_at > now()
+       returning action, entity_type, entity_id, created_at, expires_at, used_at, payload`,
+      [hashToken(token), expected.action, expected.entityType ?? null, expected.entityId ?? null],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      action: row.action,
+      entityType: row.entity_type,
+      entityId: row.entity_id,
+      createdAt: row.created_at.toISOString(),
+      expiresAt: row.expires_at.toISOString(),
+      usedAt: row.used_at?.toISOString() ?? null,
+      payload: row.payload ?? {},
     };
   }
 

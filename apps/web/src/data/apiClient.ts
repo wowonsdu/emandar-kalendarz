@@ -178,6 +178,13 @@ async function postJson<T>(path: string, payload: unknown) {
   });
 }
 
+async function postPublicJson<T>(path: string, payload: unknown) {
+  return fetchFirst<T>(path, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 async function refreshAuth() {
   const session = await fetchFirst<{ userId: string | null }>("auth/session").catch(() => ({ userId: null }));
   authListeners.forEach((listener) => listener(session.userId));
@@ -550,7 +557,9 @@ export function updateEventParticipantStatus(input: EventParticipantStatusUpdate
 }
 
 export function finalizeEventRoster(eventId: string, _actor: AppUser) {
-  return runCommand("finalizeEventRoster", [eventId]);
+  return postJson<{ ok: true }>(`panel/events/${eventId}/roster/finalize`, {}).then(async () => {
+    await refreshAll();
+  });
 }
 
 export const createTrainingEvent = (input: TrainingEventInput, _actor: AppUser) =>
@@ -560,11 +569,17 @@ export const createUnifiedTrainingEvent = createTrainingEvent;
 export const archiveTrainingEvent = (eventId: string, _actor: AppUser) =>
   runCommand("archiveTrainingEvent", [eventId]);
 export const publishTrainingEvent = (eventId: string, _actor: AppUser) =>
-  runCommand("publishTrainingEvent", [eventId]);
+  postJson<{ ok: true }>(`panel/events/${eventId}/publish`, {}).then(async () => {
+    await refreshAll();
+  });
 export const unpublishTrainingEvent = (eventId: string, _actor: AppUser) =>
-  runCommand("unpublishTrainingEvent", [eventId]);
+  postJson<{ ok: true }>(`panel/events/${eventId}/unpublish`, {}).then(async () => {
+    await refreshAll();
+  });
 export const deleteTrainingEvent = (eventId: string, _actor: AppUser) =>
-  runCommand("deleteTrainingEvent", [eventId]);
+  postJson<{ ok: true }>(`panel/events/${eventId}/delete`, {}).then(async () => {
+    await refreshAll();
+  });
 
 export const updateTrainerProfile = (input: TrainerProfileUpdateInput, _currentUser: AppUser) =>
   runCommand("updateTrainerProfile", [input]);
@@ -601,11 +616,18 @@ export const updateTrainingEventManagement = (input: TrainingEventManagementUpda
   runCommand("updateTrainingEventManagement", [input]);
 
 export const updateUserModeratorRole = (userId: string, enabled: boolean, _currentUser: AppUser) =>
-  runCommand("updateUserModeratorRole", [userId, enabled]);
+  postJson<{ ok: true }>(`panel/users/${userId}/moderator-role`, { enabled }).then(async () => {
+    await refreshAll();
+  });
 export const updateUserOrganizerFunctionsBlocked = (userId: string, blocked: boolean, _currentUser: AppUser) =>
-  runCommand("updateUserOrganizerFunctionsBlocked", [userId, blocked]);
+  postJson<{ ok: true }>(`panel/users/${userId}/organizer-functions-block`, { blocked }).then(async () => {
+    await refreshAll();
+  });
 
-export const updateAppSettings = (input: AppSettings) => runCommand("updateAppSettings", [input]);
+export const updateAppSettings = (input: AppSettings) =>
+  postJson<{ ok: true }>("panel/settings", { input }).then(async () => {
+    await refreshAll();
+  });
 
 export const connectOrganizerToTrainerWithCode = (
   trainerAuthorizationCode: string,
@@ -620,18 +642,24 @@ export const completeParticipantOnboarding = (input: ParticipantOnboardingInput)
   runCommand("completeParticipantOnboarding", [input]);
 
 export const confirmEnrollmentAttendance = (token: string, decision: "confirm" | "decline") =>
-  runCommand("confirmEnrollmentAttendance", [token, decision]);
+  postPublicJson<{ ok: true }>("public/signed-actions/attendance", { token, decision }).then(async () => {
+    await refreshAll();
+  });
 
 export const getCommunityEventReview = (token: string) =>
-  runCommand<{
+  fetchFirst<{
     ok: true;
     event: TrainingEvent;
     creatorName: string;
     creatorPhone: string;
-  }>("getCommunityEventReview", [token]);
+  }>(`public/signed-actions/community-event-review/${token}`);
 
 export const reviewCommunityEvent = (input: {
   token: string;
   decision: "accepted" | "rejected";
   message?: string;
-}) => runCommand<{ ok: true; eventId: string }>("reviewCommunityEvent", [input]);
+}) =>
+  postPublicJson<{ ok: true; result: { ok: true; eventId: string } }>(
+    "public/signed-actions/community-event-review",
+    input,
+  ).then((response) => response.result);

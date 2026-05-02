@@ -100,6 +100,40 @@ export const uploadResponseSchema = z.object({
   height: z.number().int().nonnegative().default(0),
 });
 
+export const signedActionTokenSchema = z.object({
+  token: z.string().min(32),
+});
+
+export const signedAttendanceDecisionSchema = z.enum(["confirm", "decline"]);
+
+export const signedAttendanceRequestSchema = signedActionTokenSchema.extend({
+  decision: signedAttendanceDecisionSchema,
+});
+
+export const signedCommunityEventReviewRequestSchema = signedActionTokenSchema.extend({
+  decision: z.enum(["accepted", "rejected"]),
+  message: z.string().default(""),
+});
+
+export const booleanMutationSchema = z.object({
+  enabled: z.boolean().optional(),
+  blocked: z.boolean().optional(),
+});
+
+export const eventParticipantStatusMutationSchema = z.object({
+  eventParticipantId: z.string().min(1),
+  status: z.string().min(1),
+});
+
+export const appSettingsMutationSchema = z.object({
+  input: z.record(z.unknown()),
+});
+
+export const communityEventReviewMutationSchema = z.object({
+  decision: z.enum(["accepted", "rejected"]),
+  message: z.string().default(""),
+});
+
 export const authSessionResponseSchema = z.object({
   userId: z.string().nullable(),
 });

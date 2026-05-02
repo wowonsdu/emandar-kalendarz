@@ -5,9 +5,15 @@ import path from "node:path";
 import crypto from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest, type RouteHandlerMethod } from "fastify";
 import {
+  appSettingsMutationSchema,
+  booleanMutationSchema,
   commandRequestSchema,
+  communityEventReviewMutationSchema,
+  eventParticipantStatusMutationSchema,
   participantRegistrationRequestSchema,
   publicEnrollmentRequestSchema,
+  signedAttendanceRequestSchema,
+  signedCommunityEventReviewRequestSchema,
   smsConfirmSchema,
   smsRequestSchema,
   storePatchRequestSchema,
@@ -30,6 +36,7 @@ export type AppOptions = {
 
 const csrfCookieName = "emandar_csrf";
 const registrationTokenTtlSeconds = 15 * 60;
+const signedActionTokenTtlSeconds = 14 * 24 * 60 * 60;
 
 function routePaths(config: ApiConfig, routePath: string) {
   const normalized = routePath.startsWith("/") ? routePath : `/${routePath}`;
@@ -183,6 +190,50 @@ function auditEntity(commandName: string, result: unknown, args: unknown[]) {
     return { entityType: "training_event", entityId: String((first as { eventId: unknown }).eventId) };
   }
   return { entityType: "command", entityId: commandName };
+}
+
+function buildPublicRouteUrl(config: ApiConfig, routePath: string) {
+  const base = config.publicAppUrl.replace(/\/+$/g, "");
+  const pathName = routePath.startsWith("/") ? routePath : `/${routePath}`;
+  return `${base}${pathName}`;
+}
+
+async function requireSessionUser(request: FastifyRequest, reply: FastifyReply, authStore: SecurityStore) {
+  const session = await authStore.getSession(request.cookies.emandar_session);
+  if (!session) {
+    reply.status(401).send({ error: "unauthorized" });
+    return null;
+  }
+  return session.userId;
+}
+
+async function runAuthedCommand(
+  reply: FastifyReply,
+  authStore: SecurityStore,
+  domain: DomainService,
+  actorUserId: string,
+  commandName: string,
+  args: unknown[],
+  auditPayload: Record<string, unknown> = {},
+) {
+  try {
+    await assertCommandUploads(authStore, commandName, args, actorUserId);
+    const result = await domain.runCommand(commandName, args, actorUserId);
+    const entity = auditEntity(commandName, result, args);
+    await authStore.recordAudit({
+      actorUserId,
+      action: commandName,
+      entityType: entity.entityType,
+      entityId: entity.entityId,
+      payload: auditPayload,
+    });
+    return reply.send({ ok: true, result });
+  } catch (error) {
+    return reply.status(400).send({
+      error: "command-failed",
+      message: error instanceof Error ? error.message : "Nie udało się wykonać operacji.",
+    });
+  }
 }
 
 export async function buildApp(options: AppOptions) {
@@ -419,6 +470,294 @@ export async function buildApp(options: AppOptions) {
       return reply.status(401).send({ error: "unauthorized" });
     }
     return domain.privateStore(session.userId);
+  });
+
+  registerAll(app, "post", config, "/api/public/signed-actions/attendance", async (request, reply) => {
+    const parsed = signedAttendanceRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid-signed-action" });
+    }
+
+    const action = parsed.data.decision === "decline" ? "attendance.decline" : "attendance.confirm";
+    const token = await authStore.consumeSignedActionToken(parsed.data.token, { action });
+    if (!token) {
+      return reply.status(403).send({ error: "signed-token-invalid" });
+    }
+
+    try {
+      const result = await domain.confirmEnrollmentAttendanceByEntity(
+        token.entityId,
+        parsed.data.decision,
+      );
+      await authStore.recordAudit({
+        actorUserId: null,
+        action,
+        entityType: token.entityType,
+        entityId: token.entityId,
+        payload: { source: "signed-token", result },
+      });
+      return { ok: true, result };
+    } catch (error) {
+      return reply.status(400).send({
+        error: "signed-action-failed",
+        message: error instanceof Error ? error.message : "Nie udało się użyć linku.",
+      });
+    }
+  });
+
+  registerAll(app, "get", config, "/api/public/signed-actions/community-event-review/:token", async (request, reply) => {
+    const tokenValue = String((request.params as { token?: string }).token ?? "");
+    const token = await authStore.getSignedActionToken(tokenValue);
+    if (!token || token.action !== "community-event.review" || token.entityType !== "training_event") {
+      return reply.status(403).send({ error: "signed-token-invalid" });
+    }
+
+    try {
+      return await domain.getCommunityEventReviewByEntity(token.entityId);
+    } catch (error) {
+      return reply.status(400).send({
+        error: "signed-action-failed",
+        message: error instanceof Error ? error.message : "Nie udało się wczytać moderacji.",
+      });
+    }
+  });
+
+  registerAll(app, "post", config, "/api/public/signed-actions/community-event-review", async (request, reply) => {
+    const parsed = signedCommunityEventReviewRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid-signed-action" });
+    }
+
+    const token = await authStore.consumeSignedActionToken(parsed.data.token, {
+      action: "community-event.review",
+      entityType: "training_event",
+    });
+    if (!token) {
+      return reply.status(403).send({ error: "signed-token-invalid" });
+    }
+
+    try {
+      const result = await domain.reviewCommunityEventByEntity(
+        token.entityId,
+        { decision: parsed.data.decision, message: parsed.data.message },
+        null,
+      );
+      await authStore.recordAudit({
+        actorUserId: null,
+        action: "community-event.review",
+        entityType: token.entityType,
+        entityId: token.entityId,
+        payload: { source: "signed-token", decision: parsed.data.decision },
+      });
+      return { ok: true, result };
+    } catch (error) {
+      return reply.status(400).send({
+        error: "signed-action-failed",
+        message: error instanceof Error ? error.message : "Nie udało się zapisać moderacji.",
+      });
+    }
+  });
+
+  registerAll(app, "post", config, "/api/panel/signed-actions/attendance", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const body = request.body as { entityId?: string; entityType?: string } | undefined;
+    const entityId = String(body?.entityId ?? "").trim();
+    const entityType = String(body?.entityType ?? "event_participant").trim();
+    if (!entityId || !["event_participant", "enrollment_request"].includes(entityType)) {
+      return reply.status(400).send({ error: "invalid-signed-action" });
+    }
+
+    const confirmToken = await authStore.createSignedActionToken({
+      action: "attendance.confirm",
+      entityType,
+      entityId,
+      ttlSeconds: signedActionTokenTtlSeconds,
+    });
+    const declineToken = await authStore.createSignedActionToken({
+      action: "attendance.decline",
+      entityType,
+      entityId,
+      ttlSeconds: signedActionTokenTtlSeconds,
+    });
+    await authStore.recordAudit({
+      actorUserId,
+      action: "signed-action.create.attendance",
+      entityType,
+      entityId,
+      payload: { ttlSeconds: signedActionTokenTtlSeconds },
+    });
+    return {
+      confirmToken,
+      declineToken,
+      confirmUrl: buildPublicRouteUrl(config, `/potwierdzenie-udzialu/${confirmToken}/confirm`),
+      declineUrl: buildPublicRouteUrl(config, `/potwierdzenie-udzialu/${declineToken}/decline`),
+    };
+  });
+
+  registerAll(app, "post", config, "/api/panel/signed-actions/community-event-review", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const body = request.body as { eventId?: string } | undefined;
+    const eventId = String(body?.eventId ?? "").trim();
+    if (!eventId) {
+      return reply.status(400).send({ error: "invalid-signed-action" });
+    }
+
+    const token = await authStore.createSignedActionToken({
+      action: "community-event.review",
+      entityType: "training_event",
+      entityId: eventId,
+      ttlSeconds: signedActionTokenTtlSeconds,
+    });
+    await authStore.recordAudit({
+      actorUserId,
+      action: "signed-action.create.community-event-review",
+      entityType: "training_event",
+      entityId: eventId,
+      payload: { ttlSeconds: signedActionTokenTtlSeconds },
+    });
+    return {
+      token,
+      reviewUrl: buildPublicRouteUrl(config, `/moderacja-wydarzenia/${token}`),
+    };
+  });
+
+  registerAll(app, "post", config, "/api/panel/users/:userId/moderator-role", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const parsed = booleanMutationSchema.safeParse(request.body);
+    if (!parsed.success || typeof parsed.data.enabled !== "boolean") {
+      return reply.status(400).send({ error: "invalid-user-role" });
+    }
+    return runAuthedCommand(
+      reply,
+      authStore,
+      domain,
+      actorUserId,
+      "updateUserModeratorRole",
+      [String((request.params as { userId?: string }).userId ?? ""), parsed.data.enabled],
+      { source: "explicit-endpoint" },
+    );
+  });
+
+  registerAll(app, "post", config, "/api/panel/users/:userId/organizer-functions-block", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const parsed = booleanMutationSchema.safeParse(request.body);
+    if (!parsed.success || typeof parsed.data.blocked !== "boolean") {
+      return reply.status(400).send({ error: "invalid-user-block" });
+    }
+    return runAuthedCommand(
+      reply,
+      authStore,
+      domain,
+      actorUserId,
+      "updateUserOrganizerFunctionsBlocked",
+      [String((request.params as { userId?: string }).userId ?? ""), parsed.data.blocked],
+      { source: "explicit-endpoint" },
+    );
+  });
+
+  registerAll(app, "post", config, "/api/panel/settings", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const parsed = appSettingsMutationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid-settings" });
+    }
+    return runAuthedCommand(reply, authStore, domain, actorUserId, "updateAppSettings", [parsed.data.input], {
+      source: "explicit-endpoint",
+    });
+  });
+
+  registerAll(app, "post", config, "/api/panel/events/:eventId/roster/finalize", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    return runAuthedCommand(
+      reply,
+      authStore,
+      domain,
+      actorUserId,
+      "finalizeEventRoster",
+      [String((request.params as { eventId?: string }).eventId ?? "")],
+      { source: "explicit-endpoint" },
+    );
+  });
+
+  registerAll(app, "post", config, "/api/panel/events/:eventId/participants/status", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const parsed = eventParticipantStatusMutationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid-participant-status" });
+    }
+    return runAuthedCommand(
+      reply,
+      authStore,
+      domain,
+      actorUserId,
+      "updateEventParticipantStatus",
+      [parsed.data],
+      { source: "explicit-endpoint", eventId: String((request.params as { eventId?: string }).eventId ?? "") },
+    );
+  });
+
+  for (const action of ["publish", "unpublish", "delete"] as const) {
+    registerAll(app, "post", config, `/api/panel/events/:eventId/${action}`, async (request, reply) => {
+      if (!requireCsrf(request, reply)) return reply;
+      const actorUserId = await requireSessionUser(request, reply, authStore);
+      if (!actorUserId) return reply;
+      const commandName =
+        action === "publish"
+          ? "publishTrainingEvent"
+          : action === "unpublish"
+            ? "unpublishTrainingEvent"
+            : "deleteTrainingEvent";
+      return runAuthedCommand(
+        reply,
+        authStore,
+        domain,
+        actorUserId,
+        commandName,
+        [String((request.params as { eventId?: string }).eventId ?? "")],
+        { source: "explicit-endpoint" },
+      );
+    });
+  }
+
+  registerAll(app, "post", config, "/api/panel/community-events/:eventId/review", async (request, reply) => {
+    if (!requireCsrf(request, reply)) return reply;
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    const parsed = communityEventReviewMutationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid-community-review" });
+    }
+    try {
+      const eventId = String((request.params as { eventId?: string }).eventId ?? "");
+      const result = await domain.reviewCommunityEventByEntity(eventId, parsed.data, actorUserId);
+      await authStore.recordAudit({
+        actorUserId,
+        action: "community-event.review",
+        entityType: "training_event",
+        entityId: eventId,
+        payload: { source: "explicit-endpoint", decision: parsed.data.decision },
+      });
+      return { ok: true, result };
+    } catch (error) {
+      return reply.status(400).send({
+        error: "command-failed",
+        message: error instanceof Error ? error.message : "Nie udało się zapisać moderacji.",
+      });
+    }
   });
 
   registerAll(app, "post", config, "/api/panel/command/:name", async (request, reply) => {

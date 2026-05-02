@@ -41,6 +41,94 @@ function mergeCookies(...cookies: string[]) {
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
+function testStoreForPermissions(role: string, roles = [role]) {
+  return {
+    users: [
+      {
+        id: "user-admin",
+        role: "admin",
+        roles: ["admin"],
+        displayName: "Admin",
+        phone: "+48 600 000 001",
+        status: "active",
+      },
+      {
+        id: "user-actor",
+        role,
+        roles,
+        displayName: role,
+        phone: `+48 600 000 00${roles.includes("moderator") ? "2" : "3"}`,
+        status: "active",
+      },
+      {
+        id: "user-target",
+        role: "participant",
+        roles: ["participant"],
+        displayName: "Target",
+        phone: "+48 600 000 004",
+        status: "active",
+      },
+    ],
+    trainers: [],
+    organizers: [],
+    participantProfiles: [
+      {
+        id: "participant-target",
+        linkedUserId: "user-target",
+        displayName: "Target",
+        phone: "+48 600 000 004",
+        confirmationStatus: "confirmed",
+      },
+    ],
+    groups: [],
+    groupMembers: [],
+    eventParticipants: [
+      {
+        id: "event-participant-target",
+        eventId: "event-official",
+        participantProfileId: "participant-target",
+        participantUserId: "user-target",
+        participantDisplayName: "Target",
+        participantPhone: "+48 600 000 004",
+        status: "confirmed",
+        attendanceConfirmationStatus: "pending",
+      },
+    ],
+    relations: [],
+    trainingEvents: [
+      {
+        id: "event-official",
+        title: "Official",
+        brandStatus: "official",
+        status: "active",
+        isPublished: true,
+        creatorUserId: "user-owner",
+        organizerUserId: "user-owner",
+        trainerUserId: "user-owner",
+        startsAt: "2026-06-01T10:00:00.000Z",
+        endsAt: "2026-06-01T12:00:00.000Z",
+      },
+      {
+        id: "event-community",
+        title: "Community",
+        brandStatus: "supported",
+        status: "active",
+        isPublished: false,
+        publicationApprovalStatus: "pending",
+        creatorUserId: "user-target",
+        creatorDisplayName: "Target",
+        creatorPhone: "+48 600 000 004",
+        startsAt: "2026-06-02T10:00:00.000Z",
+        endsAt: "2026-06-02T12:00:00.000Z",
+      },
+    ],
+    publicTrainingEvents: [],
+    enrollmentRequests: [],
+    notifications: [],
+    appSettings: {},
+  };
+}
+
 async function loginWithSms(
   app: Awaited<ReturnType<typeof buildApp>>,
   phone: string,
@@ -399,6 +487,165 @@ describe("emandar api", () => {
 
     const response = await app.inject("/emandar/api/mock/state");
     expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("requires valid one-use signed tokens for public attendance links", async () => {
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(testStoreForPermissions("participant")),
+      authStore,
+    });
+    const token = await authStore.createSignedActionToken({
+      action: "attendance.confirm",
+      entityType: "event_participant",
+      entityId: "event-participant-target",
+      ttlSeconds: 300,
+    });
+
+    const rawId = await app.inject({
+      method: "POST",
+      url: "/emandar/api/public/signed-actions/attendance",
+      payload: { token: "event-participant-target", decision: "confirm" },
+    });
+    expect(rawId.statusCode).toBe(400);
+
+    const used = await app.inject({
+      method: "POST",
+      url: "/emandar/api/public/signed-actions/attendance",
+      payload: { token, decision: "confirm" },
+    });
+    expect(used.statusCode).toBe(200);
+    expect(authStore.auditLog.some((item) => item.action === "attendance.confirm")).toBe(true);
+
+    const secondUse = await app.inject({
+      method: "POST",
+      url: "/emandar/api/public/signed-actions/attendance",
+      payload: { token, decision: "confirm" },
+    });
+    expect(secondUse.statusCode).toBe(403);
+
+    const snapshot = await app.inject({
+      url: "/emandar/api/mock/state",
+    });
+    expect(snapshot.json().store.eventParticipants[0].attendanceConfirmationStatus).toBe("confirmed");
+    await app.close();
+  });
+
+  it("uses signed tokens for community event review without allowing token replay", async () => {
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(testStoreForPermissions("participant")),
+      authStore,
+    });
+    const token = await authStore.createSignedActionToken({
+      action: "community-event.review",
+      entityType: "training_event",
+      entityId: "event-community",
+      ttlSeconds: 300,
+    });
+
+    const loaded = await app.inject(`/emandar/api/public/signed-actions/community-event-review/${token}`);
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json().event.id).toBe("event-community");
+
+    const reviewed = await app.inject({
+      method: "POST",
+      url: "/emandar/api/public/signed-actions/community-event-review",
+      payload: { token, decision: "accepted", message: "OK" },
+    });
+    expect(reviewed.statusCode).toBe(200);
+    expect(authStore.auditLog.some((item) => item.action === "community-event.review")).toBe(true);
+
+    const replay = await app.inject({
+      method: "POST",
+      url: "/emandar/api/public/signed-actions/community-event-review",
+      payload: { token, decision: "rejected", message: "Replay" },
+    });
+    expect(replay.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("keeps moderator outside the linear role hierarchy but allows moderation endpoints", async () => {
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(testStoreForPermissions("participant", ["participant", "moderator"])),
+      authStore,
+    });
+    const csrfToken = await csrf(app);
+    const moderatorSession = await loginWithSms(app, "+48 600 000 002", csrfToken);
+
+    const cannotCreateGroup = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/command/createGroup",
+      headers: {
+        cookie: mergeCookies(moderatorSession, csrfToken.cookie),
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: { args: [{ trainerId: "trainer-x" }] },
+    });
+    expect(cannotCreateGroup.statusCode).toBe(400);
+
+    const unpublish = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/events/event-official/unpublish",
+      headers: {
+        cookie: mergeCookies(moderatorSession, csrfToken.cookie),
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: {},
+    });
+    expect(unpublish.statusCode).toBe(200);
+    expect(authStore.auditLog.some((item) => item.action === "unpublishTrainingEvent")).toBe(true);
+    await app.close();
+  });
+
+  it("limits role, block, and settings endpoints to admins", async () => {
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(testStoreForPermissions("participant")),
+      authStore,
+    });
+    const participantCsrf = await csrf(app);
+    const participantSession = await loginWithSms(app, "+48 600 000 003", participantCsrf);
+    const forbidden = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/users/user-target/moderator-role",
+      headers: {
+        cookie: mergeCookies(participantSession, participantCsrf.cookie),
+        "x-emandar-csrf": participantCsrf.token,
+      },
+      payload: { enabled: true },
+    });
+    expect(forbidden.statusCode).toBe(400);
+
+    const adminCsrf = await csrf(app);
+    const adminSession = await loginWithSms(app, "+48 600 000 001", adminCsrf);
+    const enabled = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/users/user-target/moderator-role",
+      headers: {
+        cookie: mergeCookies(adminSession, adminCsrf.cookie),
+        "x-emandar-csrf": adminCsrf.token,
+      },
+      payload: { enabled: true },
+    });
+    expect(enabled.statusCode).toBe(200);
+    const settings = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/settings",
+      headers: {
+        cookie: mergeCookies(adminSession, adminCsrf.cookie),
+        "x-emandar-csrf": adminCsrf.token,
+      },
+      payload: { input: { signupPhotoMode: "required" } },
+    });
+    expect(settings.statusCode).toBe(200);
+    expect(authStore.auditLog.some((item) => item.action === "updateAppSettings")).toBe(true);
     await app.close();
   });
 

@@ -319,7 +319,7 @@ describe("dashboard helpers", () => {
         statusLabel: "Zaproszenie",
       }),
     ]);
-    expect(model.pendingConfirmationItems.map((item) => item.token)).toEqual(["participant-event-1"]);
+    expect(model.pendingConfirmationItems.map((item) => item.entityId)).toEqual(["participant-event-1"]);
   });
 
   it("labels reserve roster entries as rezerwowy in participant dashboard", () => {

@@ -5,6 +5,15 @@ import { cloneValue, normalizeStore } from "../store/default-store.js";
 import type { DemoStoreRecord, StoreRepository } from "../store/types.js";
 
 type RecordAny = Record<string, any>;
+type EventKind = "official" | "community" | "all";
+type EventSort = "startsAtAsc" | "startsAtDesc" | "createdAtDesc";
+
+export type EventPageQuery = {
+  page: number;
+  pageSize: number;
+  kind?: EventKind;
+  sort?: EventSort;
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -172,6 +181,44 @@ function cleanFileFields<T extends RecordAny>(input: T): T {
   return next;
 }
 
+function isCommunityEvent(event: RecordAny) {
+  return event.brandStatus === "supported" || event.type === "Wydarzenie społeczności";
+}
+
+function sortEvents(events: RecordAny[], sort: EventSort = "startsAtAsc") {
+  return [...events].sort((left, right) => {
+    const leftDate = Date.parse(String(sort === "createdAtDesc" ? left.createdAt ?? left.startsAt : left.startsAt ?? left.createdAt ?? ""));
+    const rightDate = Date.parse(String(sort === "createdAtDesc" ? right.createdAt ?? right.startsAt : right.startsAt ?? right.createdAt ?? ""));
+    const leftValue = Number.isFinite(leftDate) ? leftDate : 0;
+    const rightValue = Number.isFinite(rightDate) ? rightDate : 0;
+    return sort === "startsAtDesc" || sort === "createdAtDesc" ? rightValue - leftValue : leftValue - rightValue;
+  });
+}
+
+function filterEventsByKind(events: RecordAny[], kind: EventKind = "all") {
+  if (kind === "community") {
+    return events.filter(isCommunityEvent);
+  }
+  if (kind === "official") {
+    return events.filter((event) => !isCommunityEvent(event));
+  }
+  return events;
+}
+
+function paginateItems<T>(items: T[], page: number, pageSize: number) {
+  const totalItems = items.length;
+  const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize);
+  const safePage = totalPages === 0 ? 1 : Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  return {
+    items: cloneValue(items.slice(start, start + pageSize)),
+    page: safePage,
+    pageSize,
+    totalItems,
+    totalPages,
+  };
+}
+
 export class DomainService {
   constructor(private store: StoreRepository) {}
 
@@ -184,6 +231,16 @@ export class DomainService {
       organizers: arrayOf(store, "organizers").filter((organizer) => organizer.isVisible !== false),
       publicTrainingEvents: cloneValue(store.publicTrainingEvents),
       trainingEvents: cloneValue(store.publicTrainingEvents),
+      appSettings: cloneValue(settings(store)),
+    };
+  }
+
+  async publicCatalogCore() {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    return {
+      trainers: arrayOf(store, "trainers").filter((trainer) => trainer.isVisible !== false),
+      organizers: arrayOf(store, "organizers").filter((organizer) => organizer.isVisible !== false),
       appSettings: cloneValue(settings(store)),
     };
   }
@@ -204,6 +261,14 @@ export class DomainService {
     );
   }
 
+  async publicEventPage(query: EventPageQuery) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    recomputePublicEvents(store);
+    const events = sortEvents(filterEventsByKind(arrayOf(store, "publicTrainingEvents"), query.kind), query.sort);
+    return paginateItems(events, query.page, query.pageSize);
+  }
+
   async privateStore(actorUserId: string | null) {
     const snapshot = await this.store.readSnapshot();
     const store = normalizeStore(snapshot.store);
@@ -220,6 +285,14 @@ export class DomainService {
       response[key] = cloneValue(store[key]);
     }
     return response;
+  }
+
+  async panelEventPage(actorUserId: string | null, query: EventPageQuery) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    requireActor(store, actorUserId);
+    const events = sortEvents(filterEventsByKind(arrayOf(store, "trainingEvents"), query.kind), query.sort);
+    return paginateItems(events, query.page, query.pageSize);
   }
 
   async panelNavigation(actorUserId: string | null) {

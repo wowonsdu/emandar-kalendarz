@@ -3,9 +3,9 @@ import {
   authSessionResponseSchema,
   csrfResponseSchema,
   okMutationResponseSchema,
+  paginatedRecordsResponseSchema,
   panelNavigationResponseSchema,
   panelReadModelResponseSchema,
-  publicCatalogResponseSchema,
   smsConfirmResponseSchema,
   smsRequestResponseSchema,
   sseEventSchema,
@@ -68,6 +68,14 @@ export type PanelNavigationReadModel = {
   notificationsCount: number;
   pendingEnrollmentRequestsCount: number;
   pendingCommunityEventsCount: number;
+};
+
+export type PaginatedResult<T> = {
+  items: T[];
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
 };
 
 const verifiedPhoneSessionKey = "emandar:verified-phone-preauth";
@@ -251,14 +259,70 @@ export async function fetchCurrentUser() {
 }
 
 export async function fetchPublicCatalogStore(): Promise<DemoStore> {
-  const response = publicCatalogResponseSchema.parse(await fetchFirst<unknown>("public/catalog"));
+  const [core, officialEvents, communityEvents] = await Promise.all([
+    fetchFirst<{
+      trainers?: unknown[];
+      organizers?: unknown[];
+      appSettings?: Record<string, unknown>;
+    }>("public/catalog-core"),
+    fetchPublicEventsPage("official", { page: 1, pageSize: 25 }),
+    fetchPublicEventsPage("community", { page: 1, pageSize: 25 }),
+  ]);
+  const publicTrainingEvents = [...officialEvents.items, ...communityEvents.items];
   return {
     ...createEmptyStore(),
-    trainers: sortTrainerProfiles(asDomain<DemoStore["trainers"]>(response.trainers)),
-    organizers: asDomain<DemoStore["organizers"]>(response.organizers),
-    trainingEvents: asDomain<DemoStore["trainingEvents"]>(response.trainingEvents),
-    publicTrainingEvents: asDomain<DemoStore["publicTrainingEvents"]>(response.publicTrainingEvents),
-    appSettings: asDomain<DemoStore["appSettings"]>(response.appSettings),
+    trainers: sortTrainerProfiles(asDomain<DemoStore["trainers"]>(core.trainers ?? [])),
+    organizers: asDomain<DemoStore["organizers"]>(core.organizers ?? []),
+    trainingEvents: publicTrainingEvents,
+    publicTrainingEvents,
+    appSettings: asDomain<DemoStore["appSettings"]>(core.appSettings ?? {}),
+  };
+}
+
+function buildQueryString(params: Record<string, string | number | undefined>) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+  const value = query.toString();
+  return value ? `?${value}` : "";
+}
+
+export async function fetchPublicEventsPage(
+  kind: "official" | "community",
+  options: { page?: number; pageSize?: number } = {},
+): Promise<PaginatedResult<TrainingEvent>> {
+  const path = kind === "community" ? "public/community-events" : "public/events";
+  const response = paginatedRecordsResponseSchema.parse(
+    await fetchFirst<unknown>(
+      `${path}${buildQueryString({ page: options.page ?? 1, pageSize: options.pageSize ?? 25 })}`,
+    ),
+  );
+  return {
+    ...response,
+    items: asDomain<TrainingEvent[]>(response.items),
+  };
+}
+
+export async function fetchPanelEventsPage(
+  kind: "official" | "community" | "all",
+  options: { page?: number; pageSize?: number; sort?: "startsAtAsc" | "startsAtDesc" | "createdAtDesc" } = {},
+): Promise<PaginatedResult<TrainingEvent>> {
+  const response = paginatedRecordsResponseSchema.parse(
+    await fetchFirst<unknown>(
+      `panel/read-models/events-page${buildQueryString({
+        kind,
+        page: options.page ?? 1,
+        pageSize: options.pageSize ?? 25,
+        sort: options.sort,
+      })}`,
+    ),
+  );
+  return {
+    ...response,
+    items: asDomain<TrainingEvent[]>(response.items),
   };
 }
 
@@ -653,6 +717,18 @@ export const confirmEnrollmentAttendance = (token: string, decision: "confirm" |
     await refetchAppData();
     return response;
   });
+
+export async function createAttendanceConfirmationTokens(
+  entityId: string,
+  entityType: "event_participant" | "enrollment_request" = "event_participant",
+) {
+  return postJson<{
+    confirmToken: string;
+    declineToken: string;
+    confirmUrl: string;
+    declineUrl: string;
+  }>("panel/signed-actions/attendance", { entityId, entityType });
+}
 
 export const getCommunityEventReview = (token: string) =>
   fetchFirst<{

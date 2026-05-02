@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Link, Navigate, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ import {
   confirmSmsCode,
   type ConfirmSmsCodeResult,
   fetchAppUser,
+  fetchPublicEventsPage,
   getCurrentSessionPhone,
   getVerifiedPhonePreAuth,
   requestSmsCode,
@@ -511,6 +513,7 @@ function EventFeedSection({
   emptyTitle,
   emptyDescription,
   events,
+  pagination,
 }: {
   eyebrow: string;
   title: string;
@@ -518,6 +521,13 @@ function EventFeedSection({
   emptyTitle: string;
   emptyDescription: string;
   events: TrainingEvent[];
+  pagination?: {
+    page: number;
+    totalPages: number;
+    totalItems: number;
+    onPageChange: (page: number) => void;
+    loading?: boolean;
+  };
 }) {
   return (
     <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
@@ -535,23 +545,52 @@ function EventFeedSection({
         {events.length === 0 ? (
           <EmptyState title={emptyTitle} description={emptyDescription} />
         ) : (
-          events.map((event) => <EventCard key={event.id} eventId={event.id} />)
+          events.map((event) => <EventCard key={event.id} eventId={event.id} eventOverride={event} />)
         )}
       </div>
+      {pagination && pagination.totalPages > 1 ? (
+        <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm text-brand-muted shadow-soft">
+          <span>
+            Strona {pagination.page} z {pagination.totalPages}. Razem: {pagination.totalItems}.
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={pagination.page <= 1 || pagination.loading}
+              onClick={() => pagination.onPageChange(Math.max(1, pagination.page - 1))}
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ChevronLeft size={16} />
+              Poprzednia
+            </button>
+            <button
+              type="button"
+              disabled={pagination.page >= pagination.totalPages || pagination.loading}
+              onClick={() => pagination.onPageChange(Math.min(pagination.totalPages, pagination.page + 1))}
+              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Następna
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
 
 function EventCard({
   eventId,
+  eventOverride,
   showTrainerImage = true,
 }: {
   eventId: string;
+  eventOverride?: TrainingEvent;
   showTrainerImage?: boolean;
 }) {
   const { currentUser, store } = useAppState();
   const publicEvents = getPublicEventCollection(store);
-  const event = publicEvents.find((item) => item.id === eventId);
+  const event = publicEvents.find((item) => item.id === eventId) ?? eventOverride;
 
   if (!event) {
     return null;
@@ -930,7 +969,7 @@ export function LandingPage() {
           </h1>
           <p className="mt-6 max-w-3xl text-lg text-brand-muted">
             W tej wersji dane publiczne, logowanie, zgłoszenia i zdjęcia trafiają
-            do współdzielonego mock backendu opartego o JSON-y. Możesz przejść do kalendarza, sprawdzić
+            do wspólnego API Emandar. Możesz przejść do kalendarza, sprawdzić
             Przekazujących Wiedzę albo zalogować się do panelu.
           </p>
           <div className="mt-10 flex flex-wrap gap-4">
@@ -975,7 +1014,7 @@ export function LandingPage() {
             {
               title: "Panel",
               description:
-                "Osobny obszar dla admina, Przekazującego Wiedzę i organizatora oparty o mock auth SMS i współdzielony store.",
+                "Osobny obszar dla admina, Przekazującego Wiedzę i organizatora z logowaniem SMS i wspólnymi danymi systemu.",
               icon: ShieldCheck,
               to: "/login",
             },
@@ -1005,18 +1044,18 @@ export function LandingPage() {
 
 export function CalendarPage() {
   const { store } = useAppState();
+  const [page, setPage] = useState(1);
+  const eventsPageQuery = useQuery({
+    queryKey: ["public", "events", "official", page],
+    queryFn: () => fetchPublicEventsPage("official", { page, pageSize: 25 }),
+    staleTime: 30_000,
+  });
   const publicEvents = getPublicEventCollection(store);
-  const events = useMemo(
-    () =>
-      sortEventsByDate(
-        publicEvents.filter(
-          (item) =>
-            resolveBrandStatus(item.brandStatus) === "official" &&
-            isTrainingEventPubliclyVisible(item),
-        ),
-      ),
+  const fallbackEvents = useMemo(
+    () => sortEventsByDate(publicEvents.filter((item) => resolveBrandStatus(item.brandStatus) === "official")),
     [publicEvents],
   );
+  const events = eventsPageQuery.data?.items ?? fallbackEvents;
 
   return (
     <EventFeedSection
@@ -1026,24 +1065,35 @@ export function CalendarPage() {
       emptyTitle="Brak opublikowanych szkoleń"
       emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
       events={events}
+      pagination={
+        eventsPageQuery.data
+          ? {
+              page: eventsPageQuery.data.page,
+              totalPages: eventsPageQuery.data.totalPages,
+              totalItems: eventsPageQuery.data.totalItems,
+              loading: eventsPageQuery.isFetching,
+              onPageChange: setPage,
+            }
+          : undefined
+      }
     />
   );
 }
 
 export function CommunityEventsPage() {
   const { store } = useAppState();
+  const [page, setPage] = useState(1);
+  const eventsPageQuery = useQuery({
+    queryKey: ["public", "events", "community", page],
+    queryFn: () => fetchPublicEventsPage("community", { page, pageSize: 25 }),
+    staleTime: 30_000,
+  });
   const publicEvents = getPublicEventCollection(store);
-  const events = useMemo(
-    () =>
-      sortEventsByDate(
-        publicEvents.filter(
-          (item) =>
-            resolveBrandStatus(item.brandStatus) === "supported" &&
-            isTrainingEventPubliclyVisible(item),
-        ),
-      ),
+  const fallbackEvents = useMemo(
+    () => sortEventsByDate(publicEvents.filter((item) => resolveBrandStatus(item.brandStatus) === "supported")),
     [publicEvents],
   );
+  const events = eventsPageQuery.data?.items ?? fallbackEvents;
 
   return (
     <EventFeedSection
@@ -1053,6 +1103,17 @@ export function CommunityEventsPage() {
       emptyTitle="Brak wydarzeń społeczności"
       emptyDescription="Po opublikowaniu nowych wydarzeń pojawią się właśnie tutaj."
       events={events}
+      pagination={
+        eventsPageQuery.data
+          ? {
+              page: eventsPageQuery.data.page,
+              totalPages: eventsPageQuery.data.totalPages,
+              totalItems: eventsPageQuery.data.totalItems,
+              loading: eventsPageQuery.isFetching,
+              onPageChange: setPage,
+            }
+          : undefined
+      }
     />
   );
 }

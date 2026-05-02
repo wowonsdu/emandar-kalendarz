@@ -6,6 +6,8 @@ export type SmsChallenge = {
   expiresAt: string;
   phone: string;
   requestedAt: string;
+  attemptCount: number;
+  requestIp?: string | null;
   usedAt?: string;
 };
 
@@ -70,7 +72,14 @@ export type SignedActionTokenRecord = {
 export type SecurityStore = {
   close(): Promise<void>;
   cleanupExpiredSessions(): Promise<void>;
+  recordSmsRequestAttempt(
+    phone: string,
+    requestIp: string | undefined,
+    windowSeconds: number,
+  ): Promise<{ phoneCount: number; ipCount: number; pairCount: number }>;
   createSmsChallenge(phone: string, code: string, ttlSeconds: number, requestIp?: string): Promise<SmsChallenge>;
+  getSmsChallenge(phone: string): Promise<SmsChallenge | null>;
+  incrementSmsChallengeAttempts(phone: string): Promise<number>;
   consumeSmsChallenge(phone: string): Promise<SmsChallenge | null>;
   createSession(userId: string, ttlSeconds: number): Promise<AuthSession>;
   getSession(sessionId: string | undefined): Promise<AuthSession | null>;
@@ -106,6 +115,7 @@ function hashToken(token: string) {
 }
 
 export class InMemoryAuthStore implements SecurityStore {
+  private smsRequestAttempts: Array<{ phone: string; requestIp?: string; createdAt: number }> = [];
   private smsChallenges = new Map<string, SmsChallenge>();
   private sessions = new Map<string, AuthSession>();
   private registrationTokens = new Map<string, { phone: string; expiresAt: string; usedAt?: string }>();
@@ -128,16 +138,50 @@ export class InMemoryAuthStore implements SecurityStore {
     }
   }
 
-  async createSmsChallenge(phone: string, code: string, ttlSeconds = 300) {
+  async recordSmsRequestAttempt(phone: string, requestIp: string | undefined, windowSeconds: number) {
+    const now = Date.now();
+    const threshold = now - windowSeconds * 1000;
+    this.smsRequestAttempts = this.smsRequestAttempts.filter((attempt) => attempt.createdAt >= threshold);
+    this.smsRequestAttempts.push({ phone, requestIp, createdAt: now });
+    return {
+      phoneCount: this.smsRequestAttempts.filter((attempt) => attempt.phone === phone).length,
+      ipCount: requestIp ? this.smsRequestAttempts.filter((attempt) => attempt.requestIp === requestIp).length : 0,
+      pairCount: requestIp
+        ? this.smsRequestAttempts.filter((attempt) => attempt.phone === phone && attempt.requestIp === requestIp).length
+        : 0,
+    };
+  }
+
+  async createSmsChallenge(phone: string, code: string, ttlSeconds = 300, requestIp?: string) {
     const requestedAt = nowIso();
     const challenge = {
+      attemptCount: 0,
       code,
       expiresAt: expiresAtIso(ttlSeconds),
       phone,
       requestedAt,
+      requestIp: requestIp ?? null,
     };
     this.smsChallenges.set(phone, challenge);
     return challenge;
+  }
+
+  async getSmsChallenge(phone: string) {
+    const challenge = this.smsChallenges.get(phone) ?? null;
+    if (!challenge || Date.parse(challenge.expiresAt) < Date.now()) {
+      this.smsChallenges.delete(phone);
+      return null;
+    }
+    return { ...challenge };
+  }
+
+  async incrementSmsChallengeAttempts(phone: string) {
+    const challenge = this.smsChallenges.get(phone);
+    if (!challenge) {
+      return 0;
+    }
+    challenge.attemptCount += 1;
+    return challenge.attemptCount;
   }
 
   async consumeSmsChallenge(phone: string) {
@@ -275,12 +319,39 @@ export class PgAuthStore implements SecurityStore {
     await this.pool.query("delete from auth_sessions where expires_at is not null and expires_at <= now()");
   }
 
+  async recordSmsRequestAttempt(phone: string, requestIp: string | undefined, windowSeconds: number) {
+    await this.pool.query(
+      `insert into sms_request_attempts (id, phone, request_ip)
+       values ($1, $2, $3)`,
+      [`sms-attempt-${crypto.randomUUID()}`, phone, requestIp ?? null],
+    );
+    const result = await this.pool.query<{
+      phone_count: string;
+      ip_count: string;
+      pair_count: string;
+    }>(
+      `select
+         count(*) filter (where phone = $1) as phone_count,
+         count(*) filter (where request_ip = $2) as ip_count,
+         count(*) filter (where phone = $1 and request_ip = $2) as pair_count
+       from sms_request_attempts
+       where created_at >= now() - ($3::text || ' seconds')::interval`,
+      [phone, requestIp ?? null, windowSeconds],
+    );
+    const row = result.rows[0];
+    return {
+      phoneCount: Number(row?.phone_count ?? 0),
+      ipCount: Number(row?.ip_count ?? 0),
+      pairCount: Number(row?.pair_count ?? 0),
+    };
+  }
+
   async createSmsChallenge(phone: string, code: string, ttlSeconds = 300, requestIp?: string) {
     const expiresAt = expiresAtIso(ttlSeconds);
     await this.pool.query(
-      `insert into sms_challenges (phone, code, requested_at, expires_at, used_at, request_ip)
-       values ($1, $2, now(), $3, null, $4)
-       on conflict (phone) do update set code = excluded.code, requested_at = now(), expires_at = excluded.expires_at, used_at = null, request_ip = excluded.request_ip`,
+      `insert into sms_challenges (phone, code, requested_at, expires_at, used_at, request_ip, attempt_count)
+       values ($1, $2, now(), $3, null, $4, 0)
+       on conflict (phone) do update set code = excluded.code, requested_at = now(), expires_at = excluded.expires_at, used_at = null, request_ip = excluded.request_ip, attempt_count = 0`,
       [phone, code, expiresAt, requestIp ?? null],
     );
     return {
@@ -288,21 +359,24 @@ export class PgAuthStore implements SecurityStore {
       expiresAt,
       phone,
       requestedAt: nowIso(),
+      attemptCount: 0,
+      requestIp: requestIp ?? null,
     };
   }
 
-  async consumeSmsChallenge(phone: string) {
+  async getSmsChallenge(phone: string) {
     const result = await this.pool.query<{
       code: string;
       expires_at: Date;
+      attempt_count: number;
       phone: string;
       requested_at: Date;
+      request_ip: string | null;
       used_at: Date | null;
     }>(
-      `update sms_challenges
-       set used_at = now()
-       where phone = $1 and used_at is null and (expires_at is null or expires_at > now())
-       returning phone, code, requested_at, expires_at, used_at`,
+      `select phone, code, requested_at, expires_at, used_at, request_ip, attempt_count
+       from sms_challenges
+       where phone = $1 and used_at is null and (expires_at is null or expires_at > now())`,
       [phone],
     );
     const row = result.rows[0];
@@ -314,6 +388,50 @@ export class PgAuthStore implements SecurityStore {
       expiresAt: row.expires_at.toISOString(),
       phone: row.phone,
       requestedAt: row.requested_at.toISOString(),
+      attemptCount: Number(row.attempt_count ?? 0),
+      requestIp: row.request_ip,
+      usedAt: row.used_at?.toISOString(),
+    };
+  }
+
+  async incrementSmsChallengeAttempts(phone: string) {
+    const result = await this.pool.query<{ attempt_count: number }>(
+      `update sms_challenges
+       set attempt_count = attempt_count + 1
+       where phone = $1 and used_at is null and (expires_at is null or expires_at > now())
+       returning attempt_count`,
+      [phone],
+    );
+    return Number(result.rows[0]?.attempt_count ?? 0);
+  }
+
+  async consumeSmsChallenge(phone: string) {
+    const result = await this.pool.query<{
+      code: string;
+      expires_at: Date;
+      attempt_count: number;
+      phone: string;
+      requested_at: Date;
+      request_ip: string | null;
+      used_at: Date | null;
+    }>(
+      `update sms_challenges
+       set used_at = now()
+       where phone = $1 and used_at is null and (expires_at is null or expires_at > now())
+       returning phone, code, requested_at, expires_at, used_at, request_ip, attempt_count`,
+      [phone],
+    );
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      code: row.code,
+      expiresAt: row.expires_at.toISOString(),
+      phone: row.phone,
+      requestedAt: row.requested_at.toISOString(),
+      attemptCount: Number(row.attempt_count ?? 0),
+      requestIp: row.request_ip,
       usedAt: row.used_at?.toISOString(),
     };
   }

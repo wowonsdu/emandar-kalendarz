@@ -38,6 +38,13 @@ export type AppOptions = {
 const csrfCookieName = "emandar_csrf";
 const registrationTokenTtlSeconds = 15 * 60;
 const signedActionTokenTtlSeconds = 14 * 24 * 60 * 60;
+const defaultPageSize = 25;
+const maxPageSize = 100;
+const smsRateLimitWindowSeconds = 10 * 60;
+const smsPhoneRateLimit = 5;
+const smsIpRateLimit = 30;
+const smsPairRateLimit = 5;
+const smsMaxCodeAttempts = 5;
 
 function routePaths(config: ApiConfig, routePath: string) {
   const normalized = routePath.startsWith("/") ? routePath : `/${routePath}`;
@@ -96,6 +103,29 @@ function getRequestIp(request: FastifyRequest) {
     return forwarded.split(",")[0]?.trim();
   }
   return request.ip;
+}
+
+function parsePositiveInteger(value: unknown, fallback: number) {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  const parsed = Number(rawValue);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseEventPageQuery(query: unknown) {
+  const input = (query ?? {}) as Record<string, unknown>;
+  const pageSize = Math.min(parsePositiveInteger(input.pageSize, defaultPageSize), maxPageSize);
+  const kind = String(input.kind ?? "all");
+  const sort = String(input.sort ?? "startsAtAsc");
+  const parsedKind: "official" | "community" | "all" =
+    kind === "official" || kind === "community" ? kind : "all";
+  const parsedSort: "startsAtAsc" | "startsAtDesc" | "createdAtDesc" =
+    sort === "startsAtDesc" || sort === "createdAtDesc" ? sort : "startsAtAsc";
+  return {
+    page: parsePositiveInteger(input.page, 1),
+    pageSize,
+    kind: parsedKind,
+    sort: parsedSort,
+  };
 }
 
 function isAllowedCorsOrigin(origin: string | undefined, allowedOrigins: string[]) {
@@ -309,21 +339,22 @@ export async function buildApp(options: AppOptions) {
   }
 
   registerAll(app, "get", config, "/api/public/catalog", async () => domain.publicStore());
+  registerAll(app, "get", config, "/api/public/catalog-core", async () => domain.publicCatalogCore());
   if (config.allowLegacyStoreApi) {
     registerAll(app, "get", config, "/api/public/bootstrap", async () => domain.publicStore());
   }
   registerAll(app, "get", config, "/api/public/trainers", async () => ({
     trainers: (await domain.publicStore()).trainers,
   }));
-  registerAll(app, "get", config, "/api/public/events", async () => ({
-    events: (await domain.publicStore()).publicTrainingEvents,
-  }));
+  registerAll(app, "get", config, "/api/public/events", async (request) =>
+    domain.publicEventPage({ ...parseEventPageQuery(request.query), kind: "official" }),
+  );
   registerAll(app, "get", config, "/api/public/events/:eventId", async (request) => ({
     event: await domain.publicEvent(String((request.params as { eventId?: string }).eventId ?? "")),
   }));
-  registerAll(app, "get", config, "/api/public/community-events", async () => ({
-    events: await domain.publicCommunityEvents(),
-  }));
+  registerAll(app, "get", config, "/api/public/community-events", async (request) =>
+    domain.publicEventPage({ ...parseEventPageQuery(request.query), kind: "community" }),
+  );
   registerAll(app, "post", config, "/api/public/enrollments", async (request, reply) => {
     if (!requireCsrf(request, reply)) return reply;
     const parsed = publicEnrollmentRequestSchema.safeParse(request.body);
@@ -351,8 +382,25 @@ export async function buildApp(options: AppOptions) {
     }
 
     const normalizedPhone = parsed.data.phone.trim();
+    const requestIp = getRequestIp(request);
+    const rate = await authStore.recordSmsRequestAttempt(normalizedPhone, requestIp, smsRateLimitWindowSeconds);
+    if (
+      rate.phoneCount > smsPhoneRateLimit ||
+      rate.ipCount > smsIpRateLimit ||
+      rate.pairCount > smsPairRateLimit
+    ) {
+      await authStore.recordAudit({
+        actorUserId: null,
+        action: "sms.request.rate-limited",
+        entityType: "phone",
+        entityId: normalizedPhone,
+        payload: { requestIp, ...rate },
+      });
+      return reply.status(429).send({ error: "sms-rate-limited" });
+    }
+
     const code = generateSmsCode();
-    await authStore.createSmsChallenge(normalizedPhone, code, config.smsCodeTtlSeconds, getRequestIp(request));
+    await authStore.createSmsChallenge(normalizedPhone, code, config.smsCodeTtlSeconds, requestIp);
     const delivery = await smsProvider.sendLoginCode(normalizedPhone, code);
     await authStore.recordNotificationDelivery({
       channel: "sms",
@@ -362,6 +410,13 @@ export async function buildApp(options: AppOptions) {
       status: delivery.status,
       error: delivery.error,
       payload: { kind: "login-code", testMode: config.smsapiTestMode },
+    });
+    await authStore.recordAudit({
+      actorUserId: null,
+      action: delivery.status === "sent" ? "sms.request.sent" : "sms.request.failed",
+      entityType: "phone",
+      entityId: normalizedPhone,
+      payload: { requestIp, provider: delivery.provider, status: delivery.status, error: delivery.error },
     });
     return {
       normalizedPhone,
@@ -377,19 +432,56 @@ export async function buildApp(options: AppOptions) {
     }
 
     const phone = parsed.data.phone.trim();
-    const challenge = await authStore.consumeSmsChallenge(phone);
+    const challenge = await authStore.getSmsChallenge(phone);
     if (!challenge) {
+      await authStore.recordAudit({
+        actorUserId: null,
+        action: "sms.confirm.missing-challenge",
+        entityType: "phone",
+        entityId: phone,
+        payload: { requestIp: getRequestIp(request) },
+      });
       return reply.status(400).send({ error: "sms-challenge-required" });
     }
 
+    if (challenge.attemptCount >= smsMaxCodeAttempts) {
+      await authStore.recordAudit({
+        actorUserId: null,
+        action: "sms.confirm.too-many-attempts",
+        entityType: "phone",
+        entityId: phone,
+        payload: { requestIp: getRequestIp(request), attemptCount: challenge.attemptCount },
+      });
+      return reply.status(429).send({ error: "sms-too-many-attempts" });
+    }
+
     if (parsed.data.code.trim() !== challenge.code) {
+      const attemptCount = await authStore.incrementSmsChallengeAttempts(phone);
+      await authStore.recordAudit({
+        actorUserId: null,
+        action: attemptCount >= smsMaxCodeAttempts ? "sms.confirm.too-many-attempts" : "sms.confirm.invalid-code",
+        entityType: "phone",
+        entityId: phone,
+        payload: { requestIp: getRequestIp(request), attemptCount },
+      });
+      if (attemptCount >= smsMaxCodeAttempts) {
+        return reply.status(429).send({ error: "sms-too-many-attempts" });
+      }
       return reply.status(401).send({ error: "invalid-code" });
     }
 
+    await authStore.consumeSmsChallenge(phone);
     const snapshot = await options.store.readSnapshot();
     const existingUser = findUserByPhone(snapshot.store, phone);
     if (!existingUser || typeof existingUser !== "object") {
       const registrationToken = await authStore.createRegistrationToken(phone, registrationTokenTtlSeconds);
+      await authStore.recordAudit({
+        actorUserId: null,
+        action: "sms.confirm.verified-missing-account",
+        entityType: "phone",
+        entityId: phone,
+        payload: { requestIp: getRequestIp(request) },
+      });
       return {
         status: "missing-account",
         phone,
@@ -401,6 +493,13 @@ export async function buildApp(options: AppOptions) {
     const userId = String((existingUser as { id: string }).id);
     const session = await authStore.createSession(userId, config.sessionTtlSeconds);
     reply.setCookie("emandar_session", session.id, getSessionCookieOptions(config));
+    await authStore.recordAudit({
+      actorUserId: userId,
+      action: "sms.confirm.login-success",
+      entityType: "user",
+      entityId: userId,
+      payload: { phone, requestIp: getRequestIp(request) },
+    });
 
     return {
       status: "existing-account",
@@ -498,6 +597,12 @@ export async function buildApp(options: AppOptions) {
     const actorUserId = await requireSessionUser(request, reply, authStore);
     if (!actorUserId) return reply;
     return domain.panelNavigation(actorUserId);
+  });
+
+  registerAll(app, "get", config, "/api/panel/read-models/events-page", async (request, reply) => {
+    const actorUserId = await requireSessionUser(request, reply, authStore);
+    if (!actorUserId) return reply;
+    return domain.panelEventPage(actorUserId, parseEventPageQuery(request.query));
   });
 
   for (const [routePath, keys] of panelCollectionRoutes) {

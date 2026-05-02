@@ -4,7 +4,7 @@
   - web: `apps/web`
   - API: `apps/api`
   - shared contracts: `packages/shared`
-- The repo-tracked bootstrap seed lives at `apps/web/public/mock-data/seed-store.json`.
+- The repo-tracked bootstrap seed lives at `seed-data/seed-store.json`.
 - Runtime production state must live in PostgreSQL behind `apps/api`; do not write production state back into the seed.
 - The legacy mock helpers remain only for explicit local reseeds/export work:
   - Use `pnpm mock:reset` only when an explicit reseed is requested.

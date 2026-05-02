@@ -58,7 +58,7 @@ export function resolveRuntimePaths(projectRoot) {
     path.join(projectRoot, ".local-state/emandar/runtime-store.json");
 
   return {
-    seedStorePath: path.join(projectRoot, "public/mock-data/seed-store.json"),
+    seedStorePath: path.resolve(projectRoot, "../../seed-data/seed-store.json"),
     runtimeStorePath,
     runtimeShardsDir: path.join(
       path.dirname(runtimeStorePath),

@@ -11,7 +11,7 @@ const config = {
   host: "127.0.0.1",
   port: 0,
   publicAppUrl: "https://panel.ceo/emandar",
-  seedStorePath: "../../apps/web/public/mock-data/seed-store.json",
+  seedStorePath: "../../seed-data/seed-store.json",
   sessionSecret: "test-secret",
   sessionTtlSeconds: 60 * 60,
   smsapiTestMode: true,

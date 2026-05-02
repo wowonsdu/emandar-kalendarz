@@ -60,7 +60,7 @@ export function readConfig(): ApiConfig {
     publicAppUrl: process.env.PUBLIC_APP_URL || "https://panel.ceo/emandar",
     seedStorePath:
       process.env.SEED_STORE_PATH ||
-      path.resolve(moduleDir, "../../web/public/mock-data/seed-store.json"),
+      path.resolve(moduleDir, "../../../seed-data/seed-store.json"),
     sessionSecret: process.env.SESSION_SECRET || "dev-only-change-me",
     sessionTtlSeconds: numberFromEnv(process.env.SESSION_TTL_SECONDS, 60 * 60 * 24 * 30),
     smsapiFrom: process.env.SMSAPI_FROM?.trim() || undefined,

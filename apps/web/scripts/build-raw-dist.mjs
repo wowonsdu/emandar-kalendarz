@@ -8,69 +8,6 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 const rawBasePath = "/emandar-raw/";
 const outputDir = path.join(projectRoot, "dist-raw");
-const seedStorePath = path.join(projectRoot, "public/mock-data/seed-store.json");
-
-function getDefaultNotificationSettings() {
-  return {
-    reminderLeadDays: 7,
-    sendToTrainer: true,
-    sendToOrganizer: true,
-    sendToParticipants: true,
-    requireParticipantSmsConfirmation: false,
-    reminderSmsTemplate:
-      "Przypomnienie o szkoleniu {{event_title}} dnia {{event_date}} w {{event_location}}.",
-    confirmationSmsTemplate:
-      "Czy bierzesz udział w szkoleniu {{event_title}} dnia {{event_date}}? Tak: {{confirm_url}} Nie: {{decline_url}}",
-  };
-}
-
-function rewriteBasePathStrings(value) {
-  if (typeof value === "string") {
-    return value.replaceAll("/emandar/", rawBasePath);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => rewriteBasePathStrings(item));
-  }
-
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, nestedValue]) => [key, rewriteBasePathStrings(nestedValue)]),
-    );
-  }
-
-  return value;
-}
-
-function createRawSeed(seedStore) {
-  const nextStore = rewriteBasePathStrings(structuredClone(seedStore));
-
-  return {
-    users: nextStore.users ?? [],
-    trainers: nextStore.trainers ?? [],
-    organizers: nextStore.organizers ?? [],
-    participantProfiles: (nextStore.participantProfiles ?? []).filter((profile) =>
-      Boolean(profile.linkedUserId),
-    ),
-    groups: [],
-    groupMembers: [],
-    eventParticipants: [],
-    relations: [],
-    trainingEvents: [],
-    publicTrainingEvents: [],
-    enrollmentRequests: [],
-    notifications: [],
-    appSettings: rewriteBasePathStrings(
-      structuredClone(
-        seedStore.appSettings ?? {
-          signupPhotoMode: "optional",
-          enrollmentPhotoMode: "optional",
-          defaultNotificationSettings: getDefaultNotificationSettings(),
-        },
-      ),
-    ),
-  };
-}
 
 async function runBuild() {
   await rm(outputDir, { recursive: true, force: true });
@@ -101,29 +38,6 @@ async function runBuild() {
   });
 }
 
-async function writeRawSeedFiles() {
-  const seedStore = JSON.parse(await readFile(seedStorePath, "utf8"));
-  const rawSeed = createRawSeed(seedStore);
-  const rawSeedJson = `${JSON.stringify(rawSeed, null, 2)}\n`;
-
-  await writeFile(path.join(outputDir, "mock-data/seed-store.json"), rawSeedJson, "utf8");
-  await writeFile(path.join(outputDir, "mock-data/runtime-store.json"), rawSeedJson, "utf8");
-
-  const summary = {
-    users: rawSeed.users?.length ?? 0,
-    trainers: rawSeed.trainers?.length ?? 0,
-    organizers: rawSeed.organizers?.length ?? 0,
-    participantProfiles: rawSeed.participantProfiles?.length ?? 0,
-    relations: rawSeed.relations?.length ?? 0,
-    trainingEvents: rawSeed.trainingEvents?.length ?? 0,
-    groups: rawSeed.groups?.length ?? 0,
-    enrollmentRequests: rawSeed.enrollmentRequests?.length ?? 0,
-  };
-
-  console.log(`Raw dist ready in ${outputDir}`);
-  console.log(JSON.stringify(summary, null, 2));
-}
-
 async function rewriteRawHtaccess() {
   const htaccessPath = path.join(outputDir, ".htaccess");
   const content = await readFile(htaccessPath, "utf8");
@@ -136,4 +50,4 @@ async function rewriteRawHtaccess() {
 
 await runBuild();
 await rewriteRawHtaccess();
-await writeRawSeedFiles();
+console.log(`Raw dist ready in ${outputDir}`);

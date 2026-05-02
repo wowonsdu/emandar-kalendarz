@@ -71,6 +71,11 @@ export const commandRequestSchema = z.object({
   args: z.array(z.unknown()).default([]),
 });
 
+export const participantRegistrationRequestSchema = z.object({
+  registrationToken: z.string().min(1),
+  input: z.record(z.unknown()),
+});
+
 export const publicEnrollmentRequestSchema = z.object({
   eventId: z.string().min(1),
   intent: z.string().optional(),
@@ -91,7 +96,6 @@ export const uploadRequestSchema = z.object({
 export const uploadResponseSchema = z.object({
   id: z.string(),
   url: z.string(),
-  storagePath: z.string(),
   width: z.number().int().nonnegative().default(0),
   height: z.number().int().nonnegative().default(0),
 });
@@ -114,9 +118,14 @@ export const smsConfirmResponseSchema = z.union([
   z.object({
     status: z.literal("missing-account"),
     phone: z.string(),
+    registrationToken: z.string(),
     verifiedAt: z.string().optional(),
   }),
 ]);
+
+export const csrfResponseSchema = z.object({
+  token: z.string(),
+});
 
 export const roleSchema = z.enum(["participant", "moderator", "organizer", "trainer", "admin"]);
 export type AppRole = z.infer<typeof roleSchema>;

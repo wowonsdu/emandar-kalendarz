@@ -211,3 +211,26 @@ create table if not exists auth_sessions (
   created_at timestamptz not null default now(),
   expires_at timestamptz null
 );
+
+create table if not exists registration_tokens (
+  token_hash text primary key,
+  phone text not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at timestamptz null
+);
+
+create index if not exists registration_tokens_phone_idx on registration_tokens (phone);
+
+create table if not exists signed_action_tokens (
+  token_hash text primary key,
+  action text not null,
+  entity_type text not null,
+  entity_id text not null,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at timestamptz null,
+  payload jsonb not null default '{}'::jsonb
+);
+
+create index if not exists signed_action_tokens_entity_idx on signed_action_tokens (entity_type, entity_id);

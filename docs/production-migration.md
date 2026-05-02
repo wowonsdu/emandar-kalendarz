@@ -34,6 +34,31 @@ The seed source is `apps/web/public/mock-data/seed-store.json`. The production s
 
 Production SMS auth requires `SMSAPI_TOKEN` and optionally `SMSAPI_FROM`. Keep `SMSAPI_TEST_MODE=true` for smoke environments; set `SMSAPI_TEST_MODE=false` only after sender and billing are verified.
 
+Required production API env:
+
+- `DATABASE_URL`
+- `SESSION_SECRET`
+- `SESSION_TTL_SECONDS` (optional, defaults to 30 days)
+- `CORS_ALLOWED_ORIGINS=https://panel.ceo`
+- `ALLOW_LEGACY_STORE_API=false`
+- `SMSAPI_TEST_MODE=true` until the final SMS release gate
+- `UPLOAD_STORAGE_PATH=/opt/panel.ceo/emandar-data/uploads`
+- `UPLOADS_PUBLIC_PATH=/emandar/uploads`
+
+`SMSAPI_TOKEN` and `SMSAPI_FROM` should be present only when preparing the final real-SMS gate. Until then the API records `notification_deliveries` for demo/test sends and returns the test code to the client.
+
+Operational hardening now depends on these tables from `apps/api/migrations/0001_initial.sql`:
+
+- `auth_sessions` for persistent cookie sessions with TTL.
+- `sms_challenges` for demo/test SMS challenge storage.
+- `registration_tokens` for one-time participant registration after SMS verification.
+- `uploads` for upload owner, purpose, content type, byte size and storage metadata.
+- `audit_log` for API mutation audit records.
+- `notification_deliveries` for demo/test SMS delivery records.
+- `signed_action_tokens` reserved for the next public-link hardening step.
+
+Cookie-based mutations require `GET /emandar/api/auth/csrf` first and must send `x-emandar-csrf` with the returned token. The frontend API client handles this automatically.
+
 ## Production Shape
 
 - Web files: `/opt/panel.ceo/emandar`
@@ -50,6 +75,8 @@ Before replacing live files, create timestamped backups of:
 - PostgreSQL database: `pg_dump --format=custom --file=/opt/panel.ceo/emandar-backup-YYYYMMDD-HHMMSS.dump "$DATABASE_URL"`
 - Upload directory: `/opt/panel.ceo/emandar-data/uploads`
 - `/opt/panel.ceo/emandar-data/runtime-store.json` if it still exists from the mock era
+
+Run `pg_dump` and upload backup before applying migrations because the release writes new auth/session/upload/audit rows during normal smoke tests.
 
 Deploy static web build from `apps/web/dist/`. Deploy the API build plus root workspace files needed for production install, copy `apps/web/public/mock-data/seed-store.json` to `/opt/panel.ceo/emandar-api/seed-store.json`, then run migrations and seed import.
 

@@ -5,7 +5,7 @@ import {
   readJsonFile,
   readRuntimeStore,
   resolveRuntimePaths,
-} from "./mock-runtime-utils.mjs";
+} from "./seed-runtime-utils.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");

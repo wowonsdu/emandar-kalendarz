@@ -12,12 +12,14 @@ function numberFromEnv(value: string | undefined, fallback: number) {
 export type ApiConfig = {
   allowLegacyStoreApi: boolean;
   basePath: string;
+  corsAllowedOrigins: string[];
   databaseUrl?: string;
   host: string;
   port: number;
   publicAppUrl: string;
   seedStorePath: string;
   sessionSecret: string;
+  sessionTtlSeconds: number;
   smsapiFrom?: string;
   smsapiTestMode: boolean;
   smsapiToken?: string;
@@ -43,17 +45,24 @@ export function readConfig(): ApiConfig {
   const useMemoryStore = process.env.EMANDAR_USE_MEMORY_STORE === "true" || !databaseUrl;
   const smsapiTestMode = process.env.SMSAPI_TEST_MODE !== "false";
 
+  const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "https://panel.ceo")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
   return {
     allowLegacyStoreApi: process.env.ALLOW_LEGACY_STORE_API === "true" || useMemoryStore,
     basePath,
+    corsAllowedOrigins,
     databaseUrl,
     host: process.env.HOST || "127.0.0.1",
     port: numberFromEnv(process.env.PORT, 4174),
     publicAppUrl: process.env.PUBLIC_APP_URL || "https://panel.ceo/emandar",
     seedStorePath:
       process.env.SEED_STORE_PATH ||
-      path.resolve(moduleDir, "../../web/public/mock-data/seed-store.json"),
+      path.resolve(moduleDir, "../../../seed-data/seed-store.json"),
     sessionSecret: process.env.SESSION_SECRET || "dev-only-change-me",
+    sessionTtlSeconds: numberFromEnv(process.env.SESSION_TTL_SECONDS, 60 * 60 * 24 * 30),
     smsapiFrom: process.env.SMSAPI_FROM?.trim() || undefined,
     smsapiTestMode,
     smsapiToken: process.env.SMSAPI_TOKEN?.trim() || undefined,

@@ -150,6 +150,21 @@ function assertCanManageEvent(actor: RecordAny, event: RecordAny) {
   throw new Error("Nie możesz zarządzać tym wydarzeniem.");
 }
 
+function assertCanModerateEvents(actor: RecordAny) {
+  if (hasRole(actor, "admin") || hasRole(actor, "moderator")) {
+    return;
+  }
+  throw new Error("Brak uprawnień moderatora.");
+}
+
+function assertCanManageOrModerateEvent(actor: RecordAny, event: RecordAny) {
+  try {
+    assertCanManageEvent(actor, event);
+  } catch (error) {
+    assertCanModerateEvents(actor);
+  }
+}
+
 function cleanFileFields<T extends RecordAny>(input: T): T {
   const next = { ...input };
   delete next.avatarFile;
@@ -173,11 +188,61 @@ export class DomainService {
     };
   }
 
+  async publicEvent(eventId: string) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    recomputePublicEvents(store);
+    return cloneValue(arrayOf(store, "publicTrainingEvents").find((event) => event.id === eventId) ?? null);
+  }
+
+  async publicCommunityEvents() {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    recomputePublicEvents(store);
+    return cloneValue(
+      arrayOf(store, "publicTrainingEvents").filter((event) => event.brandStatus === "supported"),
+    );
+  }
+
   async privateStore(actorUserId: string | null) {
     const snapshot = await this.store.readSnapshot();
     const store = normalizeStore(snapshot.store);
     requireActor(store, actorUserId);
     return cloneValue(store);
+  }
+
+  async panelCollections(actorUserId: string | null, keys: PersistedCollectionKey[]) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    requireActor(store, actorUserId);
+    const response: Partial<Record<PersistedCollectionKey, unknown[] | Record<string, unknown>>> = {};
+    for (const key of keys) {
+      response[key] = cloneValue(store[key]);
+    }
+    return response;
+  }
+
+  async panelNavigation(actorUserId: string | null) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    const actor = requireActor(store, actorUserId);
+    const notifications = arrayOf(store, "notifications").filter(
+      (item) => item.userId === actor.id && !item.readAt,
+    );
+    const enrollmentRequests = arrayOf(store, "enrollmentRequests").filter(
+      (item) => item.finalStatus === "pending",
+    );
+    const communityEvents = arrayOf(store, "trainingEvents").filter(
+      (event) =>
+        event.brandStatus === "supported" &&
+        !event.archivedAt &&
+        event.publicationApprovalStatus === "pending",
+    );
+    return {
+      notificationsCount: notifications.length,
+      pendingEnrollmentRequestsCount: enrollmentRequests.length,
+      pendingCommunityEventsCount: communityEvents.length,
+    };
   }
 
   async user(actorUserId: string | null, userId = actorUserId) {
@@ -235,6 +300,59 @@ export class DomainService {
       });
       upsertParticipantProfileFromUser(store, user, { ...input, phone });
       return { ok: true as const, userId: user.id, accountCreated };
+    });
+  }
+
+  async confirmEnrollmentAttendanceByEntity(entityId: string, decision: "confirm" | "decline") {
+    return this.mutate(null, (store) => {
+      const nextStatus = decision === "decline" ? "declined" : "confirmed";
+      const participant = findById(store, "eventParticipants", entityId);
+      if (participant) {
+        participant.attendanceConfirmationStatus = nextStatus;
+        participant.attendanceConfirmationRespondedAt = nowIso();
+        if (nextStatus === "declined") participant.status = "declined";
+        recomputeEventCounts(store, participant.eventId);
+        return { ok: true as const, entityType: "event_participant", entityId };
+      }
+      const request = findById(store, "enrollmentRequests", entityId);
+      if (!request) throw new Error("Nie znaleziono potwierdzenia uczestnictwa.");
+      request.attendanceConfirmationStatus = nextStatus;
+      request.attendanceConfirmationRespondedAt = nowIso();
+      return { ok: true as const, entityType: "enrollment_request", entityId };
+    });
+  }
+
+  async getCommunityEventReviewByEntity(eventId: string) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    const event = findById(store, "trainingEvents", eventId);
+    if (!event || event.brandStatus !== "supported") throw new Error("Nie znaleziono wydarzenia do moderacji.");
+    return {
+      ok: true as const,
+      event,
+      creatorName: event.creatorDisplayName || "Autor wydarzenia",
+      creatorPhone: event.creatorPhone || findById(store, "users", event.creatorUserId)?.phone || "",
+    };
+  }
+
+  async reviewCommunityEventByEntity(
+    eventId: string,
+    input: { decision: "accepted" | "rejected"; message?: string },
+    actorUserId: string | null,
+  ) {
+    return this.mutate(actorUserId, (store, actor) => {
+      const event = findById(store, "trainingEvents", eventId);
+      if (!event || event.brandStatus !== "supported") throw new Error("Nie znaleziono wydarzenia do moderacji.");
+      if (actor) {
+        assertCanModerateEvents(actor);
+      }
+      event.publicationApprovalStatus = input.decision;
+      event.publicationReviewMessage = input.message?.trim();
+      event.publicationReviewedAt = nowIso();
+      event.publicationReviewedByUserId = actor?.id ?? "signed-token";
+      event.isPublished = input.decision === "accepted";
+      event.workflowStatus = input.decision === "accepted" ? "published" : "rejected";
+      return { ok: true as const, eventId: event.id };
     });
   }
 
@@ -492,7 +610,11 @@ export class DomainService {
           if (!actor) throw new Error("Musisz być zalogowany.");
           const event = findById(store, "trainingEvents", String(args[0]));
           if (!event) throw new Error("Nie znaleziono wydarzenia.");
-          assertCanManageEvent(actor, event);
+          if (name === "unpublishTrainingEvent" || name === "deleteTrainingEvent") {
+            assertCanManageOrModerateEvent(actor, event);
+          } else {
+            assertCanManageEvent(actor, event);
+          }
           if (name === "deleteTrainingEvent") {
             store.trainingEvents = arrayOf(store, "trainingEvents").filter((item) => item.id !== event.id);
             store.eventParticipants = arrayOf(store, "eventParticipants").filter((item) => item.eventId !== event.id);
@@ -523,7 +645,11 @@ export class DomainService {
           const input = (args[0] ?? {}) as RecordAny;
           const event = findById(store, "trainingEvents", input.eventId);
           if (!event) throw new Error("Nie znaleziono wydarzenia.");
-          assertCanManageEvent(actor, event);
+          if (input.publicationDecision && event.brandStatus === "supported") {
+            assertCanModerateEvents(actor);
+          } else {
+            assertCanManageEvent(actor, event);
+          }
           Object.assign(event, cleanFileFields(input), { updatedAt: nowIso() });
           if (input.status) event.status = input.status;
           if (input.brandStatus) event.brandStatus = input.brandStatus;
@@ -709,46 +835,24 @@ export class DomainService {
         });
       }
       case "confirmEnrollmentAttendance": {
-        return this.mutate(null, (store) => {
-          const token = String(args[0] ?? "");
-          const decision = args[1] === "decline" ? "declined" : "confirmed";
-          const participant = findById(store, "eventParticipants", token);
-          if (participant) {
-            participant.attendanceConfirmationStatus = decision;
-            participant.attendanceConfirmationRespondedAt = nowIso();
-            if (decision === "declined") participant.status = "declined";
-            return;
-          }
-          const request = findById(store, "enrollmentRequests", token);
-          if (!request) throw new Error("Nie znaleziono potwierdzenia uczestnictwa.");
-          request.attendanceConfirmationStatus = decision;
-          request.attendanceConfirmationRespondedAt = nowIso();
-        });
+        return this.confirmEnrollmentAttendanceByEntity(
+          String(args[0] ?? ""),
+          args[1] === "decline" ? "decline" : "confirm",
+        );
       }
       case "getCommunityEventReview": {
-        const snapshot = await this.store.readSnapshot();
-        const store = normalizeStore(snapshot.store);
-        const event = findById(store, "trainingEvents", String(args[0]));
-        if (!event || event.brandStatus !== "supported") throw new Error("Nie znaleziono wydarzenia do moderacji.");
-        return {
-          ok: true as const,
-          event,
-          creatorName: event.creatorDisplayName || "Autor wydarzenia",
-          creatorPhone: event.creatorPhone || findById(store, "users", event.creatorUserId)?.phone || "",
-        };
+        return this.getCommunityEventReviewByEntity(String(args[0]));
       }
       case "reviewCommunityEvent": {
         const input = (args[0] ?? {}) as RecordAny;
-        return this.mutate(actorUserId, (store, actor) => {
-          const event = findById(store, "trainingEvents", input.token);
-          if (!event || event.brandStatus !== "supported") throw new Error("Nie znaleziono wydarzenia do moderacji.");
-          event.publicationApprovalStatus = input.decision;
-          event.publicationReviewMessage = input.message?.trim();
-          event.publicationReviewedAt = nowIso();
-          event.publicationReviewedByUserId = actor?.id ?? "system";
-          event.isPublished = input.decision === "accepted";
-          return { ok: true as const, eventId: event.id };
-        });
+        return this.reviewCommunityEventByEntity(
+          String(input.token ?? ""),
+          {
+            decision: input.decision === "rejected" ? "rejected" : "accepted",
+            message: typeof input.message === "string" ? input.message : "",
+          },
+          actorUserId,
+        );
       }
       case "manageOwnGroupEventParticipation": {
         const input = (args[0] ?? {}) as RecordAny;

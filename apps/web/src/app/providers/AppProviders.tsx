@@ -3,9 +3,9 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useState,
   type ReactNode,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { mapAppError } from "@/domain/errors";
 import { getHighestRole, sortTrainerProfiles } from "@/domain/utils";
 import {
@@ -25,10 +25,16 @@ import {
   decideTrainingEventCollaboration as decideTrainingEventCollaborationAction,
   detachRelation as detachRelationAction,
   ensurePhoneParticipantProfileForFlow as ensurePhoneParticipantProfileForFlowAction,
+  fetchAuthSession,
+  fetchCurrentUser,
+  fetchPanelNavigation,
+  fetchPanelStore,
+  fetchPublicCatalogStore,
   finalizeEventRoster as finalizeEventRosterAction,
   getCommunityEventReview as getCommunityEventReviewAction,
   manageOwnGroupEventParticipation as manageOwnGroupEventParticipationAction,
   manageEnrollmentRequest as manageEnrollmentRequestAction,
+  openPanelEventsStream,
   publishTrainingEvent as publishTrainingEventAction,
   removeGroupMember as removeGroupMemberAction,
   registerParticipant as registerParticipantAction,
@@ -37,10 +43,6 @@ import {
   signIn as signInAction,
   signOut as signOutAction,
   submitEnrollment as submitEnrollmentAction,
-  subscribeAuthState,
-  subscribePrivateStore,
-  subscribePublicStore,
-  subscribeUserProfile,
   unpublishTrainingEvent as unpublishTrainingEventAction,
   updateTrainingEventBrandStatus as updateTrainingEventBrandStatusAction,
   updateAppSettings as updateAppSettingsAction,
@@ -60,6 +62,7 @@ import {
   updateUserNotificationSettings as updateUserNotificationSettingsAction,
   uploadCommunityEventImages as uploadCommunityEventImagesAction,
 } from "@/data/apiClient";
+import { queryKeys } from "@/data/queryClient";
 import type {
   AppSettings,
   AppRole,
@@ -220,8 +223,6 @@ interface AppStateContextValue {
   }) => Promise<{ ok: true; eventId: string }>;
 }
 
-type StorePatch = Partial<DemoStore>;
-
 const AppStateContext = createContext<AppStateContextValue | null>(null);
 
 async function withFriendlyErrors<T>(action: () => Promise<T>) {
@@ -240,7 +241,7 @@ function getPanelHomePath(role: AppRole) {
   return role === "participant" ? "/panel/dashboard" : "/panel/dashboard";
 }
 
-function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStore {
+function mergeStores(publicStore: DemoStore, privateStore: Partial<DemoStore>): DemoStore {
   const trainers = sortTrainerProfiles(privateStore.trainers ?? publicStore.trainers);
 
   return {
@@ -263,109 +264,79 @@ function mergeStores(publicStore: DemoStore, privateStore: StorePatch): DemoStor
   };
 }
 
-function applyPatch(previous: StorePatch, patch: StorePatch): StorePatch {
-  return {
-    ...previous,
-    ...patch,
-  };
-}
-
 export function AppProviders({ children }: { children: ReactNode }) {
-  const [publicStore, setPublicStore] = useState(() => createEmptyStore());
-  const [privateStore, setPrivateStore] = useState<StorePatch>({});
-  const [rawCurrentUser, setRawCurrentUser] = useState<AppUser | null>(null);
-  const [currentUserReady, setCurrentUserReady] = useState(false);
-  const [authReady, setAuthReady] = useState(false);
-  const [authUserId, setAuthUserId] = useState<string | null>(null);
-
-  useEffect(() => {
-    return subscribePublicStore((patch) => {
-      setPublicStore((previous) => ({
-        ...previous,
-        ...patch,
-      }));
-    });
-  }, []);
-
-  useEffect(() => {
-    return subscribeAuthState((userId) => {
-      setAuthReady(true);
-
-      if (!userId) {
-        setAuthUserId(null);
-        setRawCurrentUser(null);
-        setPrivateStore({});
-        setCurrentUserReady(true);
-        return;
-      }
-
-      setRawCurrentUser(null);
-      setPrivateStore({});
-      setCurrentUserReady(false);
-      setAuthUserId(userId);
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!authUserId) {
-      return;
-    }
-
-    return subscribeUserProfile(authUserId, (user) => {
-      setRawCurrentUser(user);
-      setCurrentUserReady(true);
-      setPrivateStore((previous) =>
-        applyPatch(previous, {
-          users: user ? [user] : [],
-        }),
-      );
-    });
-  }, [authUserId]);
+  const publicStoreQuery = useQuery({
+    queryKey: queryKeys.publicCatalog,
+    queryFn: fetchPublicCatalogStore,
+    staleTime: 60_000,
+  });
+  const authSessionQuery = useQuery({
+    queryKey: queryKeys.authSession,
+    queryFn: fetchAuthSession,
+    staleTime: 15_000,
+  });
+  const authUserId = authSessionQuery.data?.userId ?? null;
+  const currentUserQuery = useQuery({
+    queryKey: queryKeys.currentUser,
+    queryFn: fetchCurrentUser,
+    enabled: Boolean(authUserId),
+    retry: false,
+  });
+  const panelStoreQuery = useQuery({
+    queryKey: queryKeys.panelStore,
+    queryFn: fetchPanelStore,
+    enabled: Boolean(authUserId && currentUserQuery.data),
+    staleTime: 15_000,
+  });
+  const panelNavigationQuery = useQuery({
+    queryKey: queryKeys.panelNavigation,
+    queryFn: fetchPanelNavigation,
+    enabled: Boolean(authUserId && currentUserQuery.data),
+    staleTime: 15_000,
+  });
 
   const currentUser = useMemo<AppUser | null>(() => {
-    if (!rawCurrentUser) {
+    if (!authUserId || !currentUserQuery.data) {
       return null;
     }
 
-    const highestRole = getHighestRole(rawCurrentUser);
-    if (rawCurrentUser.role === highestRole) {
-      return rawCurrentUser;
+    const highestRole = getHighestRole(currentUserQuery.data);
+    if (currentUserQuery.data.role === highestRole) {
+      return currentUserQuery.data;
     }
 
     return {
-      ...rawCurrentUser,
+      ...currentUserQuery.data,
       role: highestRole,
     };
-  }, [rawCurrentUser]);
+  }, [authUserId, currentUserQuery.data]);
 
   const hasAuthenticatedSession = authUserId !== null;
+  const authReady = !authSessionQuery.isLoading;
+  const currentUserReady = !authUserId || !currentUserQuery.isLoading;
 
   useEffect(() => {
     if (!currentUser) {
-      return;
+      return undefined;
     }
-
-    setPrivateStore((previous) =>
-      applyPatch(previous, {
-        users: [currentUser],
-      }),
-    );
-
-    return subscribePrivateStore(currentUser, (patch) => {
-      setPrivateStore((previous) => applyPatch(previous, patch));
-    });
+    return openPanelEventsStream();
   }, [currentUser]);
+
+  const publicStore = publicStoreQuery.data ?? createEmptyStore();
+  const privateStore = panelStoreQuery.data ?? (currentUser ? { users: [currentUser] } : {});
 
   const store = useMemo(
     () => mergeStores(publicStore, privateStore),
     [privateStore, publicStore],
   );
 
-  const notificationsCount = currentUser
-    ? store.notifications.filter(
-        (item) => item.userId === currentUser.id && !item.readAt,
-      ).length
-    : 0;
+  const notificationsCount =
+    panelNavigationQuery.data?.notificationsCount ??
+    (currentUser
+      ? store.notifications.filter(
+          (item) => item.userId === currentUser.id && !item.readAt,
+        ).length
+      : 0);
   const value = useMemo<AppStateContextValue>(
     () => ({
       store,

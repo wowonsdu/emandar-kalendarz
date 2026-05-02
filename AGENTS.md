@@ -4,11 +4,11 @@
   - web: `apps/web`
   - API: `apps/api`
   - shared contracts: `packages/shared`
-- The repo-tracked bootstrap seed lives at `apps/web/public/mock-data/seed-store.json`.
+- The repo-tracked bootstrap seed lives at `seed-data/seed-store.json`.
 - Runtime production state must live in PostgreSQL behind `apps/api`; do not write production state back into the seed.
-- The legacy mock helpers remain only for explicit local reseeds/export work:
-  - Use `pnpm mock:reset` only when an explicit reseed is requested.
-  - Use `pnpm mock:seed:from-runtime` only when promoting a local mock runtime back into the seed.
+- The seed helpers remain only for explicit local reseeds/export work:
+  - Use `pnpm seed:reset` only when an explicit reseed is requested.
+  - Use `pnpm seed:from-runtime` only when promoting a local seed runtime back into the repo seed.
 - That export must preserve seeded trainer profiles and trainer-linked user records from the current seed, so demo reseeds do not overwrite trainer bios, avatars, sort order, or other curated trainer data.
 - Use `pnpm dev` for local work, `pnpm test` for unit tests, `pnpm typecheck` for workspace type checks, and `pnpm build` before deploy.
 

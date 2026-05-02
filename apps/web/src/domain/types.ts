@@ -228,7 +228,7 @@ export interface TrainingEventScheduleDay {
 export interface TrainingEventImage {
   id: string;
   url: string;
-  storagePath: string;
+  storagePath?: string;
   width: number;
   height: number;
 }

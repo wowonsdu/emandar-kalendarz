@@ -2,6 +2,7 @@ import { readConfig, type ApiConfig } from "./config.js";
 import { MemoryStoreRepository } from "./store/memory-store.js";
 import { PgStoreRepository } from "./store/pg-store.js";
 import { readProductionSeedStore, readSeedStore } from "./store/seed.js";
+import { InMemoryAuthStore, PgAuthStore, type SecurityStore } from "./store/session.js";
 import type { StoreRepository } from "./store/types.js";
 
 export async function createStoreFromConfig(config: ApiConfig = readConfig()): Promise<StoreRepository> {
@@ -21,4 +22,16 @@ export async function createStoreFromConfig(config: ApiConfig = readConfig()): P
   await store.migrate();
   await store.seedFromStore(seedStore);
   return store;
+}
+
+export function createAuthStoreFromConfig(config: ApiConfig = readConfig()): SecurityStore {
+  if (config.useMemoryStore) {
+    return new InMemoryAuthStore();
+  }
+
+  if (!config.databaseUrl) {
+    throw new Error("DATABASE_URL is required when EMANDAR_USE_MEMORY_STORE is not enabled.");
+  }
+
+  return PgAuthStore.fromDatabaseUrl(config.databaseUrl);
 }

@@ -188,11 +188,61 @@ export class DomainService {
     };
   }
 
+  async publicEvent(eventId: string) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    recomputePublicEvents(store);
+    return cloneValue(arrayOf(store, "publicTrainingEvents").find((event) => event.id === eventId) ?? null);
+  }
+
+  async publicCommunityEvents() {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    recomputePublicEvents(store);
+    return cloneValue(
+      arrayOf(store, "publicTrainingEvents").filter((event) => event.brandStatus === "supported"),
+    );
+  }
+
   async privateStore(actorUserId: string | null) {
     const snapshot = await this.store.readSnapshot();
     const store = normalizeStore(snapshot.store);
     requireActor(store, actorUserId);
     return cloneValue(store);
+  }
+
+  async panelCollections(actorUserId: string | null, keys: PersistedCollectionKey[]) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    requireActor(store, actorUserId);
+    const response: Partial<Record<PersistedCollectionKey, unknown[] | Record<string, unknown>>> = {};
+    for (const key of keys) {
+      response[key] = cloneValue(store[key]);
+    }
+    return response;
+  }
+
+  async panelNavigation(actorUserId: string | null) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    const actor = requireActor(store, actorUserId);
+    const notifications = arrayOf(store, "notifications").filter(
+      (item) => item.userId === actor.id && !item.readAt,
+    );
+    const enrollmentRequests = arrayOf(store, "enrollmentRequests").filter(
+      (item) => item.finalStatus === "pending",
+    );
+    const communityEvents = arrayOf(store, "trainingEvents").filter(
+      (event) =>
+        event.brandStatus === "supported" &&
+        !event.archivedAt &&
+        event.publicationApprovalStatus === "pending",
+    );
+    return {
+      notificationsCount: notifications.length,
+      pendingEnrollmentRequestsCount: enrollmentRequests.length,
+      pendingCommunityEventsCount: communityEvents.length,
+    };
   }
 
   async user(actorUserId: string | null, userId = actorUserId) {

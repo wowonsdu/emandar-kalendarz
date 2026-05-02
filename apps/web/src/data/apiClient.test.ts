@@ -116,10 +116,10 @@ describe("apiClient registration uploads", () => {
             height: 0,
           });
         }
-        if (target.endsWith("/api/panel/command/updateParticipantProfile")) {
+        if (target.endsWith("/api/panel/profile/participant")) {
           return jsonResponse({ ok: true, result: { ok: true } });
         }
-        if (target.endsWith("/api/public/bootstrap")) {
+        if (target.endsWith("/api/public/catalog")) {
           return jsonResponse({ trainers: [], publicTrainingEvents: [], appSettings: {} });
         }
         if (target.endsWith("/api/auth/session")) {
@@ -128,7 +128,7 @@ describe("apiClient registration uploads", () => {
         if (target.endsWith("/api/me")) {
           return jsonResponse({ user });
         }
-        if (target.endsWith("/api/panel/bootstrap")) {
+        if (target.includes("/api/panel/read-models/")) {
           return jsonResponse(createPrivateStore(user));
         }
         return new Response("Not found", { status: 404 });
@@ -147,7 +147,7 @@ describe("apiClient registration uploads", () => {
 
     expect(postCalls[0]).toBe("/emandar/api/auth/register-participant");
     expect(postCalls[1]).toBe("/emandar/api/uploads");
-    expect(postCalls[2]).toBe("/emandar/api/panel/command/updateParticipantProfile");
+    expect(postCalls[2]).toBe("/emandar/api/panel/profile/participant");
     expect(calls).toContain("/emandar/api/me");
   });
 
@@ -209,10 +209,10 @@ describe("apiClient registration uploads", () => {
             height: 0,
           });
         }
-        if (target.endsWith("/api/panel/command/updateParticipantProfile")) {
+        if (target.endsWith("/api/panel/profile/participant")) {
           return jsonResponse({ ok: true, result: { ok: true } });
         }
-        if (target.endsWith("/api/public/bootstrap")) {
+        if (target.endsWith("/api/public/catalog")) {
           return jsonResponse({ trainers: [], publicTrainingEvents: [], appSettings: {} });
         }
         if (target.endsWith("/api/auth/session")) {
@@ -221,7 +221,7 @@ describe("apiClient registration uploads", () => {
         if (target.endsWith("/api/me")) {
           return jsonResponse({ user });
         }
-        if (target.endsWith("/api/panel/bootstrap")) {
+        if (target.includes("/api/panel/read-models/")) {
           return jsonResponse(createPrivateStore(user));
         }
         return new Response("Not found", { status: 404 });
@@ -243,7 +243,7 @@ describe("apiClient registration uploads", () => {
       "/emandar/api/auth/register-participant",
       "/emandar/api/uploads",
       "/emandar/api/uploads",
-      "/emandar/api/panel/command/updateParticipantProfile",
+      "/emandar/api/panel/profile/participant",
     ]);
   });
 });

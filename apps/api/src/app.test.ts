@@ -194,6 +194,35 @@ describe("emandar api", () => {
     await app.close();
   });
 
+  it("does not expose legacy bootstrap or command endpoints when the legacy flag is off", async () => {
+    const app = await buildApp({
+      config: {
+        ...config,
+        allowLegacyStoreApi: false,
+      },
+      store: new MemoryStoreRepository(testStoreForPermissions("admin", ["admin"])),
+    });
+
+    const publicBootstrap = await app.inject("/emandar/api/public/bootstrap");
+    expect(publicBootstrap.statusCode).toBe(404);
+
+    const panelBootstrap = await app.inject("/emandar/api/panel/bootstrap");
+    expect(panelBootstrap.statusCode).toBe(404);
+
+    const csrfToken = await csrf(app);
+    const command = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/command/updateParticipantProfile",
+      headers: {
+        cookie: csrfToken.cookie,
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: { args: [{}] },
+    });
+    expect(command.statusCode).toBe(404);
+    await app.close();
+  });
+
   it("confirms SMS code and creates an HTTP-only session cookie", async () => {
     const seed = await readSeedStore(config.seedStorePath);
     const app = await buildApp({

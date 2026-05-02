@@ -50,14 +50,16 @@ export type ConfirmSmsCodeResult =
       registrationToken: string;
     };
 
-const pollIntervalMs = 5000;
 const verifiedPhoneSessionKey = "emandar:verified-phone-preauth";
 
 let cachedPublicStore: StorePatch | null = null;
 let cachedPrivateStore: DemoStore | null = null;
 let cachedCurrentUser: AppUser | null = null;
+let cachedPublicStoreSignature = "";
+let cachedPrivateStoreSignature = "";
+let cachedCurrentUserSignature = "";
+let cachedAuthUserId: string | null | undefined;
 let cachedCsrfToken: string | null = null;
-let pollTimer: number | null = null;
 let nextListenerId = 1;
 
 const publicListeners = new Map<number, (patch: StorePatch) => void>();
@@ -88,6 +90,10 @@ export function createEmptyStore(): DemoStore {
 
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function serializeForChangeCheck(value: unknown) {
+  return JSON.stringify(value);
 }
 
 function getBasePath() {
@@ -187,26 +193,41 @@ async function postPublicJson<T>(path: string, payload: unknown) {
 
 async function refreshAuth() {
   const session = await fetchFirst<{ userId: string | null }>("auth/session").catch(() => ({ userId: null }));
-  authListeners.forEach((listener) => listener(session.userId));
+  if (session.userId !== cachedAuthUserId) {
+    cachedAuthUserId = session.userId;
+    authListeners.forEach((listener) => listener(session.userId));
+  }
   if (!session.userId) {
     cachedPrivateStore = null;
+    cachedPrivateStoreSignature = "";
     cachedCurrentUser = null;
+    cachedCurrentUserSignature = "";
     userProfileListeners.forEach(({ callback }) => callback(null));
     return null;
   }
 
   const me = await fetchFirst<{ user: AppUser }>("me").catch(() => null);
-  cachedCurrentUser = me?.user ?? null;
-  userProfileListeners.forEach(({ userId, callback }) => {
-    callback(userId === cachedCurrentUser?.id ? cloneValue(cachedCurrentUser) : null);
-  });
+  const nextCurrentUser = me?.user ?? null;
+  const nextCurrentUserSignature = serializeForChangeCheck(nextCurrentUser);
+  if (nextCurrentUserSignature !== cachedCurrentUserSignature) {
+    cachedCurrentUser = nextCurrentUser;
+    cachedCurrentUserSignature = nextCurrentUserSignature;
+    userProfileListeners.forEach(({ userId, callback }) => {
+      callback(userId === cachedCurrentUser?.id ? cloneValue(cachedCurrentUser) : null);
+    });
+  }
   return session.userId;
 }
 
 async function refreshPublicStore() {
   const patch = await fetchFirst<StorePatch>("public/bootstrap");
   patch.trainers = sortTrainerProfiles(patch.trainers ?? []);
+  const nextSignature = serializeForChangeCheck(patch);
+  if (nextSignature === cachedPublicStoreSignature) {
+    return;
+  }
   cachedPublicStore = patch;
+  cachedPublicStoreSignature = nextSignature;
   publicListeners.forEach((listener) => listener(cloneValue(patch)));
 }
 
@@ -218,7 +239,12 @@ async function refreshPrivateStore() {
   if (!store) {
     return;
   }
+  const nextSignature = serializeForChangeCheck(store);
+  if (nextSignature === cachedPrivateStoreSignature) {
+    return;
+  }
   cachedPrivateStore = store;
+  cachedPrivateStoreSignature = nextSignature;
   privateListeners.forEach((listener) => listener(cloneValue(store)));
   userProfileListeners.forEach(({ userId, callback }) => {
     callback(cloneValue(store.users.find((item) => item.id === userId) ?? null));
@@ -232,25 +258,11 @@ async function refreshAll() {
 }
 
 function maybeStartPolling() {
-  if (typeof window === "undefined" || pollTimer !== null) {
-    return;
-  }
-  pollTimer = window.setInterval(() => {
-    void refreshAll();
-  }, pollIntervalMs);
+  // Subscriptions load initial data, and commands call refreshAll after writes.
+  // Avoid background full-store polling because it causes visible panel refreshes.
 }
 
 function maybeStopPolling() {
-  if (
-    pollTimer === null ||
-    publicListeners.size > 0 ||
-    privateListeners.size > 0 ||
-    userProfileListeners.size > 0
-  ) {
-    return;
-  }
-  window.clearInterval(pollTimer);
-  pollTimer = null;
 }
 
 async function runCommand<T>(name: string, args: unknown[] = []) {
@@ -432,7 +444,10 @@ export async function signIn(email: string, password: string) {
 export async function signOut() {
   await postJson<{ ok: boolean }>("auth/logout", {});
   cachedCurrentUser = null;
+  cachedCurrentUserSignature = "";
   cachedPrivateStore = null;
+  cachedPrivateStoreSignature = "";
+  cachedAuthUserId = null;
   writeVerifiedPhoneState(null);
   authListeners.forEach((listener) => listener(null));
   privateListeners.forEach((listener) => listener({}));

@@ -1,10 +1,11 @@
 import { buildApp } from "./app.js";
 import { readConfig } from "./config.js";
-import { createStoreFromConfig } from "./runtime.js";
+import { createAuthStoreFromConfig, createStoreFromConfig } from "./runtime.js";
 
 const config = readConfig();
 const store = await createStoreFromConfig(config);
-const app = await buildApp({ config, store });
+const authStore = createAuthStoreFromConfig(config);
+const app = await buildApp({ config, store, authStore });
 
 await app.listen({
   host: config.host,

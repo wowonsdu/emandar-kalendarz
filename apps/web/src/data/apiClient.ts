@@ -33,6 +33,7 @@ type StorePatch = Partial<DemoStore>;
 
 export type VerifiedPhonePreAuthState = {
   phone: string;
+  registrationToken: string;
   verifiedAt: string;
   seedTrainerId?: string;
 };
@@ -46,6 +47,7 @@ export type ConfirmSmsCodeResult =
   | {
       status: "missing-account";
       phone: string;
+      registrationToken: string;
     };
 
 const pollIntervalMs = 5000;
@@ -54,6 +56,7 @@ const verifiedPhoneSessionKey = "emandar:verified-phone-preauth";
 let cachedPublicStore: StorePatch | null = null;
 let cachedPrivateStore: DemoStore | null = null;
 let cachedCurrentUser: AppUser | null = null;
+let cachedCsrfToken: string | null = null;
 let pollTimer: number | null = null;
 let nextListenerId = 1;
 
@@ -155,10 +158,23 @@ async function fetchFirst<T>(path: string, init?: RequestInit): Promise<T> {
   throw lastError instanceof Error ? lastError : new Error("Nie udało się połączyć z API.");
 }
 
+async function ensureCsrfToken() {
+  if (cachedCsrfToken) {
+    return cachedCsrfToken;
+  }
+  const response = await fetchFirst<{ token: string }>("auth/csrf");
+  cachedCsrfToken = response.token;
+  return response.token;
+}
+
 async function postJson<T>(path: string, payload: unknown) {
+  const csrfToken = await ensureCsrfToken();
   return fetchFirst<T>(path, {
     method: "POST",
     body: JSON.stringify(payload),
+    headers: {
+      "x-emandar-csrf": csrfToken,
+    },
   });
 }
 
@@ -380,6 +396,7 @@ export async function confirmSmsCode(phone: string, code: string, seedTrainerId?
   if (result.status === "missing-account") {
     writeVerifiedPhoneState({
       phone: result.phone,
+      registrationToken: result.registrationToken,
       verifiedAt: new Date().toISOString(),
       seedTrainerId,
     });
@@ -424,10 +441,20 @@ export async function ensurePhoneParticipantProfileForFlow(seedTrainerId?: strin
 
 export async function registerParticipant(input: ParticipantRegistrationInput) {
   const verified = readVerifiedPhoneState();
-  const result = await runCommand("registerParticipant", [
-    { ...stripFileFields(input as unknown as Record<string, unknown>), phone: verified?.phone ?? input.phone },
-  ]);
+  if (!verified?.registrationToken) {
+    throw new Error("Najpierw potwierdź numer telefonu kodem SMS.");
+  }
+  const registrationInput = {
+    ...stripFileFields(input as unknown as Record<string, unknown>),
+    phone: verified.phone,
+  };
+  const response = await postJson<{ ok: true; result: unknown }>("auth/register-participant", {
+    registrationToken: verified.registrationToken,
+    input: registrationInput,
+  });
+  const result = response.result;
   writeVerifiedPhoneState(null);
+  await refreshAll();
 
   if (input.avatarFile) {
     const avatarUrl = (await uploadImageWithSessionRetry(input.avatarFile, "avatar")).url;

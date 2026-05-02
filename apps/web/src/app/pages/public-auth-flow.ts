@@ -7,6 +7,7 @@ export type SmsConfirmOutcome =
   | {
       status: "missing-account";
       phone: string;
+      registrationToken?: string;
     };
 
 export type LoginSmsConfirmAction =

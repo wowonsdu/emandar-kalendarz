@@ -28,6 +28,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -72,7 +74,6 @@ import {
 import {
   aggregateEventCapacityStats,
   buildPhoneHref,
-  canApproveEnrollmentRequest,
   canPublishTrainingEvent,
   canDecideTrainingEventCollaboration,
   canManageTrainingEvent,
@@ -1045,18 +1046,6 @@ function getDaysUntilLabel(startsAt: string, now: Date) {
   }
 
   return `za ${daysUntil} dni`;
-}
-
-function isOperationalEnrollmentRequest(
-  request: EnrollmentRequest,
-  store: ReturnType<typeof useAppState>["store"],
-) {
-  const event = store.trainingEvents.find((item) => item.id === request.eventId);
-  if (!event?.groupId) {
-    return true;
-  }
-
-  return !request.eventParticipantId;
 }
 
 function isEventFinished(event: TrainingEvent) {
@@ -4056,14 +4045,21 @@ function CommunityPerformanceTooltip({
 function DashboardChartCard({
   title,
   description,
+  className,
   children,
 }: {
   title: string;
   description: string;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <article className="rounded-[1.5rem] border border-brand-line bg-white p-3.5 shadow-soft sm:rounded-[2rem] sm:p-5">
+    <article
+      className={cn(
+        "rounded-[1.5rem] border border-brand-line bg-white p-3.5 shadow-soft sm:rounded-[2rem] sm:p-5",
+        className,
+      )}
+    >
       <div className="min-h-0 sm:min-h-[88px]">
         <SectionBlockHeading title={title} description={description} />
       </div>
@@ -4129,34 +4125,6 @@ type DashboardMonthCapacityDatum = {
   availablePlaces: number;
 };
 
-type DashboardMonthRequestsDatum = {
-  key: string;
-  label: string;
-  total: number;
-};
-
-type DashboardMonthDecisionDatum = {
-  key: string;
-  label: string;
-  accepted: number;
-  pending: number;
-  rejected: number;
-  partial: number;
-};
-
-type DashboardMonthOutcomeDatum = {
-  key: string;
-  label: string;
-  confirmed: number;
-  cancelled: number;
-};
-
-type DashboardOrganizerGroupsDatum = {
-  organizerId: string;
-  label: string;
-  plannedGroups: number;
-};
-
 function MissingPeopleTooltip({
   active,
   payload,
@@ -4213,93 +4181,42 @@ function CapacityByMonthTooltip({
   );
 }
 
-function RequestsByMonthTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: DashboardMonthRequestsDatum }>;
-}) {
-  if (!active || !payload?.[0]) {
-    return null;
-  }
-
-  const item = payload[0].payload;
-
+function CapacityByMonthLineChart({ data }: { data: DashboardMonthCapacityDatum[] }) {
   return (
-    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
-      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
-      <p className="mt-2 text-sm text-brand-navy">Nowe zgloszenia: {item.total}</p>
-    </div>
-  );
-}
-
-function RequestDecisionsTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: DashboardMonthDecisionDatum }>;
-}) {
-  if (!active || !payload?.[0]) {
-    return null;
-  }
-
-  const item = payload[0].payload;
-
-  return (
-    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
-      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
-      <div className="mt-2 space-y-1 text-sm text-brand-navy">
-        <p>{getEnrollmentFinalStatusLabel("accepted")}: {item.accepted}</p>
-        <p>{getEnrollmentFinalStatusLabel("pending")}: {item.pending}</p>
-        <p>{getEnrollmentFinalStatusLabel("partial")}: {item.partial}</p>
-        <p>{getEnrollmentFinalStatusLabel("rejected")}: {item.rejected}</p>
+    <>
+      <DashboardLegend
+        items={[
+          { label: "Na rosterze", color: "#174f9a" },
+          { label: "Liczba miejsc", color: "#88aee0" },
+        ]}
+      />
+      <div className="h-[240px] sm:h-[320px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 8, right: 18, left: 0, bottom: 8 }}>
+            <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
+            <XAxis dataKey="label" stroke="#6982a0" />
+            <YAxis allowDecimals={false} stroke="#6982a0" />
+            <Tooltip content={<CapacityByMonthTooltip />} />
+            <Line
+              type="monotone"
+              dataKey="enrolledCount"
+              stroke="#174f9a"
+              strokeWidth={3}
+              dot={{ r: 4, strokeWidth: 2 }}
+              activeDot={{ r: 6 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="totalCapacity"
+              stroke="#88aee0"
+              strokeWidth={3}
+              dot={{ r: 4, strokeWidth: 2 }}
+              activeDot={{ r: 6 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
       </div>
-    </div>
-  );
-}
-
-function EventOutcomesTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: DashboardMonthOutcomeDatum }>;
-}) {
-  if (!active || !payload?.[0]) {
-    return null;
-  }
-
-  const item = payload[0].payload;
-
-  return (
-    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
-      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
-      <p className="mt-2 text-sm text-brand-navy">Potwierdzone: {item.confirmed}</p>
-      <p className="text-sm text-brand-navy">Anulowane: {item.cancelled}</p>
-    </div>
-  );
-}
-
-function OrganizerGroupsTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: DashboardOrganizerGroupsDatum }>;
-}) {
-  if (!active || !payload?.[0]) {
-    return null;
-  }
-
-  const item = payload[0].payload;
-
-  return (
-    <div className="rounded-2xl border border-brand-line bg-white px-4 py-3 shadow-soft">
-      <p className="text-sm font-semibold text-brand-navy">{item.label}</p>
-      <p className="mt-2 text-sm text-brand-navy">Zaplanowane grupy: {item.plannedGroups}</p>
-    </div>
+    </>
   );
 }
 
@@ -4710,18 +4627,6 @@ function OperationalDashboardPerspectiveView({
       }),
     [currentUser, organizerProfile, perspective, store.trainingEvents, trainerProfile],
   );
-  const relevantEventIds = useMemo(
-    () => new Set(relevantEvents.map((event) => event.id)),
-    [relevantEvents],
-  );
-  const relevantRequests = useMemo(
-    () => store.enrollmentRequests.filter((item) => relevantEventIds.has(item.eventId)),
-    [relevantEventIds, store.enrollmentRequests],
-  );
-  const relevantOperationalRequests = useMemo(
-    () => relevantRequests.filter((request) => isOperationalEnrollmentRequest(request, store)),
-    [relevantRequests, store],
-  );
   const communityEvents = useMemo(
     () =>
       isTrainerPerspective && trainerProfile
@@ -4859,45 +4764,6 @@ function OperationalDashboardPerspectiveView({
       }),
     [dashboardMonthBuckets, organizerAnalyticsEventsInRange],
   );
-  const organizerAnalyticsRequestsInRange = useMemo(() => {
-    if (!organizerOfficialDashboard || !dashboardWindow) {
-      return [];
-    }
-
-    const rangeStart = dashboardMonthBuckets[0]?.start ?? dashboardNow;
-    return organizerOfficialDashboard.requestHistoryRecords.filter(({ request }) =>
-      isDateWithinRange(request.createdAt, rangeStart, dashboardWindow.end),
-    );
-  }, [dashboardMonthBuckets, dashboardNow, dashboardWindow, organizerOfficialDashboard]);
-  const organizerRequestsByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => ({
-        key: bucket.key,
-        label: bucket.label,
-        total: organizerAnalyticsRequestsInRange.filter(({ request }) =>
-          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
-        ).length,
-      })),
-    [dashboardMonthBuckets, organizerAnalyticsRequestsInRange],
-  );
-  const organizerRequestDecisionsByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => {
-        const monthRequests = organizerAnalyticsRequestsInRange.filter(({ request }) =>
-          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
-        );
-
-        return {
-          key: bucket.key,
-          label: bucket.label,
-          accepted: monthRequests.filter(({ request }) => request.finalStatus === "accepted").length,
-          pending: monthRequests.filter(({ request }) => request.finalStatus === "pending").length,
-          rejected: monthRequests.filter(({ request }) => request.finalStatus === "rejected").length,
-          partial: monthRequests.filter(({ request }) => request.finalStatus === "partial").length,
-        };
-      }),
-    [dashboardMonthBuckets, organizerAnalyticsRequestsInRange],
-  );
   const analyticsEventsInRange = useMemo(() => {
     if (!dashboardWindow) {
       return [];
@@ -4984,101 +4850,6 @@ function OperationalDashboardPerspectiveView({
       }),
     [analyticsActiveEvents, dashboardMonthBuckets],
   );
-  const organizerGroupsData = useMemo(() => {
-    if (!isTrainerPerspective) {
-      return [];
-    }
-
-    const grouped = analyticsActiveEvents.reduce<Map<string, DashboardOrganizerGroupsDatum>>(
-      (summary, event) => {
-        if (!event.organizerId) {
-          return summary;
-        }
-
-        const organizer = store.organizers.find((item) => item.id === event.organizerId);
-        const existing = summary.get(event.organizerId);
-
-        if (existing) {
-          existing.plannedGroups += 1;
-          return summary;
-        }
-
-        summary.set(event.organizerId, {
-          organizerId: event.organizerId,
-          label: organizer?.displayName ?? "Nieznany organizator",
-          plannedGroups: 1,
-        });
-
-        return summary;
-      },
-      new Map(),
-    );
-
-    return [...grouped.values()].sort((left, right) => {
-      if (right.plannedGroups !== left.plannedGroups) {
-        return right.plannedGroups - left.plannedGroups;
-      }
-
-      return left.label.localeCompare(right.label, "pl");
-    });
-  }, [analyticsActiveEvents, isTrainerPerspective, store.organizers]);
-  const analyticsRequestsInRange = useMemo(() => {
-    if (!dashboardWindow) {
-      return [];
-    }
-
-    const rangeStart = dashboardMonthBuckets[0]?.start ?? new Date();
-    return relevantOperationalRequests.filter((request) =>
-      isDateWithinRange(request.createdAt, rangeStart, dashboardWindow.end),
-    );
-  }, [dashboardMonthBuckets, dashboardWindow, relevantOperationalRequests]);
-  const requestsByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => ({
-        key: bucket.key,
-        label: bucket.label,
-        total: analyticsRequestsInRange.filter((request) =>
-          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
-        ).length,
-      })),
-    [analyticsRequestsInRange, dashboardMonthBuckets],
-  );
-  const requestDecisionsByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => {
-        const monthRequests = analyticsRequestsInRange.filter((request) =>
-          isDateWithinRange(request.createdAt, bucket.start, bucket.end),
-        );
-
-        return {
-          key: bucket.key,
-          label: bucket.label,
-          accepted: monthRequests.filter((request) => request.finalStatus === "accepted").length,
-          pending: monthRequests.filter((request) => request.finalStatus === "pending").length,
-          rejected: monthRequests.filter((request) => request.finalStatus === "rejected").length,
-          partial: monthRequests.filter((request) => request.finalStatus === "partial").length,
-        };
-      }),
-    [analyticsRequestsInRange, dashboardMonthBuckets],
-  );
-  const eventOutcomesByMonthData = useMemo(
-    () =>
-      dashboardMonthBuckets.map((bucket) => ({
-        key: bucket.key,
-        label: bucket.label,
-        confirmed: analyticsEventsInRange.filter(
-          (event) =>
-            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
-            resolveTrainingEventStatus(event.status) === "confirmed",
-        ).length,
-        cancelled: analyticsEventsInRange.filter(
-          (event) =>
-            isDateWithinRange(event.startsAt, bucket.start, bucket.end) &&
-            resolveTrainingEventStatus(event.status) === "cancelled",
-        ).length,
-      })),
-    [analyticsEventsInRange, dashboardMonthBuckets],
-  );
   const relationsCount = useMemo(() => {
     if (isTrainerPerspective) {
       return trainerProfile
@@ -5092,22 +4863,6 @@ function OperationalDashboardPerspectiveView({
   }, [isTrainerPerspective, organizerProfile, store.relations, trainerProfile]);
 
   if (!isTrainerPerspective) {
-    const newRequestsCount = store.enrollmentRequests.filter((request) => {
-      if (request.finalStatus !== "pending") {
-        return false;
-      }
-
-      if (!isOperationalEnrollmentRequest(request, store)) {
-        return false;
-      }
-
-      const event = store.trainingEvents.find((item) => item.id === request.eventId);
-      if (!event) {
-        return false;
-      }
-
-      return canApproveEnrollmentRequest(event, currentUser);
-    }).length;
     const nextPipelineEvent = organizerOfficialDashboard?.pipelineEvents[0] ?? null;
     const followingPipelineEvent = organizerOfficialDashboard?.pipelineEvents[1] ?? null;
     const nextPipelineEventDate = nextPipelineEvent
@@ -5131,18 +4886,7 @@ function OperationalDashboardPerspectiveView({
 
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 md:grid-cols-6 sm:gap-4">
-          <StatCard
-            label="Nowe"
-            value={newRequestsCount}
-            icon={Bell}
-            layout="stacked"
-            className="min-h-[108px] w-full min-w-0"
-            labelClassName="whitespace-nowrap"
-            iconWrapperClassName={
-              newRequestsCount > 0 ? "bg-red-500 text-white" : ""
-            }
-          />
+        <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 md:grid-cols-5 sm:gap-4">
           <StatCard
             label="Najbliższe"
             value={nextPipelineEventDate}
@@ -5199,7 +4943,7 @@ function OperationalDashboardPerspectiveView({
               Najbliższe terminy i ile osób jeszcze brakuje
             </p>
           </div>
-          <div className="grid gap-4 xl:grid-cols-3">
+          <div className="grid gap-4 xl:grid-cols-2">
             <DashboardChartCard
               title="Może dołączyć"
               description="Najbliższe terminy wg ilości osób, które mogą dołączyć."
@@ -5268,101 +5012,14 @@ function OperationalDashboardPerspectiveView({
             <DashboardChartCard
               title="Obłożenie w miesiącach"
               description="Łączna liczba osób na rosterze versus cała pula miejsc w pipeline grup."
+              className="xl:col-span-2"
             >
-              <DashboardLegend
-                items={[
-                  { label: "Na rosterze", color: "#174f9a" },
-                  { label: "Liczba miejsc", color: "#88aee0" },
-                ]}
-              />
-              <div className="h-[220px] sm:h-[280px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={organizerCapacityByMonthData}
-                    margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
-                  >
-                    <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                    <XAxis dataKey="label" stroke="#6982a0" />
-                    <YAxis allowDecimals={false} stroke="#6982a0" />
-                    <Tooltip content={<CapacityByMonthTooltip />} />
-                    <Bar dataKey="enrolledCount" fill="#174f9a" radius={[10, 10, 0, 0]} />
-                    <Bar dataKey="totalCapacity" fill="#88aee0" radius={[10, 10, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <CapacityByMonthLineChart data={organizerCapacityByMonthData} />
             </DashboardChartCard>
           </div>
         </section>
 
-        <section className="space-y-4">
-          <div>
-            <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
-              Jak spływają zgłoszenia do grupowych szkoleń
-            </p>
-          </div>
-          <div className="grid gap-4 xl:grid-cols-2">
-            <DashboardChartCard
-              title="Zgłoszenia udziału w miesiącach"
-              description="Nowe prośby o dołączenie do szkoleń Emandar policzone po miesiącu utworzenia."
-            >
-              {organizerAnalyticsRequestsInRange.length === 0 ? (
-                <DashboardChartEmptyState message="Brak zgłoszeń udziału w bieżącym oknie 3 miesięcy." />
-              ) : (
-                <div className="h-[220px] sm:h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={organizerRequestsByMonthData}
-                      margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
-                    >
-                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                      <XAxis dataKey="label" stroke="#6982a0" />
-                      <YAxis allowDecimals={false} stroke="#6982a0" />
-                      <Tooltip content={<RequestsByMonthTooltip />} />
-                      <Bar dataKey="total" fill="#174f9a" radius={[10, 10, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </DashboardChartCard>
-
-            <DashboardChartCard
-              title="Statusy zgłoszeń udziału"
-              description="Accepted, pending i rejected są liczone z requestów, także po syncu do rosteru."
-            >
-              {organizerAnalyticsRequestsInRange.length === 0 ? (
-                <DashboardChartEmptyState message="Brak zgłoszeń udziału do pokazania w tym okresie." />
-              ) : (
-                <>
-                  <DashboardLegend
-                    items={[
-                      { label: "Potwierdzono", color: "#0ea5a4" },
-                      { label: "Oczekujące", color: "#174f9a" },
-                      { label: "Odrzucono", color: "#c84b4b" },
-                    ]}
-                  />
-                  <div className="h-[220px] sm:h-[280px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={organizerRequestDecisionsByMonthData}
-                        margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
-                      >
-                        <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                        <XAxis dataKey="label" stroke="#6982a0" />
-                        <YAxis allowDecimals={false} stroke="#6982a0" />
-                        <Tooltip content={<RequestDecisionsTooltip />} />
-                        <Bar dataKey="accepted" stackId="status" fill="#0ea5a4" />
-                        <Bar dataKey="pending" stackId="status" fill="#174f9a" />
-                        <Bar dataKey="rejected" stackId="status" fill="#c84b4b" radius={[10, 10, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </>
-              )}
-            </DashboardChartCard>
-          </div>
-        </section>
-
-        <div className="grid gap-4 sm:gap-6 xl:grid-cols-3">
+        <div className="grid gap-4 sm:gap-6 xl:grid-cols-2">
           <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
             <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">
               Najbliższe grupy do ogarnięcia
@@ -5380,9 +5037,6 @@ function OperationalDashboardPerspectiveView({
                   <p className="text-sm text-brand-muted">
                     Terminy w pipeline: {summary.upcomingEventCount}
                   </p>
-                  <p className="text-sm text-brand-muted">
-                    Czekają na decyzję: {summary.pendingRequestCount}
-                  </p>
                   <p className="mt-2 text-sm text-brand-navy">
                     Najbliższy termin:{" "}
                     {summary.nextEvent
@@ -5394,42 +5048,6 @@ function OperationalDashboardPerspectiveView({
               {(organizerOfficialDashboard?.groupSummaries.length ?? 0) === 0 && (
                 <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
                   Brak aktywnych grup organizatora.
-                </p>
-              )}
-            </div>
-          </article>
-
-          <article className="rounded-[2rem] border border-brand-line bg-white p-4 shadow-soft sm:p-6">
-            <h3 className="text-xl font-semibold text-brand-navy sm:text-2xl">
-              Terminy wymagające decyzji
-            </h3>
-            <div className="mt-5 space-y-4">
-              {(organizerOfficialDashboard?.eventsRequiringDecision ?? []).slice(0, 4).map((summary) => (
-                <div
-                  key={summary.event.id}
-                  className="rounded-3xl border border-brand-line bg-brand-shell p-4"
-                >
-                  <p className="font-semibold text-brand-navy">{summary.group.name}</p>
-                  <p className="mt-1 text-sm text-brand-muted">
-                    {formatDate(summary.event.startsAt)} • {summary.event.location}
-                  </p>
-                  <p className="mt-2 text-sm text-brand-navy">
-                    Oczekujące zgłoszenia: {summary.pendingRequestCount}
-                  </p>
-                  <p className="text-sm text-brand-muted">
-                    Wolne miejsca: {summary.missingPeople} • Zapełnienie: {Math.round(summary.fillRate)}%
-                  </p>
-                  <p className="text-sm text-brand-muted">
-                    Na rosterze: {getEventParticipantCount(summary.event)}/{summary.event.capacity}
-                    {getEventOverflowCount(summary.event) > 0
-                      ? ` • Nad limit: ${getEventOverflowCount(summary.event)}`
-                      : ""}
-                  </p>
-                </div>
-              ))}
-              {(organizerOfficialDashboard?.eventsRequiringDecision.length ?? 0) === 0 && (
-                <p className="rounded-3xl bg-brand-shell p-4 text-brand-muted">
-                  Brak terminów z oczekującymi zgłoszeniami.
                 </p>
               )}
             </div>
@@ -5461,9 +5079,8 @@ function OperationalDashboardPerspectiveView({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
         <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
-        <StatCard label="Chcą wziąć udział" value={relevantOperationalRequests.length} icon={Bell} />
         <StatCard label="Powiadomienia" value={notificationsCount} icon={ShieldCheck} />
         <StatCard label="Relacje" value={relationsCount} icon={Users} />
       </div>
@@ -5471,20 +5088,16 @@ function OperationalDashboardPerspectiveView({
       <section className="space-y-4">
         <div>
           <p className="text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
-            Nadchodzace szkolenia i ile osob jeszcze brakuje
+            Nadchodzące szkolenia i ile osób jeszcze brakuje
           </p>
         </div>
-        <div
-          className={`grid gap-4 xl:grid-cols-2 ${
-            isTrainerPerspective ? "2xl:grid-cols-4" : "2xl:grid-cols-3"
-          }`}
-        >
+        <div className="grid gap-4 xl:grid-cols-2">
           <DashboardChartCard
-            title="Brakuje osob do domkniecia"
-            description="Szybki podglad, ile miejsc trzeba jeszcze dopelnic w najblizszych terminach."
+            title="Brakuje osób do domknięcia"
+            description="Szybki podgląd, ile miejsc trzeba jeszcze dopełnić w najbliższych terminach."
           >
             {missingPeopleData.length === 0 ? (
-              <DashboardChartEmptyState message="Brak aktywnych albo potwierdzonych wydarzen w najblizszych 3 miesiacach." />
+              <DashboardChartEmptyState message="Brak aktywnych albo potwierdzonych wydarzeń w najbliższych 3 miesiącach." />
             ) : (
               <div style={{ height: `${getDashboardChartHeight(missingPeopleData.length)}px` }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -5510,11 +5123,11 @@ function OperationalDashboardPerspectiveView({
           </DashboardChartCard>
 
           <DashboardChartCard
-            title="Zapelnienie terminow"
-            description="Porownanie wydarzen wedlug procentu zapełnienia rosteru."
+            title="Zapełnienie terminów"
+            description="Porównanie wydarzeń według procentu zapełnienia rosteru."
           >
             {fillRateData.length === 0 ? (
-              <DashboardChartEmptyState message="Brak wydarzen do porownania w tym oknie czasu." />
+              <DashboardChartEmptyState message="Brak wydarzeń do porównania w tym oknie czasu." />
             ) : (
               <div style={{ height: `${getDashboardChartHeight(fillRateData.length)}px` }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -5549,154 +5162,11 @@ function OperationalDashboardPerspectiveView({
           </DashboardChartCard>
 
           <DashboardChartCard
-            title="Oblozenie w miesiacach"
-            description="Laczna liczba osob na rosterze versus cala pula miejsc w nadchodzacych miesiacach."
+            title="Obłożenie w miesiącach"
+            description="Łączna liczba osób na rosterze versus cała pula miejsc w nadchodzących miesiącach."
+            className="xl:col-span-2"
           >
-            <DashboardLegend
-              items={[
-                { label: "Na rosterze", color: "#174f9a" },
-                { label: "Liczba miejsc", color: "#88aee0" },
-              ]}
-            />
-            <div className="h-[220px] sm:h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={capacityByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
-                  <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                  <XAxis dataKey="label" stroke="#6982a0" />
-                  <YAxis allowDecimals={false} stroke="#6982a0" />
-                  <Tooltip content={<CapacityByMonthTooltip />} />
-                  <Bar dataKey="enrolledCount" fill="#174f9a" radius={[10, 10, 0, 0]} />
-                  <Bar dataKey="totalCapacity" fill="#88aee0" radius={[10, 10, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </DashboardChartCard>
-
-          {isTrainerPerspective && (
-            <DashboardChartCard
-              title="Grupy wedlug organizatorow"
-              description="Ile zaplanowanych grup masz w tym samym oknie czasu u kazdego organizatora."
-            >
-              {organizerGroupsData.length === 0 ? (
-                <DashboardChartEmptyState message="Brak zaplanowanych grup z przypisanym organizatorem w najblizszych 3 miesiacach." />
-              ) : (
-                <div style={{ height: `${getDashboardChartHeight(organizerGroupsData.length)}px` }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={organizerGroupsData}
-                      layout="vertical"
-                      margin={{ top: 8, right: 20, left: 8, bottom: 8 }}
-                    >
-                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                      <XAxis type="number" allowDecimals={false} stroke="#6982a0" />
-                      <YAxis
-                        type="category"
-                        dataKey="label"
-                        width={190}
-                        tick={{ fill: "#123e78", fontSize: 12 }}
-                      />
-                      <Tooltip content={<OrganizerGroupsTooltip />} />
-                      <Bar dataKey="plannedGroups" fill="#0f766e" radius={[0, 14, 14, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </DashboardChartCard>
-          )}
-        </div>
-      </section>
-
-      <section className="space-y-4">
-        <div>
-          <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
-            Operacyjnie
-          </p>
-          <p className="mt-2 text-xl font-semibold leading-tight text-brand-navy sm:text-2xl">
-            Jak splywaja zgloszenia i czym koncza sie terminy
-          </p>
-        </div>
-        <div className="grid gap-4 xl:grid-cols-3">
-          <DashboardChartCard
-            title="Zgłoszenia udziału w miesiącach"
-            description="Nowe prośby o dołączenie do wydarzeń policzone po miesiącu utworzenia."
-          >
-            {analyticsRequestsInRange.length === 0 ? (
-              <DashboardChartEmptyState message="Brak zgłoszeń udziału w bieżącym oknie 3 miesięcy." />
-            ) : (
-              <div className="h-[220px] sm:h-[280px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={requestsByMonthData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
-                    <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                    <XAxis dataKey="label" stroke="#6982a0" />
-                    <YAxis allowDecimals={false} stroke="#6982a0" />
-                    <Tooltip content={<RequestsByMonthTooltip />} />
-                    <Bar dataKey="total" fill="#174f9a" radius={[10, 10, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </DashboardChartCard>
-
-          <DashboardChartCard
-            title="Statusy zgłoszeń udziału w miesiącach"
-            description="Widać, ile zgłoszeń nadal czeka, a ile jest już rozstrzygniętych."
-          >
-            {analyticsRequestsInRange.length === 0 ? (
-              <DashboardChartEmptyState message="Brak zgłoszeń udziału do pokazania w tym okresie." />
-            ) : (
-              <>
-                <DashboardLegend
-                  items={[
-                    { label: "Potwierdzono", color: "#0ea5a4" },
-                    { label: "Oczekujące", color: "#174f9a" },
-                    { label: "Odrzucono", color: "#c84b4b" },
-                  ]}
-                />
-                <div className="h-[220px] sm:h-[280px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={requestDecisionsByMonthData}
-                      margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
-                    >
-                      <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                      <XAxis dataKey="label" stroke="#6982a0" />
-                      <YAxis allowDecimals={false} stroke="#6982a0" />
-                      <Tooltip content={<RequestDecisionsTooltip />} />
-                      <Bar dataKey="accepted" stackId="status" fill="#0ea5a4" />
-                      <Bar dataKey="pending" stackId="status" fill="#174f9a" />
-                      <Bar dataKey="rejected" stackId="status" fill="#c84b4b" radius={[10, 10, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </>
-            )}
-          </DashboardChartCard>
-
-          <DashboardChartCard
-            title="Potwierdzenia i anulacje"
-            description="Miesieczny wynik wydarzen, ktore doszly do skutku albo wypadly z kalendarza."
-          >
-            <DashboardLegend
-              items={[
-                { label: "Potwierdzone", color: "#0ea5a4" },
-                { label: "Anulowane", color: "#c84b4b" },
-              ]}
-            />
-            <div className="h-[220px] sm:h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={eventOutcomesByMonthData}
-                  margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
-                >
-                  <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
-                  <XAxis dataKey="label" stroke="#6982a0" />
-                  <YAxis allowDecimals={false} stroke="#6982a0" />
-                  <Tooltip content={<EventOutcomesTooltip />} />
-                  <Bar dataKey="confirmed" fill="#0ea5a4" radius={[10, 10, 0, 0]} />
-                  <Bar dataKey="cancelled" fill="#c84b4b" radius={[10, 10, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <CapacityByMonthLineChart data={capacityByMonthData} />
           </DashboardChartCard>
         </div>
       </section>

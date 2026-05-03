@@ -80,6 +80,7 @@ import {
 } from "@/app/components/ui/dialog";
 import { AvatarMedia } from "@/app/components/avatar-media";
 import { CommunityEventCard } from "@/app/components/community-event-card";
+import { PublicEventJoinButton } from "@/app/components/public-event-join-button";
 import { useAppState } from "../../providers/AppProviders";
 
 const emandarCalendarLogoUrl = `${import.meta.env.BASE_URL}brand-assets/emandar-logo.png`;
@@ -1213,13 +1214,7 @@ function EventCard({
                 Edytuj
               </Link>
             )}
-            <Link
-              to={`/kalendarz/${event.id}`}
-              className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
-            >
-              Biorę udział
-              <ArrowRight size={16} />
-            </Link>
+            <PublicEventJoinButton eventId={event.id} />
           </div>
         </div>
       ) : null}
@@ -1300,13 +1295,7 @@ function EventCard({
                   Edytuj szkolenie
                 </Link>
               )}
-              <Link
-                to={`/kalendarz/${event.id}`}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-              >
-                Biorę udział
-                <ArrowRight size={16} />
-              </Link>
+              <PublicEventJoinButton eventId={event.id} />
             </div>
           </div>
           <div

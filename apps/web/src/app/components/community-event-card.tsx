@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ArrowRight, CalendarDays, ChevronDown, Images, MapPin } from "lucide-react";
+import { CalendarDays, ChevronDown, Images, MapPin } from "lucide-react";
 import { Link } from "react-router";
 import type { AppUser, DemoStore, TrainingEvent, TrainingEventImage } from "@/domain/types";
 import {
@@ -8,6 +8,7 @@ import {
   getTrainingEventScheduleDays,
   isCommunityBrandStatus,
 } from "@/domain/utils";
+import { PublicEventJoinButton } from "@/app/components/public-event-join-button";
 import {
   Dialog,
   DialogClose,
@@ -307,13 +308,7 @@ export function CommunityEventCard({
             {placement === "mobile" ? "Edytuj" : "Edytuj wydarzenie"}
           </Link>
         )}
-        <Link
-          to={`/kalendarz/${event.id}`}
-          className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft"
-        >
-          Biorę udział
-          <ArrowRight size={16} />
-        </Link>
+        <PublicEventJoinButton eventId={event.id} />
       </>
     );
   }

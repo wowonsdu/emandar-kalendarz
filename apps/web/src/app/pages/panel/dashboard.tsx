@@ -5394,14 +5394,6 @@ function RoleAwareDashboardView({
     <PanelSection
       eyebrow={getRoleLabel(currentUser.role)}
       title={getDashboardPerspectiveTitle(activePerspective)}
-      description={
-        activePerspective === "participant"
-          ? "Twoje zapisy, dwa najbliższe szkolenia i terminy, które nadal wymagają potwierdzenia udziału."
-          : activePerspective === "organizer"
-            ? "Twoje grupy, szkolenia, powiadomienia i nadchodzące akcje."
-          : undefined
-      }
-      showLeadText
     >
       {perspectives.length > 1 ? (
         <div className="flex justify-start">

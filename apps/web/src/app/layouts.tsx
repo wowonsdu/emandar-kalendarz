@@ -94,6 +94,25 @@ function getPublicDesktopNavLabel(item: (typeof publicNavItems)[number]) {
   return item.to === "/kalendarz" ? "Wydarzenia Emandar" : item.label;
 }
 
+const officialPublicBackgroundClassName =
+  "bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.24),_transparent_34%),linear-gradient(180deg,_#fbfffc_0%,_#ecfdf5_52%,_#ffffff_100%)]";
+const communityPublicBackgroundClassName =
+  "bg-[radial-gradient(circle_at_top,_rgba(139,92,246,0.22),_transparent_34%),linear-gradient(180deg,_#fdfbff_0%,_#f5f3ff_52%,_#ffffff_100%)]";
+const defaultPublicBackgroundClassName =
+  "bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]";
+
+function getPublicLayoutBackgroundClassName(pathname: string) {
+  if (pathname.startsWith("/wydarzenia-spolecznosci")) {
+    return communityPublicBackgroundClassName;
+  }
+
+  if (pathname.startsWith("/trenerzy") || pathname.startsWith("/kalendarz")) {
+    return officialPublicBackgroundClassName;
+  }
+
+  return defaultPublicBackgroundClassName;
+}
+
 export function PublicLayout() {
   const {
     currentUser,
@@ -120,6 +139,7 @@ export function PublicLayout() {
     state: location.state,
     rootPaths: publicRootPaths,
   });
+  const publicBackgroundClassName = getPublicLayoutBackgroundClassName(location.pathname);
 
   function handlePublicBack() {
     const target = resolveHeaderBackTarget(
@@ -171,7 +191,12 @@ export function PublicLayout() {
   }, [isMobileMenuOpen]);
 
   return (
-    <div className="flex min-h-screen flex-col overflow-x-clip bg-[radial-gradient(circle_at_top,_rgba(126,211,255,0.35),_transparent_32%),linear-gradient(180deg,_#f8fcff_0%,_#eef7fd_55%,_#ffffff_100%)]">
+    <div
+      className={[
+        "flex min-h-screen flex-col overflow-x-clip transition-colors duration-300",
+        publicBackgroundClassName,
+      ].join(" ")}
+    >
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div
           className={buildStandardHeaderInnerClassName(

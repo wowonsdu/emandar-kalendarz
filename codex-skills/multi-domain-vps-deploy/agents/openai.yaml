@@ -1,0 +1,4 @@
+interface:
+  display_name: "VPS Domain Deploy"
+  short_description: "Route apps safely on the shared VPS"
+  default_prompt: "Use $multi-domain-vps-deploy to deploy or route a project under panel.ceo, magazynek.online, or gdzieciegniecie.pl without breaking existing hosts."

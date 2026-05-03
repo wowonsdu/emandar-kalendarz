@@ -39,7 +39,7 @@ import {
 
 function brandNavLinkClass({ isActive }: { isActive: boolean }) {
   return [
-    "inline-flex min-h-10 max-w-[9.75rem] items-center justify-center rounded-full px-4 py-2 text-center text-sm font-semibold leading-tight transition-colors",
+    "inline-flex min-h-10 min-w-0 max-w-full items-center justify-center rounded-full px-4 py-2 text-center text-sm font-semibold leading-tight transition-colors lg:max-w-[9.5rem] xl:max-w-full",
     isActive
       ? "bg-brand-navy text-white"
       : "text-brand-navy/80 hover:bg-white hover:text-brand-navy",
@@ -175,17 +175,17 @@ export function PublicLayout() {
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div
           className={buildStandardHeaderInnerClassName(
-            "mx-auto flex max-w-[90rem] items-center gap-3 px-4 sm:gap-6 sm:px-6 lg:px-8 xl:grid xl:grid-cols-[19rem_minmax(0,1fr)_auto]",
+            "mx-auto flex max-w-[90rem] items-center gap-3 px-4 sm:px-6 lg:grid lg:grid-cols-[13rem_minmax(0,1fr)_auto] lg:px-8 xl:grid-cols-[19rem_minmax(0,1fr)_auto] xl:gap-6",
           )}
         >
-          <div className="min-w-0 xl:hidden">
+          <div className="min-w-0 lg:hidden">
             <BrandMark />
           </div>
-          <div className="hidden min-w-0 xl:block">
+          <div className="hidden min-w-0 lg:block">
             <BrandMark />
           </div>
 
-          <nav className="hidden min-w-0 flex-wrap items-center gap-2 xl:flex">
+          <nav className="hidden min-w-0 flex-nowrap items-center gap-2 lg:flex">
             {publicPrimaryNavItems.map((item) => (
               <NavLink
                 key={item.to}
@@ -214,7 +214,7 @@ export function PublicLayout() {
                 to={userHomePath}
                 className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-2 text-xs font-semibold text-white shadow-soft sm:px-5 sm:py-2.5 sm:text-sm"
               >
-                <LayoutDashboard size={16} />
+                <LayoutDashboard size={16} className="hidden xl:block" />
                 <span className="hidden sm:inline">Moja Przestrzeń</span>
                 <span className="sm:hidden">Panel</span>
               </Link>
@@ -224,21 +224,21 @@ export function PublicLayout() {
                   to="/login"
                   className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-3 py-2 text-xs font-semibold text-brand-navy sm:px-5 sm:py-2.5 sm:text-sm"
                 >
-                  <ShieldCheck size={15} className="hidden sm:block" />
+                  <ShieldCheck size={15} className="hidden xl:block" />
                   Logowanie
                 </Link>
                 <Link
                   to="/rejestracja"
                   className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-3 py-2 text-xs font-semibold text-white shadow-soft sm:px-5 sm:py-2.5 sm:text-sm"
                 >
-                  <ShieldCheck size={15} className="hidden sm:block" />
+                  <ShieldCheck size={15} className="hidden xl:block" />
                   Rejestracja
                 </Link>
               </>
             )}
           </PublicDesktopActions>
 
-          <div className="ml-auto flex items-center gap-2 xl:hidden">
+          <div className="ml-auto flex items-center gap-2 lg:hidden">
             {publicBackConfig.showBackButton ? (
               <HeaderBackButton onClick={handlePublicBack} />
             ) : null}
@@ -259,7 +259,7 @@ export function PublicLayout() {
       </main>
 
       {isMobileMenuOpen ? (
-        <div className="fixed inset-0 z-40 xl:hidden">
+        <div className="fixed inset-0 z-40 lg:hidden">
           <button
             type="button"
             aria-label="Zamknij menu"

@@ -700,6 +700,120 @@ describe("emandar api", () => {
     await app.close();
   });
 
+  it("filters public event pages before pagination and returns full-collection facets", async () => {
+    const trainingEvents = [
+      {
+        id: "official-multiday",
+        title: "Official Multiday",
+        brandStatus: "official",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-1",
+        tags: ["NOWE OSOBY", "Weekend"],
+        startsAt: "2026-07-10T08:00:00.000Z",
+        endsAt: "2026-07-11T10:00:00.000Z",
+        scheduleDays: [
+          { startsAt: "2026-07-10T08:00:00.000Z", endsAt: "2026-07-10T10:00:00.000Z" },
+          { startsAt: "2026-07-11T08:00:00.000Z", endsAt: "2026-07-11T10:00:00.000Z" },
+        ],
+      },
+      {
+        id: "official-load",
+        title: "Official Load",
+        brandStatus: "official",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-2",
+        tags: ["LOAD-TEST"],
+        startsAt: "2026-07-20T08:00:00.000Z",
+        endsAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        id: "official-new-trainer-2",
+        title: "Official New Trainer 2",
+        brandStatus: "official",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-2",
+        tags: ["nowe osoby"],
+        startsAt: "2026-08-01T08:00:00.000Z",
+        endsAt: "2026-08-01T10:00:00.000Z",
+      },
+      {
+        id: "community-trainer-1",
+        title: "Community Trainer 1",
+        brandStatus: "supported",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-1",
+        tags: ["Krąg"],
+        startsAt: "2026-07-15T08:00:00.000Z",
+        endsAt: "2026-07-15T10:00:00.000Z",
+      },
+      {
+        id: "community-trainer-3",
+        title: "Community Trainer 3",
+        brandStatus: "supported",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-3",
+        tags: ["LOAD-TEST"],
+        startsAt: "2026-07-16T08:00:00.000Z",
+        endsAt: "2026-07-16T10:00:00.000Z",
+      },
+    ];
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository({
+        ...testStoreForPermissions("admin", ["admin"]),
+        trainers: [
+          { id: "trainer-1", displayName: "Anna", isVisible: true },
+          { id: "trainer-2", displayName: "Beata", isVisible: true },
+          { id: "trainer-3", displayName: "Celina", isVisible: true },
+        ],
+        trainingEvents,
+        publicTrainingEvents: trainingEvents,
+      }),
+    });
+
+    const tagPage = await app.inject("/emandar/api/public/events?tag=nowe%20osoby&pageSize=1");
+    expect(tagPage.statusCode).toBe(200);
+    expect(tagPage.json()).toMatchObject({
+      page: 1,
+      pageSize: 1,
+      totalItems: 2,
+      totalPages: 2,
+    });
+    expect(tagPage.json().items).toHaveLength(1);
+    expect(tagPage.json().filters.tags).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "NOWE OSOBY", label: "NOWE OSOBY", count: 2 }),
+        expect.objectContaining({ value: "LOAD-TEST", label: "LOAD-TEST", count: 1 }),
+      ]),
+    );
+
+    const combined = await app.inject("/emandar/api/public/events?tag=NOWE%20OSOBY&trainerId=trainer-2");
+    expect(combined.json().totalItems).toBe(1);
+    expect(combined.json().items[0].id).toBe("official-new-trainer-2");
+
+    const dateOverlap = await app.inject("/emandar/api/public/events?dateFrom=2026-07-11&dateTo=2026-07-11");
+    expect(dateOverlap.json().items.map((item: { id: string }) => item.id)).toContain("official-multiday");
+
+    const community = await app.inject("/emandar/api/public/community-events?trainerId=trainer-3");
+    expect(community.json().totalItems).toBe(1);
+    expect(community.json().items[0].id).toBe("community-trainer-3");
+
+    const invalidDate = await app.inject("/emandar/api/public/events?dateFrom=2026-02-31");
+    expect(invalidDate.statusCode).toBe(400);
+    expect(invalidDate.json()).toEqual({ error: "invalid-query" });
+
+    const invalidRange = await app.inject("/emandar/api/public/community-events?dateFrom=2026-08-01&dateTo=2026-07-01");
+    expect(invalidRange.statusCode).toBe(400);
+    expect(invalidRange.json()).toEqual({ error: "invalid-query" });
+
+    await app.close();
+  });
+
   it("requires valid one-use signed tokens for public attendance links", async () => {
     const authStore = new InMemoryAuthStore();
     const app = await buildApp({

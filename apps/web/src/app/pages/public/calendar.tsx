@@ -10,6 +10,7 @@ import {
   MapPin,
   Phone,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Users,
   X,
@@ -17,7 +18,7 @@ import {
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Link, Navigate, useNavigate, useParams } from "react-router";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import type {
   AppUser,
@@ -32,6 +33,8 @@ import {
   type ConfirmSmsCodeResult,
   fetchAppUser,
   fetchPublicEventsPage,
+  type PublicEventFilterOptions,
+  type PublicEventFilters,
   getCurrentSessionPhone,
   getVerifiedPhonePreAuth,
   requestSmsCode,
@@ -64,7 +67,6 @@ import {
   resolveBrandStatus,
   resolveTrainingJoinAudienceForEvent,
   resolveTrainingEventStatus,
-  sortEventsByDate,
 } from "@/domain/utils";
 import {
   Dialog,
@@ -72,7 +74,6 @@ import {
   DialogContent,
   DialogDescription,
   DialogHeader,
-  DialogOverlay,
   DialogPortal,
   DialogTitle,
 } from "@/app/components/ui/dialog";
@@ -237,6 +238,94 @@ function getPublicLeadName(ownerLabels: ReturnType<typeof resolveEventOwnerDispl
 
 function getEventTags(event: TrainingEvent) {
   return (event.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+}
+
+const publicEventsPageSize = 25;
+const emptyPublicEventFilterOptions: PublicEventFilterOptions = {
+  tags: [],
+  trainers: [],
+  dateBounds: null,
+};
+
+function normalizeFilterValue(value: string) {
+  return value.trim().toLocaleLowerCase("pl-PL");
+}
+
+function dedupeValues(values: string[], caseInsensitive = false) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  values.forEach((value) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const key = caseInsensitive ? normalizeFilterValue(trimmed) : trimmed;
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    result.push(trimmed);
+  });
+
+  return result;
+}
+
+function parsePublicEventFilters(searchParams: URLSearchParams): PublicEventFilters {
+  return {
+    tags: dedupeValues(searchParams.getAll("tag"), true),
+    trainerIds: dedupeValues(searchParams.getAll("trainerId")),
+    dateFrom: searchParams.get("dateFrom")?.trim() || undefined,
+    dateTo: searchParams.get("dateTo")?.trim() || undefined,
+  };
+}
+
+function parsePublicEventPage(searchParams: URLSearchParams) {
+  const parsed = Number(searchParams.get("page") ?? "1");
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
+
+function getPublicEventFiltersKey(filters: PublicEventFilters) {
+  return JSON.stringify({
+    tags: [...(filters.tags ?? [])].map(normalizeFilterValue).sort(),
+    trainerIds: [...(filters.trainerIds ?? [])].sort(),
+    dateFrom: filters.dateFrom ?? "",
+    dateTo: filters.dateTo ?? "",
+  });
+}
+
+function countActivePublicFilters(filters: PublicEventFilters) {
+  return (
+    (filters.tags?.length ?? 0) +
+    (filters.trainerIds?.length ?? 0) +
+    (filters.dateFrom ? 1 : 0) +
+    (filters.dateTo ? 1 : 0)
+  );
+}
+
+function setPublicEventFiltersInSearchParams(
+  searchParams: URLSearchParams,
+  filters: PublicEventFilters,
+) {
+  const next = new URLSearchParams(searchParams);
+  next.delete("page");
+  next.delete("tag");
+  next.delete("trainerId");
+  next.delete("dateFrom");
+  next.delete("dateTo");
+
+  dedupeValues(filters.tags ?? [], true).forEach((tag) => next.append("tag", tag));
+  dedupeValues(filters.trainerIds ?? []).forEach((trainerId) => next.append("trainerId", trainerId));
+  if (filters.dateFrom) {
+    next.set("dateFrom", filters.dateFrom);
+  }
+  if (filters.dateTo) {
+    next.set("dateTo", filters.dateTo);
+  }
+
+  return next;
 }
 
 function getTrainingJoinAudienceBadgeText(value: "existing-practitioners" | "new-people") {
@@ -417,7 +506,7 @@ function CommunityEventGalleryLightbox({
       onOpenChange={(nextOpen) => onOpenIndexChange(nextOpen ? currentIndex : null)}
     >
       <DialogPortal>
-        <DialogOverlay className="bg-brand-navy/12 backdrop-blur-[2px]" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-brand-navy/12 backdrop-blur-[2px]" />
 
         <DialogPrimitive.Content
           className="fixed left-1/2 top-1/2 z-50 w-[min(90vw,780px)] max-w-none max-h-[92vh] -translate-x-1/2 -translate-y-1/2 outline-none"
@@ -506,6 +595,148 @@ function CommunityEventGalleryLightbox({
   );
 }
 
+function PublicEventFiltersPanel({
+  options,
+  value,
+  activeCount,
+  onChange,
+  onClear,
+}: {
+  options: PublicEventFilterOptions;
+  value: PublicEventFilters;
+  activeCount: number;
+  onChange: (filters: PublicEventFilters) => void;
+  onClear: () => void;
+}) {
+  const selectedTags = new Set((value.tags ?? []).map(normalizeFilterValue));
+  const selectedTrainerIds = new Set(value.trainerIds ?? []);
+
+  function toggleTag(tag: string) {
+    const normalized = normalizeFilterValue(tag);
+    const nextTags = selectedTags.has(normalized)
+      ? (value.tags ?? []).filter((item) => normalizeFilterValue(item) !== normalized)
+      : [...(value.tags ?? []), tag];
+
+    onChange({ ...value, tags: nextTags });
+  }
+
+  function toggleTrainer(trainerId: string) {
+    const nextTrainerIds = selectedTrainerIds.has(trainerId)
+      ? (value.trainerIds ?? []).filter((item) => item !== trainerId)
+      : [...(value.trainerIds ?? []), trainerId];
+
+    onChange({ ...value, trainerIds: nextTrainerIds });
+  }
+
+  return (
+    <div className="rounded-[1.5rem] border border-brand-line bg-white p-4 shadow-soft">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-semibold text-brand-navy">Filtry</h2>
+        {activeCount > 0 ? (
+          <span className="rounded-full bg-brand-sky/20 px-2.5 py-1 text-xs font-semibold text-brand-navy">
+            {activeCount}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-5 space-y-6">
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-muted">Tagi</h3>
+          {options.tags.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {options.tags.map((tag) => {
+                const isActive = selectedTags.has(normalizeFilterValue(tag.value));
+                return (
+                  <button
+                    key={tag.value}
+                    type="button"
+                    onClick={() => toggleTag(tag.value)}
+                    className={[
+                      "inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-semibold transition-colors",
+                      isActive
+                        ? "border-brand-navy bg-brand-navy text-white"
+                        : "border-brand-line bg-brand-shell text-brand-navy hover:border-brand-sky-deep",
+                    ].join(" ")}
+                    aria-pressed={isActive}
+                  >
+                    <span>{tag.label}</span>
+                    <span className={isActive ? "text-white/75" : "text-brand-muted"}>{tag.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-brand-muted">Brak tagów.</p>
+          )}
+        </section>
+
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-muted">Trenerzy</h3>
+          {options.trainers.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {options.trainers.map((trainer) => (
+                <label
+                  key={trainer.id}
+                  className="flex cursor-pointer items-center gap-3 rounded-2xl border border-brand-line bg-brand-shell px-3 py-2.5 text-sm text-brand-navy"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedTrainerIds.has(trainer.id)}
+                    onChange={() => toggleTrainer(trainer.id)}
+                    className="h-4 w-4 rounded border-brand-line text-brand-navy accent-brand-navy"
+                  />
+                  <span className="min-w-0 flex-1 truncate font-medium">{trainer.label}</span>
+                  <span className="text-xs font-semibold text-brand-muted">{trainer.count}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-brand-muted">Brak trenerów.</p>
+          )}
+        </section>
+
+        <section>
+          <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-muted">Zakres dat</h3>
+          <div className="mt-3 grid gap-3">
+            <label className="grid gap-1.5 text-sm font-medium text-brand-navy">
+              Data od
+              <input
+                type="date"
+                value={value.dateFrom ?? ""}
+                min={options.dateBounds?.min}
+                max={options.dateBounds?.max}
+                onChange={(event) => onChange({ ...value, dateFrom: event.target.value || undefined })}
+                className="h-11 rounded-2xl border border-brand-line bg-brand-shell px-3 text-sm text-brand-navy outline-none focus:border-brand-sky-deep"
+              />
+            </label>
+            <label className="grid gap-1.5 text-sm font-medium text-brand-navy">
+              Data do
+              <input
+                type="date"
+                value={value.dateTo ?? ""}
+                min={options.dateBounds?.min}
+                max={options.dateBounds?.max}
+                onChange={(event) => onChange({ ...value, dateTo: event.target.value || undefined })}
+                className="h-11 rounded-2xl border border-brand-line bg-brand-shell px-3 text-sm text-brand-navy outline-none focus:border-brand-sky-deep"
+              />
+            </label>
+          </div>
+        </section>
+      </div>
+
+      {activeCount > 0 ? (
+        <button
+          type="button"
+          onClick={onClear}
+          className="mt-6 inline-flex w-full items-center justify-center rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+        >
+          Wyczyść filtry
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function EventFeedSection({
   eyebrow,
   title,
@@ -514,6 +745,8 @@ function EventFeedSection({
   emptyDescription,
   events,
   pagination,
+  filterPanel,
+  activeFilterCount = 0,
 }: {
   eyebrow: string;
   title: string;
@@ -521,6 +754,8 @@ function EventFeedSection({
   emptyTitle: string;
   emptyDescription: string;
   events: TrainingEvent[];
+  filterPanel?: ReactNode;
+  activeFilterCount?: number;
   pagination?: {
     page: number;
     totalPages: number;
@@ -545,51 +780,102 @@ function EventFeedSection({
     }
   }
 
+  const [isFilterDrawerOpen, setIsFilterDrawerOpen] = useState(false);
+
   return (
-    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-      <div className="mb-6 max-w-3xl">
-        <p className="text-base font-semibold uppercase tracking-[0.28em] text-brand-navy sm:text-lg">
-          {eyebrow}
-        </p>
-        <p className="mt-2 text-lg text-brand-muted">
-          <span className="text-brand-muted">{title}. </span>
-          {description}
-        </p>
+    <section className="mx-auto max-w-[90rem] px-4 py-10 sm:px-6 lg:px-8">
+      <div className={filterPanel ? "grid gap-7 lg:grid-cols-[19rem_minmax(0,1fr)] lg:items-start" : ""}>
+        {filterPanel ? (
+          <aside className="hidden lg:sticky lg:top-24 lg:block">
+            {filterPanel}
+          </aside>
+        ) : null}
+
+        <div className="min-w-0">
+          <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="max-w-3xl">
+              <p className="text-base font-semibold uppercase tracking-[0.28em] text-brand-navy sm:text-lg">
+                {eyebrow}
+              </p>
+              <p className="mt-2 text-lg text-brand-muted">
+                <span className="text-brand-muted">{title}. </span>
+                {description}
+              </p>
+            </div>
+
+            {filterPanel ? (
+              <button
+                type="button"
+                onClick={() => setIsFilterDrawerOpen(true)}
+                className="inline-flex items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft lg:hidden"
+              >
+                <SlidersHorizontal size={17} />
+                Filtry
+                {activeFilterCount > 0 ? (
+                  <span className="rounded-full bg-brand-navy px-2 py-0.5 text-xs text-white">
+                    {activeFilterCount}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
+          </div>
+
+          <div className="grid gap-6">
+            {events.length === 0 ? (
+              <EmptyState title={emptyTitle} description={emptyDescription} />
+            ) : (
+              events.map((event) => <EventCard key={event.id} eventId={event.id} eventOverride={event} />)
+            )}
+          </div>
+          {pagination && pagination.totalPages > 1 ? (
+            <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm text-brand-muted shadow-soft">
+              <span>
+                Strona {pagination.page} z {pagination.totalPages}. Razem: {pagination.totalItems}.
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={pagination.page <= 1 || pagination.loading}
+                  onClick={() => handlePageChange(Math.max(1, pagination.page - 1))}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ChevronLeft size={16} />
+                  Poprzednia
+                </button>
+                <button
+                  type="button"
+                  disabled={pagination.page >= pagination.totalPages || pagination.loading}
+                  onClick={() => handlePageChange(Math.min(pagination.totalPages, pagination.page + 1))}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Następna
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      <div className="grid gap-6">
-        {events.length === 0 ? (
-          <EmptyState title={emptyTitle} description={emptyDescription} />
-        ) : (
-          events.map((event) => <EventCard key={event.id} eventId={event.id} eventOverride={event} />)
-        )}
-      </div>
-      {pagination && pagination.totalPages > 1 ? (
-        <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm text-brand-muted shadow-soft">
-          <span>
-            Strona {pagination.page} z {pagination.totalPages}. Razem: {pagination.totalItems}.
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={pagination.page <= 1 || pagination.loading}
-              onClick={() => handlePageChange(Math.max(1, pagination.page - 1))}
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <ChevronLeft size={16} />
-              Poprzednia
-            </button>
-            <button
-              type="button"
-              disabled={pagination.page >= pagination.totalPages || pagination.loading}
-              onClick={() => handlePageChange(Math.min(pagination.totalPages, pagination.page + 1))}
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-4 py-2 font-semibold text-brand-navy disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Następna
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        </div>
+      {filterPanel ? (
+        <Dialog open={isFilterDrawerOpen} onOpenChange={setIsFilterDrawerOpen}>
+          <DialogPortal>
+            <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-brand-navy/35 backdrop-blur-sm" />
+            <DialogPrimitive.Content className="fixed inset-y-0 left-0 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border-r border-brand-line bg-brand-shell p-4 outline-none shadow-2xl lg:hidden">
+              <DialogHeader className="sr-only">
+                <DialogTitle>Filtry</DialogTitle>
+                <DialogDescription>Filtry listy wydarzeń.</DialogDescription>
+              </DialogHeader>
+              <div className="mb-4 flex justify-end">
+                <DialogClose className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-brand-line bg-white text-brand-navy shadow-soft">
+                  <X size={18} />
+                  <span className="sr-only">Zamknij filtry</span>
+                </DialogClose>
+              </div>
+              {filterPanel}
+            </DialogPrimitive.Content>
+          </DialogPortal>
+        </Dialog>
       ) : null}
     </section>
   );
@@ -1059,19 +1345,45 @@ export function LandingPage() {
 }
 
 export function CalendarPage() {
-  const { store } = useAppState();
-  const [page, setPage] = useState(1);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const page = parsePublicEventPage(searchParams);
+  const filters = useMemo(() => parsePublicEventFilters(searchParams), [searchParams]);
+  const filtersKey = useMemo(() => getPublicEventFiltersKey(filters), [filters]);
+  const activeFilterCount = countActivePublicFilters(filters);
   const eventsPageQuery = useQuery({
-    queryKey: ["public", "events", "official", page],
-    queryFn: () => fetchPublicEventsPage("official", { page, pageSize: 25 }),
+    queryKey: ["public", "events", "official", page, filtersKey],
+    queryFn: () => fetchPublicEventsPage("official", { page, pageSize: publicEventsPageSize, filters }),
     staleTime: 30_000,
   });
-  const publicEvents = getPublicEventCollection(store);
-  const fallbackEvents = useMemo(
-    () => sortEventsByDate(publicEvents.filter((item) => resolveBrandStatus(item.brandStatus) === "official")),
-    [publicEvents],
+
+  function handleFiltersChange(nextFilters: PublicEventFilters) {
+    setSearchParams(setPublicEventFiltersInSearchParams(searchParams, nextFilters));
+  }
+
+  function handleClearFilters() {
+    setSearchParams(setPublicEventFiltersInSearchParams(searchParams, {}));
+  }
+
+  function handlePageChange(nextPage: number) {
+    const next = new URLSearchParams(searchParams);
+    if (nextPage <= 1) {
+      next.delete("page");
+    } else {
+      next.set("page", String(nextPage));
+    }
+    setSearchParams(next);
+  }
+
+  const filterPanel = (
+    <PublicEventFiltersPanel
+      options={eventsPageQuery.data?.filters ?? emptyPublicEventFilterOptions}
+      value={filters}
+      activeCount={activeFilterCount}
+      onChange={handleFiltersChange}
+      onClear={handleClearFilters}
+    />
   );
-  const events = eventsPageQuery.data?.items ?? fallbackEvents;
+  const events = eventsPageQuery.data?.items ?? [];
 
   return (
     <EventFeedSection
@@ -1079,8 +1391,14 @@ export function CalendarPage() {
       title="Spotkania z Przekazującymi wiedzę"
       description="Kalendarz oficjalnych szkoleń będzie uzupełniany przez zespół Emandar."
       emptyTitle="Brak opublikowanych szkoleń"
-      emptyDescription="Po dodaniu wydarzeń pojawią się tutaj szkolenia."
+      emptyDescription={
+        activeFilterCount > 0
+          ? "Nie znaleziono szkoleń pasujących do wybranych filtrów."
+          : "Po dodaniu wydarzeń pojawią się tutaj szkolenia."
+      }
       events={events}
+      filterPanel={filterPanel}
+      activeFilterCount={activeFilterCount}
       pagination={
         eventsPageQuery.data
           ? {
@@ -1088,7 +1406,7 @@ export function CalendarPage() {
               totalPages: eventsPageQuery.data.totalPages,
               totalItems: eventsPageQuery.data.totalItems,
               loading: eventsPageQuery.isFetching,
-              onPageChange: setPage,
+              onPageChange: handlePageChange,
             }
           : undefined
       }
@@ -1097,19 +1415,45 @@ export function CalendarPage() {
 }
 
 export function CommunityEventsPage() {
-  const { store } = useAppState();
-  const [page, setPage] = useState(1);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const page = parsePublicEventPage(searchParams);
+  const filters = useMemo(() => parsePublicEventFilters(searchParams), [searchParams]);
+  const filtersKey = useMemo(() => getPublicEventFiltersKey(filters), [filters]);
+  const activeFilterCount = countActivePublicFilters(filters);
   const eventsPageQuery = useQuery({
-    queryKey: ["public", "events", "community", page],
-    queryFn: () => fetchPublicEventsPage("community", { page, pageSize: 25 }),
+    queryKey: ["public", "events", "community", page, filtersKey],
+    queryFn: () => fetchPublicEventsPage("community", { page, pageSize: publicEventsPageSize, filters }),
     staleTime: 30_000,
   });
-  const publicEvents = getPublicEventCollection(store);
-  const fallbackEvents = useMemo(
-    () => sortEventsByDate(publicEvents.filter((item) => resolveBrandStatus(item.brandStatus) === "supported")),
-    [publicEvents],
+
+  function handleFiltersChange(nextFilters: PublicEventFilters) {
+    setSearchParams(setPublicEventFiltersInSearchParams(searchParams, nextFilters));
+  }
+
+  function handleClearFilters() {
+    setSearchParams(setPublicEventFiltersInSearchParams(searchParams, {}));
+  }
+
+  function handlePageChange(nextPage: number) {
+    const next = new URLSearchParams(searchParams);
+    if (nextPage <= 1) {
+      next.delete("page");
+    } else {
+      next.set("page", String(nextPage));
+    }
+    setSearchParams(next);
+  }
+
+  const filterPanel = (
+    <PublicEventFiltersPanel
+      options={eventsPageQuery.data?.filters ?? emptyPublicEventFilterOptions}
+      value={filters}
+      activeCount={activeFilterCount}
+      onChange={handleFiltersChange}
+      onClear={handleClearFilters}
+    />
   );
-  const events = eventsPageQuery.data?.items ?? fallbackEvents;
+  const events = eventsPageQuery.data?.items ?? [];
 
   return (
     <EventFeedSection
@@ -1117,8 +1461,14 @@ export function CommunityEventsPage() {
       title="Wydarzenia społeczności"
       description="Przeglądaj otwarte wydarzenia społeczności i zgłaszaj chęć udziału u osoby prowadzącej."
       emptyTitle="Brak wydarzeń społeczności"
-      emptyDescription="Po opublikowaniu nowych wydarzeń pojawią się właśnie tutaj."
+      emptyDescription={
+        activeFilterCount > 0
+          ? "Nie znaleziono wydarzeń społeczności pasujących do wybranych filtrów."
+          : "Po opublikowaniu nowych wydarzeń pojawią się właśnie tutaj."
+      }
       events={events}
+      filterPanel={filterPanel}
+      activeFilterCount={activeFilterCount}
       pagination={
         eventsPageQuery.data
           ? {
@@ -1126,7 +1476,7 @@ export function CommunityEventsPage() {
               totalPages: eventsPageQuery.data.totalPages,
               totalItems: eventsPageQuery.data.totalItems,
               loading: eventsPageQuery.isFetching,
-              onPageChange: setPage,
+              onPageChange: handlePageChange,
             }
           : undefined
       }

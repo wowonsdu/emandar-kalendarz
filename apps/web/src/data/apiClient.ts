@@ -6,6 +6,7 @@ import {
   paginatedRecordsResponseSchema,
   panelNavigationResponseSchema,
   panelReadModelResponseSchema,
+  publicEventPageResponseSchema,
   smsConfirmResponseSchema,
   smsRequestResponseSchema,
   sseEventSchema,
@@ -76,6 +77,23 @@ export type PaginatedResult<T> = {
   pageSize: number;
   totalItems: number;
   totalPages: number;
+};
+
+export type PublicEventFilters = {
+  tags?: string[];
+  trainerIds?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+};
+
+export type PublicEventFilterOptions = {
+  tags: { value: string; label: string; count: number }[];
+  trainers: { id: string; label: string; count: number }[];
+  dateBounds: { min: string; max: string } | null;
+};
+
+export type PublicEventPage = PaginatedResult<TrainingEvent> & {
+  filters: PublicEventFilterOptions;
 };
 
 const verifiedPhoneSessionKey = "emandar:verified-phone-preauth";
@@ -279,9 +297,18 @@ export async function fetchPublicCatalogStore(): Promise<DemoStore> {
   };
 }
 
-function buildQueryString(params: Record<string, string | number | undefined>) {
+function buildQueryString(params: Record<string, string | number | string[] | undefined>) {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== "") {
+          query.append(key, item);
+        }
+      });
+      return;
+    }
+
     if (value !== undefined && value !== "") {
       query.set(key, String(value));
     }
@@ -292,12 +319,24 @@ function buildQueryString(params: Record<string, string | number | undefined>) {
 
 export async function fetchPublicEventsPage(
   kind: "official" | "community",
-  options: { page?: number; pageSize?: number } = {},
-): Promise<PaginatedResult<TrainingEvent>> {
+  options: {
+    page?: number;
+    pageSize?: number;
+    filters?: PublicEventFilters;
+  } = {},
+): Promise<PublicEventPage> {
   const path = kind === "community" ? "public/community-events" : "public/events";
-  const response = paginatedRecordsResponseSchema.parse(
+  const filters = options.filters ?? {};
+  const response = publicEventPageResponseSchema.parse(
     await fetchFirst<unknown>(
-      `${path}${buildQueryString({ page: options.page ?? 1, pageSize: options.pageSize ?? 25 })}`,
+      `${path}${buildQueryString({
+        page: options.page ?? 1,
+        pageSize: options.pageSize ?? 25,
+        tag: filters.tags,
+        trainerId: filters.trainerIds,
+        dateFrom: filters.dateFrom,
+        dateTo: filters.dateTo,
+      })}`,
     ),
   );
   return {

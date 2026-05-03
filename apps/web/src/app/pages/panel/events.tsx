@@ -5676,15 +5676,14 @@ export function EventsPage() {
               <div className="overflow-x-auto">
                 <table className="w-full table-fixed border-collapse text-left">
                   <colgroup>
-                    <col className="w-[28%]" />
+                    <col className="w-[34%]" />
                     <col className="w-[14%]" />
                     <col className="w-[7%]" />
                     <col className="w-[6%]" />
                     <col className="w-[5%]" />
                     <col className="w-[6%]" />
-                    <col className="w-[15%]" />
-                    <col className="w-[11%]" />
-                    <col className="w-[8%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[12%]" />
                   </colgroup>
                   <thead className="bg-brand-shell/75 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
                     <tr>
@@ -5696,7 +5695,6 @@ export function EventsPage() {
                       <th className="px-4 py-4 text-center">Zgł.</th>
                       <th className="px-4 py-4">{officialListCounterpartyColumnLabel}</th>
                       <th className="px-4 py-4">Status</th>
-                      <th className="px-5 py-4 text-right">Akcja</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-brand-line">
@@ -5709,12 +5707,9 @@ export function EventsPage() {
                           ? !item.eventParticipantId && item.finalStatus !== "rejected"
                           : item.finalStatus !== "rejected",
                       ).length;
-                      const canDecideCollaboration =
-                        canDecideTrainingEventCollaboration(event, currentUser);
                       const ownerLabels = getEventOwnerLabel(event, store);
                       const listTitle = getEventCardTitle(event, currentUser, store);
                       const locationParts = getEventLocationParts(event.location);
-                      const collaborationNotice = getEventCollaborationNotice(event);
                       const scheduleDays = getTrainingEventScheduleDays(event);
                       const firstScheduleDay = scheduleDays[0] ?? null;
                       const lastScheduleDay = scheduleDays.at(-1) ?? firstScheduleDay;
@@ -5731,7 +5726,31 @@ export function EventsPage() {
                       const overflowLabel = getEventCapacityOverflowLabel(event);
 
                       return (
-                        <tr key={event.id} className="align-top transition-colors hover:bg-brand-shell/35">
+                        <tr
+                          key={event.id}
+                          role={canOpenEventDetails ? "link" : undefined}
+                          tabIndex={canOpenEventDetails ? 0 : undefined}
+                          onClick={() => {
+                            if (canOpenEventDetails) {
+                              void navigate(eventDetailPath);
+                            }
+                          }}
+                          onKeyDown={(keyEvent) => {
+                            if (
+                              canOpenEventDetails &&
+                              (keyEvent.key === "Enter" || keyEvent.key === " ")
+                            ) {
+                              keyEvent.preventDefault();
+                              void navigate(eventDetailPath);
+                            }
+                          }}
+                          className={cn(
+                            "align-top transition-colors",
+                            canOpenEventDetails
+                              ? "cursor-pointer hover:bg-brand-shell/45 focus-visible:bg-brand-shell/55 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-sky"
+                              : "opacity-70",
+                          )}
+                        >
                           <td className="max-w-[22rem] px-5 py-5">
                             <p className="text-lg font-semibold leading-snug text-brand-navy">
                               {listTitle}
@@ -5739,17 +5758,9 @@ export function EventsPage() {
                             <p className="mt-1 line-clamp-1 text-sm font-semibold text-brand-sky-deep">
                               {event.title}
                             </p>
-                            <p className="mt-1 line-clamp-2 text-sm leading-6 text-brand-muted">
-                              {event.summary}
-                            </p>
                             {locationParts.extraLocationLabel ? (
                               <p className="mt-2 text-xs font-semibold text-brand-muted">
                                 Dodatkowo: {locationParts.extraLocationLabel}
-                              </p>
-                            ) : null}
-                            {collaborationNotice ? (
-                              <p className="mt-3 rounded-2xl border border-brand-line bg-brand-shell px-3 py-2 text-xs font-semibold leading-5 text-brand-navy">
-                                {collaborationNotice}
                               </p>
                             ) : null}
                           </td>
@@ -5799,45 +5810,6 @@ export function EventsPage() {
                               </span>
                             </div>
                           </td>
-                          <td className="px-5 py-5 text-right">
-                            <div className="flex flex-col items-end gap-2">
-                              {canOpenEventDetails ? (
-                                <Link
-                                  to={eventDetailPath}
-                                  className="inline-flex items-center justify-center whitespace-nowrap rounded-full bg-brand-navy px-4 py-2.5 text-sm font-semibold text-white"
-                                >
-                                  Otwórz
-                                </Link>
-                              ) : (
-                                <span className="inline-flex items-center justify-center whitespace-nowrap rounded-full border border-brand-line bg-brand-shell px-4 py-2.5 text-sm font-semibold text-brand-muted">
-                                  Zarchiwizowane
-                                </span>
-                              )}
-                              {canDecideCollaboration ? (
-                                <CollaborationActionBar
-                                  pending={savingEventId === event.id}
-                                  acceptLabel="Akceptuj"
-                                  rejectLabel="Odrzuć"
-                                  onDecision={async (status) => {
-                                    setSavingEventId(event.id);
-
-                                    try {
-                                      await decideTrainingEventCollaboration(event.id, status);
-                                      toast.success("Zapisano decyzję o współpracy.");
-                                    } catch (error) {
-                                      toast.error(
-                                        error instanceof Error
-                                          ? error.message
-                                          : "Nie udało się zapisać decyzji.",
-                                      );
-                                    } finally {
-                                      setSavingEventId(null);
-                                    }
-                                  }}
-                                />
-                              ) : null}
-                            </div>
-                          </td>
                         </tr>
                       );
                     })}
@@ -5856,16 +5828,10 @@ export function EventsPage() {
                   ? !item.eventParticipantId && item.finalStatus !== "rejected"
                   : item.finalStatus !== "rejected",
               ).length;
-              const canDecideCollaboration =
-                !isCommunitySection &&
-                canDecideTrainingEventCollaboration(event, currentUser);
               const ownerLabels = getEventOwnerLabel(event, store);
               const listTitle = getEventCardTitle(event, currentUser, store);
               const locationParts = getEventLocationParts(event.location);
               const listEyebrow = isCommunitySection ? "Wydarzenie społeczności" : event.title;
-              const collaborationNotice = !isCommunitySection
-                ? getEventCollaborationNotice(event)
-                : null;
               const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
               const scheduleDays = getTrainingEventScheduleDays(event);
               const canOpenEventDetails =
@@ -5873,11 +5839,33 @@ export function EventsPage() {
               const eventDetailPath = isCommunityModerationSection
                 ? `${getPanelEventDetailPath(event)}?view=moderation`
                 : getPanelEventDetailPath(event);
+              const officialCardIsClickable = !isCommunitySection && canOpenEventDetails;
 
               return (
                 <article
                   key={event.id}
-                  className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+                  role={officialCardIsClickable ? "link" : undefined}
+                  tabIndex={officialCardIsClickable ? 0 : undefined}
+                  onClick={() => {
+                    if (officialCardIsClickable) {
+                      void navigate(eventDetailPath);
+                    }
+                  }}
+                  onKeyDown={(keyEvent) => {
+                    if (
+                      officialCardIsClickable &&
+                      (keyEvent.key === "Enter" || keyEvent.key === " ")
+                    ) {
+                      keyEvent.preventDefault();
+                      void navigate(eventDetailPath);
+                    }
+                  }}
+                  className={cn(
+                    "rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft transition-colors",
+                    officialCardIsClickable
+                      ? "cursor-pointer hover:bg-brand-shell/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky"
+                      : null,
+                  )}
                 >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="max-w-3xl">
@@ -5887,21 +5875,23 @@ export function EventsPage() {
                     <h3 className="mt-2 text-2xl font-semibold text-brand-navy">
                       {listTitle}
                     </h3>
-                    <p className="mt-2 text-brand-muted">{event.summary}</p>
+                    {isCommunitySection ? (
+                      <p className="mt-2 text-brand-muted">{event.summary}</p>
+                    ) : null}
                   </div>
                   <div className="flex flex-col items-start gap-3 sm:items-end">
-                    {canOpenEventDetails ? (
+                    {isCommunitySection && canOpenEventDetails ? (
                       <Link
                         to={eventDetailPath}
                         className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white"
                       >
-                        {isCommunitySection ? "Otwórz wydarzenie" : "Otwórz szkolenie"}
+                        Otwórz wydarzenie
                       </Link>
-                    ) : (
+                    ) : !canOpenEventDetails ? (
                       <span className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-brand-shell px-5 py-3 text-sm font-semibold text-brand-muted">
                         Zarchiwizowane
                       </span>
-                    )}
+                    ) : null}
                     <div className="flex flex-wrap gap-2 sm:justify-end">
                       <span className="rounded-full bg-brand-shell px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-brand-navy">
                         {event.isPublished ? "opublikowane" : "ukryte"}
@@ -5971,33 +5961,6 @@ export function EventsPage() {
                   </p>
                 )}
 
-                {collaborationNotice && (
-                  <p className="mt-4 rounded-3xl border border-brand-line bg-brand-shell p-4 text-sm font-semibold text-brand-navy">
-                    {collaborationNotice}
-                  </p>
-                )}
-
-                {canDecideCollaboration && (
-                  <CollaborationActionBar
-                    pending={savingEventId === event.id}
-                    onDecision={async (status) => {
-                      setSavingEventId(event.id);
-
-                      try {
-                        await decideTrainingEventCollaboration(event.id, status);
-                        toast.success("Zapisano decyzję o współpracy.");
-                      } catch (error) {
-                        toast.error(
-                          error instanceof Error
-                            ? error.message
-                            : "Nie udało się zapisać decyzji.",
-                        );
-                      } finally {
-                        setSavingEventId(null);
-                      }
-                    }}
-                  />
-                )}
               </article>
             );
           })}

@@ -964,35 +964,37 @@ function getPanelScheduleRangeLabel(event: TrainingEvent) {
   return `od ${formatDate(bounds.startsAt)} do ${formatDate(bounds.endsAt)}`;
 }
 
-function formatMonthLabel(date: Date) {
+function formatShortDate(date: Date) {
   return new Intl.DateTimeFormat("pl-PL", {
-    month: "short",
-    year: "numeric",
+    day: "2-digit",
+    month: "2-digit",
   }).format(date);
 }
 
-function getMonthKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+function getWeekKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-function getDashboardMonthBuckets(now: Date) {
-  const firstVisibleMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+function getDashboardWeekBuckets(now: Date) {
+  const currentWeekStart = new Date(now);
+  currentWeekStart.setHours(0, 0, 0, 0);
+  const dayOfWeek = currentWeekStart.getDay();
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  currentWeekStart.setDate(currentWeekStart.getDate() - daysSinceMonday);
 
-  return Array.from({ length: 3 }, (_, index) => {
-    const start = new Date(firstVisibleMonth.getFullYear(), firstVisibleMonth.getMonth() + index, 1);
-    const end = new Date(
-      firstVisibleMonth.getFullYear(),
-      firstVisibleMonth.getMonth() + index + 1,
-      0,
-      23,
-      59,
-      59,
-      999,
-    );
+  return Array.from({ length: 12 }, (_, index) => {
+    const start = new Date(currentWeekStart);
+    start.setDate(currentWeekStart.getDate() + index * 7);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    end.setHours(23, 59, 59, 999);
 
     return {
-      key: getMonthKey(start),
-      label: formatMonthLabel(start),
+      key: getWeekKey(start),
+      label: `${formatShortDate(start)}-${formatShortDate(end)}`,
       start,
       end,
     };
@@ -4115,7 +4117,7 @@ type DashboardEventBarDatum = {
   availablePlaces: number;
 };
 
-type DashboardMonthCapacityDatum = {
+type DashboardWeekCapacityDatum = {
   key: string;
   label: string;
   totalCapacity: number;
@@ -4154,12 +4156,12 @@ function MissingPeopleTooltip({
   );
 }
 
-function CapacityByMonthTooltip({
+function CapacityByWeekTooltip({
   active,
   payload,
 }: {
   active?: boolean;
-  payload?: Array<{ payload: DashboardMonthCapacityDatum }>;
+  payload?: Array<{ payload: DashboardWeekCapacityDatum }>;
 }) {
   if (!active || !payload?.[0]) {
     return null;
@@ -4181,7 +4183,7 @@ function CapacityByMonthTooltip({
   );
 }
 
-function CapacityByMonthLineChart({ data }: { data: DashboardMonthCapacityDatum[] }) {
+function CapacityByWeekLineChart({ data }: { data: DashboardWeekCapacityDatum[] }) {
   return (
     <>
       <DashboardLegend
@@ -4196,7 +4198,7 @@ function CapacityByMonthLineChart({ data }: { data: DashboardMonthCapacityDatum[
             <CartesianGrid stroke="#d7e5f2" strokeDasharray="3 3" />
             <XAxis dataKey="label" stroke="#6982a0" />
             <YAxis allowDecimals={false} stroke="#6982a0" />
-            <Tooltip content={<CapacityByMonthTooltip />} />
+            <Tooltip content={<CapacityByWeekTooltip />} />
             <Line
               type="monotone"
               dataKey="enrolledCount"
@@ -4682,8 +4684,8 @@ function OperationalDashboardPerspectiveView({
     [activeCommunityEvents, confirmedCommunityEvents],
   );
   const hasCommunityKpiData = communityPerformanceData.length > 0;
-  const dashboardMonthBuckets = useMemo(() => getDashboardMonthBuckets(dashboardNow), [dashboardNow]);
-  const dashboardWindow = dashboardMonthBuckets.at(-1);
+  const dashboardWeekBuckets = useMemo(() => getDashboardWeekBuckets(dashboardNow), [dashboardNow]);
+  const dashboardWindow = dashboardWeekBuckets.at(-1);
   const organizerOfficialDashboard = useMemo(
     () =>
       !isTrainerPerspective && organizerProfile
@@ -4745,24 +4747,24 @@ function OperationalDashboardPerspectiveView({
       }),
     [organizerDashboardEventData],
   );
-  const organizerCapacityByMonthData = useMemo(
+  const organizerCapacityByWeekData = useMemo(
     () =>
-      dashboardMonthBuckets.map((bucket) => {
-        const monthEvents = organizerAnalyticsEventsInRange.filter((event) =>
+      dashboardWeekBuckets.map((bucket) => {
+        const weekEvents = organizerAnalyticsEventsInRange.filter((event) =>
           isDateWithinRange(event.startsAt, bucket.start, bucket.end),
         );
 
         return {
           key: bucket.key,
           label: bucket.label,
-          totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
-          enrolledCount: monthEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
-          confirmedCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
-          overflowCount: monthEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
-          availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
+          totalCapacity: weekEvents.reduce((sum, event) => sum + event.capacity, 0),
+          enrolledCount: weekEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
+          confirmedCount: weekEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          overflowCount: weekEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
+          availablePlaces: weekEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
         };
       }),
-    [dashboardMonthBuckets, organizerAnalyticsEventsInRange],
+    [dashboardWeekBuckets, organizerAnalyticsEventsInRange],
   );
   const analyticsEventsInRange = useMemo(() => {
     if (!dashboardWindow) {
@@ -4831,24 +4833,24 @@ function OperationalDashboardPerspectiveView({
       })),
     [analyticsActiveEvents, currentUser, store],
   );
-  const capacityByMonthData = useMemo(
+  const capacityByWeekData = useMemo(
     () =>
-      dashboardMonthBuckets.map((bucket) => {
-        const monthEvents = analyticsActiveEvents.filter((event) =>
+      dashboardWeekBuckets.map((bucket) => {
+        const weekEvents = analyticsActiveEvents.filter((event) =>
           isDateWithinRange(event.startsAt, bucket.start, bucket.end),
         );
 
         return {
           key: bucket.key,
           label: bucket.label,
-          totalCapacity: monthEvents.reduce((sum, event) => sum + event.capacity, 0),
-          enrolledCount: monthEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
-          confirmedCount: monthEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
-          overflowCount: monthEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
-          availablePlaces: monthEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
+          totalCapacity: weekEvents.reduce((sum, event) => sum + event.capacity, 0),
+          enrolledCount: weekEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0),
+          confirmedCount: weekEvents.reduce((sum, event) => sum + event.enrolledCount, 0),
+          overflowCount: weekEvents.reduce((sum, event) => sum + getEventOverflowCount(event), 0),
+          availablePlaces: weekEvents.reduce((sum, event) => sum + getAvailablePlaces(event), 0),
         };
       }),
-    [analyticsActiveEvents, dashboardMonthBuckets],
+    [analyticsActiveEvents, dashboardWeekBuckets],
   );
   const relationsCount = useMemo(() => {
     if (isTrainerPerspective) {
@@ -4949,7 +4951,7 @@ function OperationalDashboardPerspectiveView({
               description="Najbliższe terminy wg ilości osób, które mogą dołączyć."
             >
               {organizerMissingPeopleData.length === 0 ? (
-                <DashboardChartEmptyState message="Brak aktywnych grupowych szkoleń Emandar w najbliższych 3 miesiącach." />
+                <DashboardChartEmptyState message="Brak aktywnych grupowych szkoleń Emandar w najbliższych 12 tygodniach." />
               ) : (
                 <div style={{ height: `${getDashboardChartHeight(organizerMissingPeopleData.length)}px` }}>
                   <ResponsiveContainer width="100%" height="100%">
@@ -5010,11 +5012,11 @@ function OperationalDashboardPerspectiveView({
             </DashboardChartCard>
 
             <DashboardChartCard
-              title="Obłożenie w miesiącach"
+              title="Obłożenie w tygodniach"
               description="Łączna liczba osób na rosterze versus cała pula miejsc w pipeline grup."
               className="xl:col-span-2"
             >
-              <CapacityByMonthLineChart data={organizerCapacityByMonthData} />
+              <CapacityByWeekLineChart data={organizerCapacityByWeekData} />
             </DashboardChartCard>
           </div>
         </section>
@@ -5097,7 +5099,7 @@ function OperationalDashboardPerspectiveView({
             description="Szybki podgląd, ile miejsc trzeba jeszcze dopełnić w najbliższych terminach."
           >
             {missingPeopleData.length === 0 ? (
-              <DashboardChartEmptyState message="Brak aktywnych albo potwierdzonych wydarzeń w najbliższych 3 miesiącach." />
+              <DashboardChartEmptyState message="Brak aktywnych albo potwierdzonych wydarzeń w najbliższych 12 tygodniach." />
             ) : (
               <div style={{ height: `${getDashboardChartHeight(missingPeopleData.length)}px` }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -5162,11 +5164,11 @@ function OperationalDashboardPerspectiveView({
           </DashboardChartCard>
 
           <DashboardChartCard
-            title="Obłożenie w miesiącach"
-            description="Łączna liczba osób na rosterze versus cała pula miejsc w nadchodzących miesiącach."
+            title="Obłożenie w tygodniach"
+            description="Łączna liczba osób na rosterze versus cała pula miejsc w nadchodzących tygodniach."
             className="xl:col-span-2"
           >
-            <CapacityByMonthLineChart data={capacityByMonthData} />
+            <CapacityByWeekLineChart data={capacityByWeekData} />
           </DashboardChartCard>
         </div>
       </section>

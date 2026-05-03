@@ -427,7 +427,7 @@ export function PublicEventSearchInput({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="relative block w-full lg:w-[24rem]">
+    <label className="relative block w-full">
       <span className="sr-only">Szukaj wydarzeń</span>
       <Search
         size={18}
@@ -715,15 +715,19 @@ function CommunityEventGalleryLightbox({
 export function PublicEventFiltersPanel({
   options,
   value,
+  searchValue,
   activeCount,
   showAudienceFilter = false,
+  onSearchChange,
   onChange,
   onClear,
 }: {
   options: PublicEventFilterOptions;
   value: PublicEventFilters;
+  searchValue: string;
   activeCount: number;
   showAudienceFilter?: boolean;
+  onSearchChange: (value: string) => void;
   onChange: (filters: PublicEventFilters) => void;
   onClear: () => void;
 }) {
@@ -744,16 +748,9 @@ export function PublicEventFiltersPanel({
 
   return (
     <div className="rounded-[1.5rem] border border-brand-line bg-white p-4 shadow-soft">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-brand-navy">Filtry</h2>
-        {activeCount > 0 ? (
-          <span className="rounded-full bg-brand-sky/20 px-2.5 py-1 text-xs font-semibold text-brand-navy">
-            {activeCount}
-          </span>
-        ) : null}
-      </div>
+      <div className="space-y-5">
+        <PublicEventSearchInput value={searchValue} onChange={onSearchChange} />
 
-      <div className="mt-5 space-y-5">
         <section>
           <h3 className="text-sm font-semibold text-brand-navy">Kiedy</h3>
           <div className="mt-3 grid gap-2">
@@ -824,25 +821,30 @@ export function PublicEventFiltersPanel({
         <section>
           <h3 className="text-xs font-semibold uppercase tracking-[0.2em] text-brand-muted">Trenerzy</h3>
           {options.trainers.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-3 grid gap-2">
               {options.trainers.map((trainer) => {
                 const isActive = selectedTrainerIds.has(trainer.id);
                 return (
-                  <button
+                  <label
                     key={trainer.id}
-                    type="button"
-                    onClick={() => toggleTrainer(trainer.id)}
                     className={[
-                      "inline-flex min-h-9 max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+                      "flex min-h-10 cursor-pointer items-center gap-3 rounded-xl border px-3 py-2 text-sm font-semibold transition-colors",
                       isActive
-                        ? "border-brand-navy bg-brand-navy text-white"
-                        : "border-brand-line bg-brand-shell text-brand-navy hover:border-brand-sky-deep",
+                        ? "border-brand-navy bg-brand-shell text-brand-navy"
+                        : "border-brand-line bg-white text-brand-navy hover:border-brand-sky-deep",
                     ].join(" ")}
-                    aria-pressed={isActive}
                   >
-                    <span className="min-w-0 truncate">{trainer.label}</span>
-                    <span className={isActive ? "text-white/75" : "text-brand-muted"}>{trainer.count}</span>
-                  </button>
+                    <input
+                      type="checkbox"
+                      checked={isActive}
+                      onChange={() => toggleTrainer(trainer.id)}
+                      className="h-4 w-4 rounded border-brand-line text-brand-navy accent-brand-navy"
+                    />
+                    <span className="min-w-0 flex-1 truncate">{trainer.label}</span>
+                    {trainer.count !== undefined ? (
+                      <span className="text-xs font-semibold text-brand-muted">{trainer.count}</span>
+                    ) : null}
+                  </label>
                 );
               })}
             </div>
@@ -872,7 +874,6 @@ function EventFeedSection({
   events,
   pagination,
   filterPanel,
-  searchControl,
   activeFilterCount = 0,
   isFetching = false,
 }: {
@@ -883,7 +884,6 @@ function EventFeedSection({
   emptyDescription: string;
   events: TrainingEvent[];
   filterPanel?: ReactNode;
-  searchControl?: ReactNode;
   activeFilterCount?: number;
   isFetching?: boolean;
   pagination?: {
@@ -929,24 +929,21 @@ function EventFeedSection({
               </p>
             </div>
 
-            {searchControl || filterPanel ? (
+            {filterPanel ? (
               <div className="flex w-full flex-col gap-3 sm:flex-row lg:w-auto lg:items-start lg:justify-end">
-                {searchControl}
-                {filterPanel ? (
-                  <button
-                    type="button"
-                    onClick={() => setIsFilterDrawerOpen(true)}
-                    className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 text-sm font-semibold text-brand-navy shadow-soft lg:hidden"
-                  >
-                    <SlidersHorizontal size={17} />
-                    Filtry
-                    {activeFilterCount > 0 ? (
-                      <span className="rounded-full bg-brand-navy px-2 py-0.5 text-xs text-white">
-                        {activeFilterCount}
-                      </span>
-                    ) : null}
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setIsFilterDrawerOpen(true)}
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-full border border-brand-line bg-white px-4 text-sm font-semibold text-brand-navy shadow-soft lg:hidden"
+                >
+                  <SlidersHorizontal size={17} />
+                  Filtry
+                  {activeFilterCount > 0 ? (
+                    <span className="rounded-full bg-brand-navy px-2 py-0.5 text-xs text-white">
+                      {activeFilterCount}
+                    </span>
+                  ) : null}
+                </button>
               </div>
             ) : null}
           </div>
@@ -1526,8 +1523,10 @@ export function CalendarPage() {
     <PublicEventFiltersPanel
       options={eventsPageQuery.data?.filters ?? emptyPublicEventFilterOptions}
       value={filters}
+      searchValue={searchInput}
       activeCount={activeFilterCount}
       showAudienceFilter
+      onSearchChange={setSearchInput}
       onChange={handleFiltersChange}
       onClear={handleClearFilters}
     />
@@ -1547,7 +1546,6 @@ export function CalendarPage() {
       }
       events={events}
       filterPanel={filterPanel}
-      searchControl={<PublicEventSearchInput value={searchInput} onChange={setSearchInput} />}
       activeFilterCount={activeFilterCount}
       isFetching={eventsPageQuery.isFetching}
       pagination={
@@ -1606,7 +1604,9 @@ export function CommunityEventsPage() {
     <PublicEventFiltersPanel
       options={eventsPageQuery.data?.filters ?? emptyPublicEventFilterOptions}
       value={filters}
+      searchValue={searchInput}
       activeCount={activeFilterCount}
+      onSearchChange={setSearchInput}
       onChange={handleFiltersChange}
       onClear={handleClearFilters}
     />
@@ -1626,7 +1626,6 @@ export function CommunityEventsPage() {
       }
       events={events}
       filterPanel={filterPanel}
-      searchControl={<PublicEventSearchInput value={searchInput} onChange={setSearchInput} />}
       activeFilterCount={activeFilterCount}
       isFetching={eventsPageQuery.isFetching}
       pagination={

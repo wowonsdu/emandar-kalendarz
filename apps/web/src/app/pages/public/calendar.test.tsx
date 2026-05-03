@@ -100,8 +100,10 @@ function renderFiltersPanel(value: PublicEventFilters = {}, showAudienceFilter =
     <PublicEventFiltersPanel
       options={filterOptions}
       value={value}
+      searchValue={value.search ?? ""}
       activeCount={0}
       showAudienceFilter={showAudienceFilter}
+      onSearchChange={vi.fn()}
       onChange={vi.fn()}
       onClear={vi.fn()}
     />,
@@ -162,28 +164,38 @@ beforeEach(() => {
 });
 
 describe("PublicEventFiltersPanel", () => {
-  it("renders compact official filters without a tag filter section", () => {
-    const markup = renderFiltersPanel({ audience: "new-people", trainerIds: ["trainer-2"] });
+  it("renders search first in compact official filters without a visible panel heading", () => {
+    const markup = renderFiltersPanel({
+      search: "Anna",
+      audience: "new-people",
+      trainerIds: ["trainer-2"],
+    });
 
+    const searchIndex = markup.indexOf("Szukaj po miejscu, dacie, trenerze lub tagu");
     const dateIndex = markup.indexOf("Kiedy");
     const audienceIndex = markup.indexOf("Dla kogo");
     const trainersIndex = markup.indexOf("Trenerzy");
 
-    expect(dateIndex).toBeGreaterThanOrEqual(0);
+    expect(searchIndex).toBeGreaterThanOrEqual(0);
+    expect(dateIndex).toBeGreaterThan(searchIndex);
     expect(audienceIndex).toBeGreaterThan(dateIndex);
     expect(trainersIndex).toBeGreaterThan(audienceIndex);
+    expect(markup).not.toContain(">Filtry</h2>");
+    expect(markup).not.toContain(">Filtry</");
     expect(markup).not.toContain("Tagi");
     expect(markup).not.toContain("Wszystkie");
     expect(markup).toContain("Nowe osoby");
     expect(markup).toContain("Tylko Ćwiczący");
   });
 
-  it("renders trainers as wrapping chip buttons, not checkbox rows", () => {
+  it("renders trainers as checkbox rows, not chip buttons", () => {
     const markup = renderFiltersPanel({ trainerIds: ["trainer-1"] });
 
-    expect(markup).toContain("flex flex-wrap gap-2");
-    expect(markup).toContain('aria-pressed="true"');
-    expect(markup).not.toContain('type="checkbox"');
+    expect(markup).toContain('type="checkbox"');
+    expect(markup).toContain("Anna");
+    expect(markup).toContain("Beata");
+    expect(markup).toContain('checked=""');
+    expect(markup).not.toContain("flex flex-wrap gap-2");
   });
 
   it("hides the audience section for community events", () => {
@@ -296,6 +308,32 @@ describe("PublicEventFiltersPanel", () => {
 });
 
 describe("public calendar query rendering", () => {
+  it("renders the official search input inside filter panels and not as a separate list header control", () => {
+    queryMockState.data = createPublicEventPage([]);
+
+    const markup = renderToStaticMarkup(
+      <StaticRouter location="/kalendarz?search=Anna">
+        <CalendarPage />
+      </StaticRouter>,
+    );
+
+    expect(markup.match(/type="search"/g)).toHaveLength(1);
+    expect(markup).toContain('value="Anna"');
+  });
+
+  it("renders the community search input inside filter panels and preserves the search URL state", () => {
+    queryMockState.data = createPublicEventPage([]);
+
+    const markup = renderToStaticMarkup(
+      <StaticRouter location="/wydarzenia-spolecznosci?search=Beata">
+        <CommunityEventsPage />
+      </StaticRouter>,
+    );
+
+    expect(markup.match(/type="search"/g)).toHaveLength(1);
+    expect(markup).toContain('value="Beata"');
+  });
+
   it("keeps previous official events rendered while a filtered page is fetching", () => {
     const previousPage = createPublicEventPage([
       createTrainingEvent({ id: "event-previous", location: "Gdańsk" }),

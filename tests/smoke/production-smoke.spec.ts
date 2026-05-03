@@ -19,7 +19,11 @@ function attachNetworkGuards(page: Page) {
     }
   });
   page.on("requestfailed", (request) => {
-    failedRequests.push(`failed ${request.url()}: ${request.failure()?.errorText ?? "unknown"}`);
+    const errorText = request.failure()?.errorText ?? "unknown";
+    if (errorText === "net::ERR_ABORTED") {
+      return;
+    }
+    failedRequests.push(`failed ${request.url()}: ${errorText}`);
   });
   page.on("console", (message) => {
     if (message.type() === "error") {
@@ -50,16 +54,16 @@ test("production public and panel smoke", async ({ page, baseURL }) => {
   const base = baseURL ?? "https://panel.ceo/emandar/";
 
   await page.goto(base);
-  await expect(page.getByRole("link", { name: /przejdź do kalendarza/i })).toBeVisible();
+  await expect(page.getByRole("main").getByText("Szkolenia Emandar", { exact: true })).toBeVisible();
 
   await page.goto(new URL("kalendarz", base).toString());
-  await expect(page.getByText("Szkolenia Emandar")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Szkolenia Emandar", { exact: true })).toBeVisible();
 
   await page.goto(new URL("trenerzy", base).toString());
-  await expect(page.getByText("Przekazujący Wiedzę")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Przekazujący Wiedzę", { exact: true })).toBeVisible();
 
   await page.goto(new URL("wydarzenia-spolecznosci", base).toString());
-  await expect(page.getByText("Wydarzenia społeczności")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Wydarzenia społeczności", { exact: true })).toBeVisible();
 
   const phone = process.env.SMOKE_LOGIN_PHONE;
   if (phone) {

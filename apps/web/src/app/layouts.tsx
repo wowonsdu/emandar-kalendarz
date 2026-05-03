@@ -39,7 +39,7 @@ import {
 
 function brandNavLinkClass({ isActive }: { isActive: boolean }) {
   return [
-    "rounded-full px-4 py-2 text-sm font-semibold transition-colors",
+    "inline-flex min-h-10 max-w-[9.75rem] items-center justify-center rounded-full px-4 py-2 text-center text-sm font-semibold leading-tight transition-colors",
     isActive
       ? "bg-brand-navy text-white"
       : "text-brand-navy/80 hover:bg-white hover:text-brand-navy",
@@ -175,17 +175,17 @@ export function PublicLayout() {
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div
           className={buildStandardHeaderInnerClassName(
-            "mx-auto flex max-w-[90rem] items-center gap-3 px-4 sm:gap-6 sm:px-6 md:grid md:grid-cols-[19rem_minmax(0,1fr)_auto] lg:px-8",
+            "mx-auto flex max-w-[90rem] items-center gap-3 px-4 sm:gap-6 sm:px-6 lg:px-8 xl:grid xl:grid-cols-[19rem_minmax(0,1fr)_auto]",
           )}
         >
-          <div className="min-w-0 md:hidden">
+          <div className="min-w-0 xl:hidden">
             <BrandMark />
           </div>
-          <div className="hidden min-w-0 md:block">
+          <div className="hidden min-w-0 xl:block">
             <BrandMark />
           </div>
 
-          <nav className="hidden items-center gap-2 md:flex">
+          <nav className="hidden min-w-0 flex-wrap items-center gap-2 xl:flex">
             {publicPrimaryNavItems.map((item) => (
               <NavLink
                 key={item.to}
@@ -238,7 +238,7 @@ export function PublicLayout() {
             )}
           </PublicDesktopActions>
 
-          <div className="ml-auto flex items-center gap-2 md:hidden">
+          <div className="ml-auto flex items-center gap-2 xl:hidden">
             {publicBackConfig.showBackButton ? (
               <HeaderBackButton onClick={handlePublicBack} />
             ) : null}
@@ -259,7 +259,7 @@ export function PublicLayout() {
       </main>
 
       {isMobileMenuOpen ? (
-        <div className="fixed inset-0 z-40 md:hidden">
+        <div className="fixed inset-0 z-40 xl:hidden">
           <button
             type="button"
             aria-label="Zamknij menu"

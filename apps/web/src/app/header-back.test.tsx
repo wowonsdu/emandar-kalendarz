@@ -195,5 +195,7 @@ describe("header rendering", () => {
     );
 
     expect(markup.indexOf('aria-label="Wróć"')).toBeLessThan(markup.indexOf("Moja Przestrzeń"));
+    expect(markup).toContain("xl:flex");
+    expect(markup).not.toContain("md:flex");
   });
 });

@@ -227,7 +227,7 @@ export function PublicDesktopActions({
   children: ReactNode;
 }) {
   return (
-    <div className="ml-auto hidden items-center gap-3 md:flex">
+    <div className="ml-auto hidden min-w-0 flex-wrap items-center justify-end gap-3 xl:flex">
       {showBackButton ? <HeaderBackButton onClick={onBackClick} /> : null}
       {children}
     </div>

@@ -12,6 +12,7 @@ import {
   eventParticipantStatusMutationSchema,
   persistedCollectionKeySchema,
   participantRegistrationRequestSchema,
+  publicEventPageQuerySchema,
   publicEnrollmentRequestSchema,
   signedAttendanceRequestSchema,
   signedCommunityEventReviewRequestSchema,
@@ -125,6 +126,32 @@ function parseEventPageQuery(query: unknown) {
     pageSize,
     kind: parsedKind,
     sort: parsedSort,
+  };
+}
+
+function parsePublicEventPageQuery(query: unknown) {
+  const parsed = publicEventPageQuerySchema.safeParse(query ?? {});
+  if (!parsed.success) {
+    return {
+      ok: false as const,
+      error: parsed.error,
+    };
+  }
+
+  const pageSize = Math.min(parsed.data.pageSize, maxPageSize);
+  return {
+    ok: true as const,
+    value: {
+      page: parsed.data.page,
+      pageSize,
+      sort: parsed.data.sort,
+      filters: {
+        tags: parsed.data.tag,
+        trainerIds: parsed.data.trainerId,
+        dateFrom: parsed.data.dateFrom,
+        dateTo: parsed.data.dateTo,
+      },
+    },
   };
 }
 
@@ -346,15 +373,25 @@ export async function buildApp(options: AppOptions) {
   registerAll(app, "get", config, "/api/public/trainers", async () => ({
     trainers: (await domain.publicStore()).trainers,
   }));
-  registerAll(app, "get", config, "/api/public/events", async (request) =>
-    domain.publicEventPage({ ...parseEventPageQuery(request.query), kind: "official" }),
-  );
+  registerAll(app, "get", config, "/api/public/events", async (request, reply) => {
+    const parsedQuery = parsePublicEventPageQuery(request.query);
+    if (!parsedQuery.ok) {
+      return reply.status(400).send({ error: "invalid-query" });
+    }
+
+    return domain.publicEventPage({ ...parsedQuery.value, kind: "official" });
+  });
   registerAll(app, "get", config, "/api/public/events/:eventId", async (request) => ({
     event: await domain.publicEvent(String((request.params as { eventId?: string }).eventId ?? "")),
   }));
-  registerAll(app, "get", config, "/api/public/community-events", async (request) =>
-    domain.publicEventPage({ ...parseEventPageQuery(request.query), kind: "community" }),
-  );
+  registerAll(app, "get", config, "/api/public/community-events", async (request, reply) => {
+    const parsedQuery = parsePublicEventPageQuery(request.query);
+    if (!parsedQuery.ok) {
+      return reply.status(400).send({ error: "invalid-query" });
+    }
+
+    return domain.publicEventPage({ ...parsedQuery.value, kind: "community" });
+  });
   registerAll(app, "post", config, "/api/public/enrollments", async (request, reply) => {
     if (!requireCsrf(request, reply)) return reply;
     const parsed = publicEnrollmentRequestSchema.safeParse(request.body);

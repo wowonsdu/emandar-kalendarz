@@ -7,6 +7,7 @@ import type { DemoStoreRecord, StoreRepository } from "../store/types.js";
 type RecordAny = Record<string, any>;
 type EventKind = "official" | "community" | "all";
 type EventSort = "startsAtAsc" | "startsAtDesc" | "createdAtDesc";
+type EventAudience = "all" | "new-people" | "existing-practitioners";
 
 export type EventPageQuery = {
   page: number;
@@ -14,10 +15,11 @@ export type EventPageQuery = {
   kind?: EventKind;
   sort?: EventSort;
   filters?: {
-    tags?: string[];
+    search?: string;
     trainerIds?: string[];
     dateFrom?: string;
     dateTo?: string;
+    audience?: EventAudience;
   };
 };
 
@@ -316,16 +318,95 @@ function eventOverlapsDateFilter(event: RecordAny, dateFrom?: string, dateTo?: s
   return getEventScheduleDays(event).some((day) => doIntervalsOverlap(day, { startsAtMs, endsAtMs }));
 }
 
-function filterPublicEvents(events: RecordAny[], filters: EventPageQuery["filters"] = {}) {
-  const tagFilter = new Set((filters.tags ?? []).map(normalizeFacetValue).filter(Boolean));
+function getSearchableDateParts(value: string) {
+  const isoDate = formatWarsawCalendarDate(value);
+  if (!isoDate) {
+    return [];
+  }
+
+  const [year = "", month = "", day = ""] = isoDate.split("-");
+  const timestamp = Date.parse(value);
+  const names = Number.isFinite(timestamp)
+    ? [
+        new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", month: "long" }).format(new Date(timestamp)),
+        new Intl.DateTimeFormat("pl-PL", { timeZone: "Europe/Warsaw", month: "short" }).format(new Date(timestamp)),
+        new Intl.DateTimeFormat("pl-PL", {
+          timeZone: "Europe/Warsaw",
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        }).format(new Date(timestamp)),
+        new Intl.DateTimeFormat("pl-PL", {
+          timeZone: "Europe/Warsaw",
+          day: "numeric",
+          month: "long",
+        }).format(new Date(timestamp)),
+      ]
+    : [];
+
+  return [
+    isoDate,
+    year,
+    `${year}-${month}`,
+    `${day}.${month}.${year}`,
+    `${day}.${month}`,
+    month,
+    String(Number(month)),
+    day,
+    String(Number(day)),
+    ...names,
+  ];
+}
+
+function eventMatchesPublicSearch(event: RecordAny, store: DemoStoreRecord, rawSearch?: string) {
+  const search = normalizeFacetValue(rawSearch ?? "");
+  if (!search) {
+    return true;
+  }
+
+  const trainerId = String(event.trainerId ?? "").trim();
+  const trainer = findById(store, "trainers", trainerId);
+  const searchableValues = [
+    String(event.location ?? ""),
+    String(trainer?.displayName ?? ""),
+    ...getEventTags(event),
+    ...getEventScheduleDays(event).flatMap((day) => [
+      ...getSearchableDateParts(day.startsAt),
+      ...getSearchableDateParts(day.endsAt),
+    ]),
+  ];
+
+  return searchableValues.some((value) => normalizeFacetValue(value).includes(search));
+}
+
+function resolveTrainingJoinAudience(value: unknown, fallback: "existing-practitioners" | "new-people" = "new-people") {
+  return value === "existing-practitioners" || value === "new-people" ? value : fallback;
+}
+
+function resolveTrainingJoinAudienceForEvent(event: RecordAny, store: DemoStoreRecord) {
+  if (event.joinAudienceSetting === "existing-practitioners") {
+    return "existing-practitioners";
+  }
+
+  if (event.joinAudienceSetting === "new-people") {
+    return "new-people";
+  }
+
+  const group = findById(store, "groups", event.groupId);
+  return resolveTrainingJoinAudience(group?.defaultJoinAudience, "new-people");
+}
+
+function filterPublicEvents(events: RecordAny[], filters: EventPageQuery["filters"] = {}, store: DemoStoreRecord) {
   const trainerFilter = new Set((filters.trainerIds ?? []).map((trainerId) => trainerId.trim()).filter(Boolean));
+  const audienceFilter = filters.audience ?? "all";
 
   return events.filter((event) => {
-    if (tagFilter.size > 0) {
-      const eventTags = new Set(getEventTags(event).map(normalizeFacetValue));
-      if (![...tagFilter].some((tag) => eventTags.has(tag))) {
-        return false;
-      }
+    if (audienceFilter !== "all" && resolveTrainingJoinAudienceForEvent(event, store) !== audienceFilter) {
+      return false;
+    }
+
+    if (!eventMatchesPublicSearch(event, store, filters.search)) {
+      return false;
     }
 
     if (trainerFilter.size > 0 && !trainerFilter.has(String(event.trainerId ?? ""))) {
@@ -450,7 +531,7 @@ export class DomainService {
     const store = normalizeStore(snapshot.store);
     recomputePublicEvents(store);
     const publicEvents = filterEventsByKind(arrayOf(store, "publicTrainingEvents"), query.kind);
-    const events = sortEvents(filterPublicEvents(publicEvents, query.filters), query.sort);
+    const events = sortEvents(filterPublicEvents(publicEvents, query.filters, store), query.sort);
     return {
       ...paginateItems(events, query.page, query.pageSize),
       filters: buildPublicEventFilters(publicEvents, store),

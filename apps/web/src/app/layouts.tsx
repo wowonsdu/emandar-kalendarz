@@ -84,6 +84,15 @@ function BrandMark({ inverted = false }: { inverted?: boolean }) {
 }
 
 const publicRootPaths = new Set(publicNavItems.map((item) => item.to));
+const publicPrimaryNavItems = [
+  publicNavItems.find((item) => item.to === "/trenerzy"),
+  publicNavItems.find((item) => item.to === "/kalendarz"),
+].filter((item): item is (typeof publicNavItems)[number] => Boolean(item));
+const publicCommunityNavItem = publicNavItems.find((item) => item.to === "/wydarzenia-spolecznosci");
+
+function getPublicDesktopNavLabel(item: (typeof publicNavItems)[number]) {
+  return item.to === "/kalendarz" ? "Wydarzenia Emandar" : item.label;
+}
 
 export function PublicLayout() {
   const {
@@ -166,7 +175,7 @@ export function PublicLayout() {
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div
           className={buildStandardHeaderInnerClassName(
-            "mx-auto flex max-w-[90rem] items-center justify-between gap-3 px-4 sm:gap-6 sm:px-6 md:grid md:grid-cols-[19rem_minmax(0,1fr)_auto] lg:px-8",
+            "mx-auto flex max-w-[90rem] items-center gap-3 px-4 sm:gap-6 sm:px-6 md:grid md:grid-cols-[19rem_minmax(0,1fr)_auto] lg:px-8",
           )}
         >
           <div className="min-w-0 md:hidden">
@@ -177,13 +186,13 @@ export function PublicLayout() {
           </div>
 
           <nav className="hidden items-center gap-2 md:flex">
-            {publicNavItems.map((item) => (
+            {publicPrimaryNavItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
                 className={() => exactNavLinkClass(location.pathname, item.to)}
               >
-                {item.label}
+                {getPublicDesktopNavLabel(item)}
               </NavLink>
             ))}
           </nav>
@@ -192,6 +201,14 @@ export function PublicLayout() {
             showBackButton={publicBackConfig.showBackButton}
             onBackClick={handlePublicBack}
           >
+            {publicCommunityNavItem ? (
+              <NavLink
+                to={publicCommunityNavItem.to}
+                className={() => exactNavLinkClass(location.pathname, publicCommunityNavItem.to)}
+              >
+                {publicCommunityNavItem.label}
+              </NavLink>
+            ) : null}
             {hasAuthenticatedSession ? (
               <Link
                 to={userHomePath}
@@ -352,9 +369,11 @@ function NavigationSectionList({
     <nav className="space-y-5">
       {sections.map((section) => (
         <div key={section.title} className="space-y-2">
-          <p className="px-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
-            {section.title}
-          </p>
+          {!section.hideTitle ? (
+            <p className="px-4 text-[11px] font-semibold uppercase tracking-[0.24em] text-white/45">
+              {section.title}
+            </p>
+          ) : null}
           <div className="space-y-2">
             {section.items.map((item) => {
               const Icon = item.icon;

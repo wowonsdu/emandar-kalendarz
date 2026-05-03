@@ -112,17 +112,16 @@ describe("navigation sections", () => {
     ]);
   });
 
-  it("builds authenticated sections with public links first and panel links second", () => {
+  it("builds authenticated sections with a public shortcut first and panel links second", () => {
     const sections = buildAuthenticatedNavigationSections(createUser(), createStore());
 
     expect(sections.map((section) => section.title)).toEqual([
       "Widok Publiczny",
       "Moja Przestrzeń",
     ]);
-    expect(sections[0].items.map((item) => item.to)).toEqual([
-      "/kalendarz",
-      "/trenerzy",
-      "/wydarzenia-spolecznosci",
+    expect(sections[0].hideTitle).toBe(true);
+    expect(sections[0].items).toEqual([
+      expect.objectContaining({ to: "/kalendarz", label: "Widok Publiczny" }),
     ]);
     expect(sections[1].items.map((item) => item.to)).toEqual([
       "/panel/dashboard",

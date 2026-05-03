@@ -249,7 +249,7 @@ describe("apiClient registration uploads", () => {
 });
 
 describe("apiClient public event pages", () => {
-  it("encodes repeated public event filters as query params", async () => {
+  it("encodes public event filters and search as query params", async () => {
     const calls: string[] = [];
 
     vi.stubGlobal("window", {
@@ -284,15 +284,59 @@ describe("apiClient public event pages", () => {
       page: 2,
       pageSize: 10,
       filters: {
-        tags: ["NOWE OSOBY", "LOAD-TEST"],
+        search: "Kraków LOAD-TEST",
         trainerIds: ["trainer-1", "trainer-2"],
         dateFrom: "2026-07-01",
         dateTo: "2026-07-31",
+        audience: "new-people",
       },
     });
 
     expect(calls[0]).toBe(
-      "/emandar/api/public/events?page=2&pageSize=10&tag=NOWE+OSOBY&tag=LOAD-TEST&trainerId=trainer-1&trainerId=trainer-2&dateFrom=2026-07-01&dateTo=2026-07-31",
+      "/emandar/api/public/events?page=2&pageSize=10&search=Krak%C3%B3w+LOAD-TEST&trainerId=trainer-1&trainerId=trainer-2&dateFrom=2026-07-01&dateTo=2026-07-31&audience=new-people",
     );
+  });
+
+  it("does not send audience filters for community event pages", async () => {
+    const calls: string[] = [];
+
+    vi.stubGlobal("window", {
+      location: { pathname: "/emandar/wydarzenia-spolecznosci" },
+      sessionStorage: createSessionStorage(),
+      setInterval: vi.fn(),
+      clearInterval: vi.fn(),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const target = String(url);
+        calls.push(target);
+        return jsonResponse({
+          items: [],
+          page: 1,
+          pageSize: 10,
+          totalItems: 0,
+          totalPages: 0,
+          filters: {
+            tags: [],
+            trainers: [],
+            dateBounds: null,
+          },
+        });
+      }),
+    );
+
+    const { fetchPublicEventsPage } = await import("./apiClient");
+
+    await fetchPublicEventsPage("community", {
+      page: 1,
+      pageSize: 10,
+      filters: {
+        search: "Wrocław",
+        audience: "new-people",
+      },
+    });
+
+    expect(calls[0]).toBe("/emandar/api/public/community-events?page=1&pageSize=10&search=Wroc%C5%82aw");
   });
 });

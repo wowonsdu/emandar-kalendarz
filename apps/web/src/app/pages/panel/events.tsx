@@ -139,6 +139,14 @@ function formatDate(date: string) {
   }).format(new Date(date));
 }
 
+function formatCompactDate(date: string) {
+  return new Intl.DateTimeFormat("pl-PL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(date));
+}
+
 function formatShortTime(date: string) {
   return new Intl.DateTimeFormat("pl-PL", {
     hour: "2-digit",
@@ -4538,6 +4546,8 @@ export function EventsPage() {
       : hasOfficialManagementScope
         ? undefined
         : "Tutaj widzisz szkolenia Emandar, w których bierzesz udział.";
+  const officialListCounterpartyColumnLabel =
+    currentUser.role === "organizer" ? "Trener" : "Organizator";
 
   const availableTrainers = useMemo(
     () =>
@@ -5661,38 +5671,214 @@ export function EventsPage() {
               }
             />
           )}
-          {listedEvents.map((event) => {
-            const eventRequests = store.enrollmentRequests.filter(
-              (item) => item.eventId === event.id,
-            );
-            const activeRequestsCount = eventRequests.filter((item) =>
-              event.groupId
-                ? !item.eventParticipantId && item.finalStatus !== "rejected"
-                : item.finalStatus !== "rejected",
-            ).length;
-            const canDecideCollaboration =
-              !isCommunitySection &&
-              canDecideTrainingEventCollaboration(event, currentUser);
-            const ownerLabels = getEventOwnerLabel(event, store);
-            const listTitle = getEventCardTitle(event, currentUser, store);
-            const locationParts = getEventLocationParts(event.location);
-            const listEyebrow = isCommunitySection ? "Wydarzenie społeczności" : event.title;
-            const collaborationNotice = !isCommunitySection
-              ? getEventCollaborationNotice(event)
-              : null;
-            const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
-            const scheduleDays = getTrainingEventScheduleDays(event);
-            const canOpenEventDetails =
-              !(currentUser.role === "organizer" && isTrainingEventArchived(event));
-            const eventDetailPath = isCommunityModerationSection
-              ? `${getPanelEventDetailPath(event)}?view=moderation`
-              : getPanelEventDetailPath(event);
+          {!isCommunitySection && listedEvents.length > 0 ? (
+            <div className="hidden overflow-hidden rounded-[1.5rem] border border-brand-line bg-white shadow-soft lg:block">
+              <div className="overflow-x-auto">
+                <table className="w-full table-fixed border-collapse text-left">
+                  <colgroup>
+                    <col className="w-[28%]" />
+                    <col className="w-[14%]" />
+                    <col className="w-[7%]" />
+                    <col className="w-[6%]" />
+                    <col className="w-[5%]" />
+                    <col className="w-[6%]" />
+                    <col className="w-[15%]" />
+                    <col className="w-[11%]" />
+                    <col className="w-[8%]" />
+                  </colgroup>
+                  <thead className="bg-brand-shell/75 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                    <tr>
+                      <th className="px-5 py-4">Szkolenie</th>
+                      <th className="px-4 py-4">Termin</th>
+                      <th className="px-4 py-4 text-center">Miejsca</th>
+                      <th className="px-4 py-4 text-center">Potw.</th>
+                      <th className="px-4 py-4 text-center">Próg</th>
+                      <th className="px-4 py-4 text-center">Zgł.</th>
+                      <th className="px-4 py-4">{officialListCounterpartyColumnLabel}</th>
+                      <th className="px-4 py-4">Status</th>
+                      <th className="px-5 py-4 text-right">Akcja</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-brand-line">
+                    {listedEvents.map((event) => {
+                      const eventRequests = store.enrollmentRequests.filter(
+                        (item) => item.eventId === event.id,
+                      );
+                      const activeRequestsCount = eventRequests.filter((item) =>
+                        event.groupId
+                          ? !item.eventParticipantId && item.finalStatus !== "rejected"
+                          : item.finalStatus !== "rejected",
+                      ).length;
+                      const canDecideCollaboration =
+                        canDecideTrainingEventCollaboration(event, currentUser);
+                      const ownerLabels = getEventOwnerLabel(event, store);
+                      const listTitle = getEventCardTitle(event, currentUser, store);
+                      const locationParts = getEventLocationParts(event.location);
+                      const collaborationNotice = getEventCollaborationNotice(event);
+                      const scheduleDays = getTrainingEventScheduleDays(event);
+                      const firstScheduleDay = scheduleDays[0] ?? null;
+                      const lastScheduleDay = scheduleDays.at(-1) ?? firstScheduleDay;
+                      const compactScheduleLabel =
+                        firstScheduleDay && lastScheduleDay
+                          ? scheduleDays.length > 1
+                            ? `${formatCompactDate(firstScheduleDay.startsAt)} - ${formatCompactDate(lastScheduleDay.startsAt)}`
+                            : formatCompactDate(firstScheduleDay.startsAt)
+                          : getPanelScheduleRangeLabel(event);
+                      const canOpenEventDetails =
+                        !(currentUser.role === "organizer" && isTrainingEventArchived(event));
+                      const eventDetailPath = getPanelEventDetailPath(event);
+                      const confirmedCountLabel = getEventConfirmedCountLabel(event);
+                      const overflowLabel = getEventCapacityOverflowLabel(event);
 
-            return (
-              <article
-                key={event.id}
-                className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
-              >
+                      return (
+                        <tr key={event.id} className="align-top transition-colors hover:bg-brand-shell/35">
+                          <td className="max-w-[22rem] px-5 py-5">
+                            <p className="text-lg font-semibold leading-snug text-brand-navy">
+                              {listTitle}
+                            </p>
+                            <p className="mt-1 line-clamp-1 text-sm font-semibold text-brand-sky-deep">
+                              {event.title}
+                            </p>
+                            <p className="mt-1 line-clamp-2 text-sm leading-6 text-brand-muted">
+                              {event.summary}
+                            </p>
+                            {locationParts.extraLocationLabel ? (
+                              <p className="mt-2 text-xs font-semibold text-brand-muted">
+                                Dodatkowo: {locationParts.extraLocationLabel}
+                              </p>
+                            ) : null}
+                            {collaborationNotice ? (
+                              <p className="mt-3 rounded-2xl border border-brand-line bg-brand-shell px-3 py-2 text-xs font-semibold leading-5 text-brand-navy">
+                                {collaborationNotice}
+                              </p>
+                            ) : null}
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-5 text-sm text-brand-muted">
+                            <p className="font-semibold text-brand-navy">{compactScheduleLabel}</p>
+                            {firstScheduleDay ? (
+                              <p className="mt-1">
+                                {formatShortTime(firstScheduleDay.startsAt)} -{" "}
+                                {formatShortTime(firstScheduleDay.endsAt)}
+                              </p>
+                            ) : null}
+                            {scheduleDays.length > 1 ? (
+                              <p className="mt-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-sky-deep">
+                                {scheduleDays.length} dni
+                              </p>
+                            ) : null}
+                          </td>
+                          <td className="px-4 py-5 text-center text-sm font-semibold text-brand-navy">
+                            {getEventParticipantCountLabel(event)}
+                            {overflowLabel ? (
+                              <p className="mt-1 text-xs font-medium text-brand-muted">{overflowLabel}</p>
+                            ) : null}
+                          </td>
+                          <td className="px-4 py-5 text-center text-sm font-semibold text-brand-navy">
+                            {confirmedCountLabel?.replace("Potwierdzeni: ", "") ?? "-"}
+                          </td>
+                          <td className="px-4 py-5 text-center text-sm font-semibold text-brand-navy">
+                            {resolveMinimumParticipants(event)}
+                          </td>
+                          <td className="px-4 py-5 text-center text-sm font-semibold text-brand-navy">
+                            {activeRequestsCount}
+                          </td>
+                          <td className="px-4 py-5 text-sm text-brand-muted">
+                            <span className="line-clamp-2">
+                              {currentUser.role === "organizer"
+                                ? ownerLabels.trainerName
+                                : ownerLabels.organizerName}
+                            </span>
+                          </td>
+                          <td className="px-4 py-5">
+                            <div className="flex flex-col gap-2">
+                              <span className="rounded-full bg-brand-shell px-2 py-1 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+                                {event.isPublished ? "opublikowane" : "ukryte"}
+                              </span>
+                              <span className="rounded-full border border-brand-line px-2 py-1 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+                                {getEventLifecycleLabel(event)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-5 text-right">
+                            <div className="flex flex-col items-end gap-2">
+                              {canOpenEventDetails ? (
+                                <Link
+                                  to={eventDetailPath}
+                                  className="inline-flex items-center justify-center whitespace-nowrap rounded-full bg-brand-navy px-4 py-2.5 text-sm font-semibold text-white"
+                                >
+                                  Otwórz
+                                </Link>
+                              ) : (
+                                <span className="inline-flex items-center justify-center whitespace-nowrap rounded-full border border-brand-line bg-brand-shell px-4 py-2.5 text-sm font-semibold text-brand-muted">
+                                  Zarchiwizowane
+                                </span>
+                              )}
+                              {canDecideCollaboration ? (
+                                <CollaborationActionBar
+                                  pending={savingEventId === event.id}
+                                  acceptLabel="Akceptuj"
+                                  rejectLabel="Odrzuć"
+                                  onDecision={async (status) => {
+                                    setSavingEventId(event.id);
+
+                                    try {
+                                      await decideTrainingEventCollaboration(event.id, status);
+                                      toast.success("Zapisano decyzję o współpracy.");
+                                    } catch (error) {
+                                      toast.error(
+                                        error instanceof Error
+                                          ? error.message
+                                          : "Nie udało się zapisać decyzji.",
+                                      );
+                                    } finally {
+                                      setSavingEventId(null);
+                                    }
+                                  }}
+                                />
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+          <div className={cn("space-y-4", !isCommunitySection && "lg:hidden")}>
+            {listedEvents.map((event) => {
+              const eventRequests = store.enrollmentRequests.filter(
+                (item) => item.eventId === event.id,
+              );
+              const activeRequestsCount = eventRequests.filter((item) =>
+                event.groupId
+                  ? !item.eventParticipantId && item.finalStatus !== "rejected"
+                  : item.finalStatus !== "rejected",
+              ).length;
+              const canDecideCollaboration =
+                !isCommunitySection &&
+                canDecideTrainingEventCollaboration(event, currentUser);
+              const ownerLabels = getEventOwnerLabel(event, store);
+              const listTitle = getEventCardTitle(event, currentUser, store);
+              const locationParts = getEventLocationParts(event.location);
+              const listEyebrow = isCommunitySection ? "Wydarzenie społeczności" : event.title;
+              const collaborationNotice = !isCommunitySection
+                ? getEventCollaborationNotice(event)
+                : null;
+              const scheduleRangeLabel = getPanelScheduleRangeLabel(event);
+              const scheduleDays = getTrainingEventScheduleDays(event);
+              const canOpenEventDetails =
+                !(currentUser.role === "organizer" && isTrainingEventArchived(event));
+              const eventDetailPath = isCommunityModerationSection
+                ? `${getPanelEventDetailPath(event)}?view=moderation`
+                : getPanelEventDetailPath(event);
+
+              return (
+                <article
+                  key={event.id}
+                  className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
+                >
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="max-w-3xl">
                     <p className="text-sm font-semibold uppercase tracking-[0.24em] text-brand-sky-deep">
@@ -5815,6 +6001,7 @@ export function EventsPage() {
               </article>
             );
           })}
+          </div>
         </div>
       ) : null}
     </PanelSection>

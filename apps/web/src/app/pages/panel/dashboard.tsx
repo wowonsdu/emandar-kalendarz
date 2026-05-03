@@ -1026,6 +1026,23 @@ function getOrganizerOfficialDashboardEventLabel(
   return `${title} • ${formatDate(bounds.startsAt)}`;
 }
 
+function getDashboardSummaryEventDetail(
+  event: TrainingEvent | null,
+  store: ReturnType<typeof useAppState>["store"],
+  emptyLabel: string,
+) {
+  if (!event) {
+    return emptyLabel;
+  }
+
+  if (event.groupId) {
+    const group = store.groups.find((item) => item.id === event.groupId) ?? null;
+    return group?.name ?? event.groupName ?? event.title ?? event.location;
+  }
+
+  return event.groupName ?? event.title ?? event.location;
+}
+
 function getDaysUntilLabel(startsAt: string, now: Date) {
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
@@ -4852,92 +4869,107 @@ function OperationalDashboardPerspectiveView({
       }),
     [analyticsActiveEvents, dashboardWeekBuckets],
   );
-  const relationsCount = useMemo(() => {
-    if (isTrainerPerspective) {
-      return trainerProfile
-        ? store.relations.filter((item) => item.trainerId === trainerProfile.id).length
-        : 0;
-    }
-
-    return organizerProfile
-      ? store.relations.filter((item) => item.organizerId === organizerProfile.id).length
-      : 0;
-  }, [isTrainerPerspective, organizerProfile, store.relations, trainerProfile]);
+  const trainerFutureEvents = useMemo(
+    () =>
+      sortEventsByDate(
+        relevantEvents.filter(
+          (event) =>
+            new Date(getTrainingEventScheduleBounds(event).startsAt).getTime() >=
+            dashboardNow.getTime(),
+        ),
+      ),
+    [dashboardNow, relevantEvents],
+  );
+  const nextDashboardEvent = isTrainerPerspective
+    ? trainerFutureEvents[0] ?? null
+    : organizerOfficialDashboard?.pipelineEvents[0] ?? null;
+  const followingDashboardEvent = isTrainerPerspective
+    ? trainerFutureEvents[1] ?? null
+    : organizerOfficialDashboard?.pipelineEvents[1] ?? null;
+  const dashboardSummaryCards = [
+    {
+      label: "Najbliższe",
+      value: nextDashboardEvent
+        ? getDaysUntilLabel(
+            getTrainingEventScheduleBounds(nextDashboardEvent).startsAt,
+            dashboardNow,
+          )
+        : "Brak",
+      detail: getDashboardSummaryEventDetail(
+        nextDashboardEvent,
+        store,
+        "Brak najbliższego terminu",
+      ),
+      icon: CalendarDays,
+    },
+    {
+      label: "Następne",
+      value: followingDashboardEvent
+        ? getDaysUntilLabel(
+            getTrainingEventScheduleBounds(followingDashboardEvent).startsAt,
+            dashboardNow,
+          )
+        : "Brak",
+      detail: getDashboardSummaryEventDetail(
+        followingDashboardEvent,
+        store,
+        "Brak następnego terminu",
+      ),
+      icon: CalendarDays,
+    },
+    {
+      label: "Grupy",
+      value: isTrainerPerspective
+        ? new Set(relevantEvents.map((event) => event.groupId).filter(Boolean)).size
+        : organizerOfficialDashboard?.groups.length ?? 0,
+      icon: Users,
+    },
+    {
+      label: "Szkolenia",
+      value: isTrainerPerspective
+        ? relevantEvents.length
+        : organizerOfficialDashboard?.pipelineEvents.length ?? 0,
+      icon: CalendarDays,
+    },
+    {
+      label: "Uczestnicy",
+      value: isTrainerPerspective
+        ? relevantEvents.reduce((sum, event) => sum + getEventParticipantCount(event), 0)
+        : organizerOfficialDashboard?.activeMemberCount ?? 0,
+      icon: ShieldCheck,
+    },
+    {
+      label: "Powiadomienia",
+      value: notificationsCount,
+      icon: Bell,
+    },
+  ];
+  const dashboardSummaryGrid = (
+    <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 sm:gap-4 xl:grid-cols-6">
+      {dashboardSummaryCards.map((card) => (
+        <StatCard
+          key={card.label}
+          label={card.label}
+          value={card.value}
+          detail={card.detail}
+          valueClassName={
+            card.detail ? "text-lg leading-tight sm:text-2xl" : undefined
+          }
+          icon={card.icon}
+          layout="stacked"
+          className="min-h-[108px] w-full min-w-0"
+          labelClassName="whitespace-nowrap"
+          detailClassName="mt-0 w-full truncate whitespace-nowrap"
+          detailPlacement="below"
+        />
+      ))}
+    </div>
+  );
 
   if (!isTrainerPerspective) {
-    const nextPipelineEvent = organizerOfficialDashboard?.pipelineEvents[0] ?? null;
-    const followingPipelineEvent = organizerOfficialDashboard?.pipelineEvents[1] ?? null;
-    const nextPipelineEventDate = nextPipelineEvent
-      ? getDaysUntilLabel(nextPipelineEvent.startsAt, dashboardNow)
-      : "Brak";
-    const nextPipelineEventGroup =
-      nextPipelineEvent?.groupName ??
-      (nextPipelineEvent?.groupId
-        ? store.groups.find((item) => item.id === nextPipelineEvent.groupId)?.name ?? null
-        : null) ??
-      "Brak najbliższego terminu";
-    const followingPipelineEventDate = followingPipelineEvent
-      ? getDaysUntilLabel(followingPipelineEvent.startsAt, dashboardNow)
-      : "Brak";
-    const followingPipelineEventGroup =
-      followingPipelineEvent?.groupName ??
-      (followingPipelineEvent?.groupId
-        ? store.groups.find((item) => item.id === followingPipelineEvent.groupId)?.name ?? null
-        : null) ??
-      "Brak następnego terminu";
-
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-3 min-[560px]:grid-cols-3 md:grid-cols-5 sm:gap-4">
-          <StatCard
-            label="Najbliższe"
-            value={nextPipelineEventDate}
-            detail={nextPipelineEventGroup}
-            valueClassName="text-lg leading-tight sm:text-2xl"
-            icon={CalendarDays}
-            layout="stacked"
-            className="min-h-[108px] w-full min-w-0"
-            labelClassName="whitespace-nowrap"
-            detailClassName="mt-0 w-full truncate whitespace-nowrap"
-            detailPlacement="below"
-          />
-          <StatCard
-            label="Następne"
-            value={followingPipelineEventDate}
-            detail={followingPipelineEventGroup}
-            valueClassName="text-lg leading-tight sm:text-2xl"
-            icon={CalendarDays}
-            layout="stacked"
-            className="min-h-[108px] w-full min-w-0"
-            labelClassName="whitespace-nowrap"
-            detailClassName="mt-0 w-full truncate whitespace-nowrap"
-            detailPlacement="below"
-          />
-          <StatCard
-            label="Grupy"
-            value={organizerOfficialDashboard?.groups.length ?? 0}
-            icon={Users}
-            layout="stacked"
-            className="min-h-[108px] w-full min-w-0"
-            labelClassName="whitespace-nowrap"
-          />
-          <StatCard
-            label="Szkolenia"
-            value={organizerOfficialDashboard?.pipelineEvents.length ?? 0}
-            icon={CalendarDays}
-            layout="stacked"
-            className="min-h-[108px] w-full min-w-0"
-            labelClassName="whitespace-nowrap"
-          />
-          <StatCard
-            label="Uczestnicy"
-            value={organizerOfficialDashboard?.activeMemberCount ?? 0}
-            icon={ShieldCheck}
-            layout="stacked"
-            className="min-h-[108px] w-full min-w-0"
-            labelClassName="whitespace-nowrap"
-          />
-        </div>
+        {dashboardSummaryGrid}
 
         <section className="space-y-4">
           <div>
@@ -5081,11 +5113,7 @@ function OperationalDashboardPerspectiveView({
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-3">
-        <StatCard label="Szkolenia" value={relevantEvents.length} icon={CalendarDays} />
-        <StatCard label="Powiadomienia" value={notificationsCount} icon={ShieldCheck} />
-        <StatCard label="Relacje" value={relationsCount} icon={Users} />
-      </div>
+      {dashboardSummaryGrid}
 
       <section className="space-y-4">
         <div>

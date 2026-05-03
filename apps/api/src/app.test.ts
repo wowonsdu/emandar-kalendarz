@@ -709,7 +709,9 @@ describe("emandar api", () => {
         status: "active",
         isPublished: true,
         trainerId: "trainer-1",
+        location: "Warszawa",
         tags: ["NOWE OSOBY", "Weekend"],
+        joinAudienceSetting: "new-people",
         startsAt: "2026-07-10T08:00:00.000Z",
         endsAt: "2026-07-11T10:00:00.000Z",
         scheduleDays: [
@@ -724,7 +726,9 @@ describe("emandar api", () => {
         status: "active",
         isPublished: true,
         trainerId: "trainer-2",
+        location: "Kraków",
         tags: ["LOAD-TEST"],
+        joinAudienceSetting: "existing-practitioners",
         startsAt: "2026-07-20T08:00:00.000Z",
         endsAt: "2026-07-20T10:00:00.000Z",
       },
@@ -735,7 +739,9 @@ describe("emandar api", () => {
         status: "active",
         isPublished: true,
         trainerId: "trainer-2",
+        location: "Poznań",
         tags: ["nowe osoby"],
+        joinAudienceSetting: "new-people",
         startsAt: "2026-08-01T08:00:00.000Z",
         endsAt: "2026-08-01T10:00:00.000Z",
       },
@@ -746,6 +752,7 @@ describe("emandar api", () => {
         status: "active",
         isPublished: true,
         trainerId: "trainer-1",
+        location: "Gdańsk",
         tags: ["Krąg"],
         startsAt: "2026-07-15T08:00:00.000Z",
         endsAt: "2026-07-15T10:00:00.000Z",
@@ -757,6 +764,7 @@ describe("emandar api", () => {
         status: "active",
         isPublished: true,
         trainerId: "trainer-3",
+        location: "Wrocław",
         tags: ["LOAD-TEST"],
         startsAt: "2026-07-16T08:00:00.000Z",
         endsAt: "2026-07-16T10:00:00.000Z",
@@ -776,32 +784,90 @@ describe("emandar api", () => {
       }),
     });
 
-    const tagPage = await app.inject("/emandar/api/public/events?tag=nowe%20osoby&pageSize=1");
-    expect(tagPage.statusCode).toBe(200);
-    expect(tagPage.json()).toMatchObject({
+    const legacyTagPage = await app.inject("/emandar/api/public/events?tag=nowe%20osoby&pageSize=1");
+    expect(legacyTagPage.statusCode).toBe(200);
+    expect(legacyTagPage.json()).toMatchObject({
       page: 1,
       pageSize: 1,
-      totalItems: 2,
-      totalPages: 2,
+      totalItems: 3,
+      totalPages: 3,
     });
-    expect(tagPage.json().items).toHaveLength(1);
-    expect(tagPage.json().filters.tags).toEqual(
+    expect(legacyTagPage.json().items).toHaveLength(1);
+    expect(legacyTagPage.json().filters.tags).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ value: "NOWE OSOBY", label: "NOWE OSOBY", count: 2 }),
         expect.objectContaining({ value: "LOAD-TEST", label: "LOAD-TEST", count: 1 }),
       ]),
     );
 
-    const combined = await app.inject("/emandar/api/public/events?tag=NOWE%20OSOBY&trainerId=trainer-2");
+    const searchByLocation = await app.inject("/emandar/api/public/events?search=krak%C3%B3w");
+    expect(searchByLocation.statusCode).toBe(200);
+    expect(searchByLocation.json().items.map((item: { id: string }) => item.id)).toEqual(["official-load"]);
+
+    const searchByTrainer = await app.inject("/emandar/api/public/events?search=beata");
+    expect(searchByTrainer.statusCode).toBe(200);
+    expect(searchByTrainer.json().items.map((item: { id: string }) => item.id)).toEqual([
+      "official-load",
+      "official-new-trainer-2",
+    ]);
+
+    const searchByTag = await app.inject("/emandar/api/public/events?search=NOWE%20OSOBY");
+    expect(searchByTag.statusCode).toBe(200);
+    expect(searchByTag.json().totalItems).toBe(2);
+
+    const searchByTitle = await app.inject("/emandar/api/public/events?search=Official%20Load");
+    expect(searchByTitle.statusCode).toBe(200);
+    expect(searchByTitle.json().totalItems).toBe(0);
+
+    const searchByDate = await app.inject("/emandar/api/public/events?search=2026-07&pageSize=1");
+    expect(searchByDate.statusCode).toBe(200);
+    expect(searchByDate.json()).toMatchObject({
+      page: 1,
+      pageSize: 1,
+      totalItems: 2,
+      totalPages: 2,
+    });
+
+    const combined = await app.inject(
+      "/emandar/api/public/events?search=LOAD-TEST&trainerId=trainer-2&dateFrom=2026-07-20&dateTo=2026-07-20&audience=existing-practitioners",
+    );
+    expect(combined.statusCode).toBe(200);
     expect(combined.json().totalItems).toBe(1);
-    expect(combined.json().items[0].id).toBe("official-new-trainer-2");
+    expect(combined.json().items[0].id).toBe("official-load");
 
     const dateOverlap = await app.inject("/emandar/api/public/events?dateFrom=2026-07-11&dateTo=2026-07-11");
     expect(dateOverlap.json().items.map((item: { id: string }) => item.id)).toContain("official-multiday");
 
+    const newPeople = await app.inject("/emandar/api/public/events?audience=new-people&pageSize=1");
+    expect(newPeople.statusCode).toBe(200);
+    expect(newPeople.json()).toMatchObject({
+      page: 1,
+      pageSize: 1,
+      totalItems: 2,
+      totalPages: 2,
+    });
+    expect(newPeople.json().items.map((item: { id: string }) => item.id)).toEqual(["official-multiday"]);
+
+    const existingPractitioners = await app.inject("/emandar/api/public/events?audience=existing-practitioners");
+    expect(existingPractitioners.statusCode).toBe(200);
+    expect(existingPractitioners.json().totalItems).toBe(1);
+    expect(existingPractitioners.json().items.map((item: { id: string }) => item.id)).toEqual(["official-load"]);
+
+    const audienceCombined = await app.inject(
+      "/emandar/api/public/events?audience=existing-practitioners&trainerId=trainer-2&search=LOAD-TEST&dateFrom=2026-07-20&dateTo=2026-07-20",
+    );
+    expect(audienceCombined.statusCode).toBe(200);
+    expect(audienceCombined.json().totalItems).toBe(1);
+    expect(audienceCombined.json().items[0].id).toBe("official-load");
+
     const community = await app.inject("/emandar/api/public/community-events?trainerId=trainer-3");
     expect(community.json().totalItems).toBe(1);
     expect(community.json().items[0].id).toBe("community-trainer-3");
+
+    const communitySearch = await app.inject("/emandar/api/public/community-events?search=wroc%C5%82aw");
+    expect(communitySearch.statusCode).toBe(200);
+    expect(communitySearch.json().totalItems).toBe(1);
+    expect(communitySearch.json().items[0].id).toBe("community-trainer-3");
 
     const invalidDate = await app.inject("/emandar/api/public/events?dateFrom=2026-02-31");
     expect(invalidDate.statusCode).toBe(400);
@@ -810,6 +876,10 @@ describe("emandar api", () => {
     const invalidRange = await app.inject("/emandar/api/public/community-events?dateFrom=2026-08-01&dateTo=2026-07-01");
     expect(invalidRange.statusCode).toBe(400);
     expect(invalidRange.json()).toEqual({ error: "invalid-query" });
+
+    const invalidAudience = await app.inject("/emandar/api/public/events?audience=practice");
+    expect(invalidAudience.statusCode).toBe(400);
+    expect(invalidAudience.json()).toEqual({ error: "invalid-query" });
 
     await app.close();
   });

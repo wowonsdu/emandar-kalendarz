@@ -60,17 +60,15 @@
 - Keep `functions/` as a raw reference snapshot for the future backend rewrite.
 - Do not wire the active frontend, npm scripts, tests, or release process back to `functions/` unless the user explicitly asks for that migration work.
 
-## Git Flow Rules
+## Git Rules
 
-- This repository uses Git Flow with `master` as the production branch and `develop` as the integration branch.
-- Never implement task work directly on `master` or `develop`.
-- For normal work, create branches from `develop` using `feature/<short-name>` or `bugfix/<short-name>`.
-- For urgent production fixes, create branches from `master` using `hotfix/<short-name>`.
-- Merge completed feature and bugfix branches back into `develop`.
-- Merge release and hotfix work back into `master`, and also keep `develop` updated with the same changes.
-- When multiple agents work in parallel, each agent must use a separate branch and avoid sharing a working branch.
-- Before starting work, verify the current branch and create a new Git Flow branch if needed.
-- Before finishing work, merge into the correct long-lived branch instead of leaving changes only on an agent branch.
+- Do not create new feature, bugfix, hotfix, release, or agent branches for this repository unless the user explicitly asks for a branch operation.
+- Work directly on `develop` by default.
+- If the current branch is not `develop`, switch to `develop` before starting task work unless doing so would disturb unrelated uncommitted changes; in that case, preserve the unrelated work and use the narrowest safe path to land the requested task on `develop`.
+- After each completed task, automatically commit the task changes to `develop` and push `develop` without asking for confirmation.
+- Keep commit and push work quiet and non-blocking when practical. Do not provide process narration unless it affects the user's current request.
+- After a successful background commit and push, report only that the task was committed and pushed to `develop`.
+- Never include unrelated working-tree changes in the automatic task commit.
 
 ## Locked Follow-Up: roster / rezerwowi / komunikacja
 

@@ -25,6 +25,7 @@ export type AppNavigationItem = {
 
 export type AppNavigationSection = {
   title: string;
+  hideTitle?: boolean;
   items: AppNavigationItem[];
 };
 
@@ -87,7 +88,8 @@ export function buildAuthenticatedNavigationSections(
   const sections: AppNavigationSection[] = [
     {
       title: "Widok Publiczny",
-      items: publicNavItems.map((item) => ({ ...item })),
+      hideTitle: true,
+      items: [{ to: "/kalendarz", label: "Widok Publiczny", icon: CalendarDays }],
     },
     {
       title: "Moja Przestrzeń",

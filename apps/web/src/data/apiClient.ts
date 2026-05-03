@@ -80,10 +80,11 @@ export type PaginatedResult<T> = {
 };
 
 export type PublicEventFilters = {
-  tags?: string[];
+  search?: string;
   trainerIds?: string[];
   dateFrom?: string;
   dateTo?: string;
+  audience?: "all" | "new-people" | "existing-practitioners";
 };
 
 export type PublicEventFilterOptions = {
@@ -332,10 +333,11 @@ export async function fetchPublicEventsPage(
       `${path}${buildQueryString({
         page: options.page ?? 1,
         pageSize: options.pageSize ?? 25,
-        tag: filters.tags,
+        search: filters.search,
         trainerId: filters.trainerIds,
         dateFrom: filters.dateFrom,
         dateTo: filters.dateTo,
+        audience: kind === "official" && filters.audience !== "all" ? filters.audience : undefined,
       })}`,
     ),
   );

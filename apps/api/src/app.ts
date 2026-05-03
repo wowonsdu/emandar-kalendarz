@@ -129,7 +129,7 @@ function parseEventPageQuery(query: unknown) {
   };
 }
 
-function parsePublicEventPageQuery(query: unknown) {
+function parsePublicEventPageQuery(query: unknown, options: { includeAudience?: boolean } = {}) {
   const parsed = publicEventPageQuerySchema.safeParse(query ?? {});
   if (!parsed.success) {
     return {
@@ -146,10 +146,11 @@ function parsePublicEventPageQuery(query: unknown) {
       pageSize,
       sort: parsed.data.sort,
       filters: {
-        tags: parsed.data.tag,
+        search: parsed.data.search,
         trainerIds: parsed.data.trainerId,
         dateFrom: parsed.data.dateFrom,
         dateTo: parsed.data.dateTo,
+        audience: options.includeAudience ? parsed.data.audience : "all",
       },
     },
   };
@@ -374,7 +375,7 @@ export async function buildApp(options: AppOptions) {
     trainers: (await domain.publicStore()).trainers,
   }));
   registerAll(app, "get", config, "/api/public/events", async (request, reply) => {
-    const parsedQuery = parsePublicEventPageQuery(request.query);
+    const parsedQuery = parsePublicEventPageQuery(request.query, { includeAudience: true });
     if (!parsedQuery.ok) {
       return reply.status(400).send({ error: "invalid-query" });
     }

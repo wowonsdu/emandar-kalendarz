@@ -204,6 +204,17 @@ alter table sms_challenges add column if not exists code text not null default '
 alter table sms_challenges add column if not exists expires_at timestamptz null;
 alter table sms_challenges add column if not exists used_at timestamptz null;
 alter table sms_challenges add column if not exists request_ip text null;
+alter table sms_challenges add column if not exists attempt_count integer not null default 0;
+
+create table if not exists sms_request_attempts (
+  id text primary key,
+  phone text not null,
+  request_ip text null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists sms_request_attempts_phone_created_idx on sms_request_attempts (phone, created_at);
+create index if not exists sms_request_attempts_ip_created_idx on sms_request_attempts (request_ip, created_at);
 
 create table if not exists auth_sessions (
   id text primary key,

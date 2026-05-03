@@ -247,3 +247,52 @@ describe("apiClient registration uploads", () => {
     ]);
   });
 });
+
+describe("apiClient public event pages", () => {
+  it("encodes repeated public event filters as query params", async () => {
+    const calls: string[] = [];
+
+    vi.stubGlobal("window", {
+      location: { pathname: "/emandar/kalendarz" },
+      sessionStorage: createSessionStorage(),
+      setInterval: vi.fn(),
+      clearInterval: vi.fn(),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL) => {
+        const target = String(url);
+        calls.push(target);
+        return jsonResponse({
+          items: [],
+          page: 2,
+          pageSize: 10,
+          totalItems: 0,
+          totalPages: 0,
+          filters: {
+            tags: [],
+            trainers: [],
+            dateBounds: null,
+          },
+        });
+      }),
+    );
+
+    const { fetchPublicEventsPage } = await import("./apiClient");
+
+    await fetchPublicEventsPage("official", {
+      page: 2,
+      pageSize: 10,
+      filters: {
+        tags: ["NOWE OSOBY", "LOAD-TEST"],
+        trainerIds: ["trainer-1", "trainer-2"],
+        dateFrom: "2026-07-01",
+        dateTo: "2026-07-31",
+      },
+    });
+
+    expect(calls[0]).toBe(
+      "/emandar/api/public/events?page=2&pageSize=10&tag=NOWE+OSOBY&tag=LOAD-TEST&trainerId=trainer-1&trainerId=trainer-2&dateFrom=2026-07-01&dateTo=2026-07-31",
+    );
+  });
+});

@@ -331,6 +331,82 @@ describe("emandar api", () => {
     await app.close();
   });
 
+  it("rate limits SMS requests by phone and limits wrong code attempts", async () => {
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(),
+      authStore,
+    });
+    const csrfToken = await csrf(app);
+    const phone = "+48 600 700 801";
+
+    for (let index = 0; index < 5; index += 1) {
+      const response = await app.inject({
+        method: "POST",
+        url: "/emandar/api/auth/sms/request",
+        headers: {
+          cookie: csrfToken.cookie,
+          "x-emandar-csrf": csrfToken.token,
+          "x-forwarded-for": `10.0.0.${index}`,
+        },
+        payload: { phone },
+      });
+      expect(response.statusCode).toBe(200);
+    }
+
+    const limited = await app.inject({
+      method: "POST",
+      url: "/emandar/api/auth/sms/request",
+      headers: {
+        cookie: csrfToken.cookie,
+        "x-emandar-csrf": csrfToken.token,
+        "x-forwarded-for": "10.0.0.99",
+      },
+      payload: { phone },
+    });
+    expect(limited.statusCode).toBe(429);
+
+    const attemptsPhone = "+48 600 700 802";
+    await app.inject({
+      method: "POST",
+      url: "/emandar/api/auth/sms/request",
+      headers: {
+        cookie: csrfToken.cookie,
+        "x-emandar-csrf": csrfToken.token,
+        "x-forwarded-for": "10.0.1.1",
+      },
+      payload: { phone: attemptsPhone },
+    });
+
+    for (let index = 0; index < 4; index += 1) {
+      const wrong = await app.inject({
+        method: "POST",
+        url: "/emandar/api/auth/sms/confirm",
+        headers: {
+          cookie: csrfToken.cookie,
+          "x-emandar-csrf": csrfToken.token,
+        },
+        payload: { phone: attemptsPhone, code: "000000" },
+      });
+      expect(wrong.statusCode).toBe(401);
+    }
+
+    const tooMany = await app.inject({
+      method: "POST",
+      url: "/emandar/api/auth/sms/confirm",
+      headers: {
+        cookie: csrfToken.cookie,
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: { phone: attemptsPhone, code: "000000" },
+    });
+    expect(tooMany.statusCode).toBe(429);
+    expect(authStore.auditLog.some((item) => item.action === "sms.request.rate-limited")).toBe(true);
+    expect(authStore.auditLog.some((item) => item.action === "sms.confirm.too-many-attempts")).toBe(true);
+    await app.close();
+  });
+
   it("rejects cookie-based mutations without CSRF", async () => {
     const app = await buildApp({
       config,
@@ -564,6 +640,177 @@ describe("emandar api", () => {
 
     const response = await app.inject("/emandar/api/mock/state");
     expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("paginates public and panel event read models with a capped page size", async () => {
+    const trainingEvents = Array.from({ length: 130 }, (_, index) => ({
+      id: `event-${index + 1}`,
+      title: `Event ${index + 1}`,
+      brandStatus: index % 2 === 0 ? "official" : "supported",
+      status: "active",
+      isPublished: true,
+      startsAt: `2026-07-${String((index % 28) + 1).padStart(2, "0")}T10:00:00.000Z`,
+      endsAt: `2026-07-${String((index % 28) + 1).padStart(2, "0")}T12:00:00.000Z`,
+    }));
+    const authStore = new InMemoryAuthStore();
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository({
+        ...testStoreForPermissions("admin", ["admin"]),
+        trainingEvents,
+        publicTrainingEvents: trainingEvents,
+      }),
+      authStore,
+    });
+
+    const publicPage = await app.inject("/emandar/api/public/events");
+    expect(publicPage.statusCode).toBe(200);
+    expect(publicPage.json()).toMatchObject({
+      page: 1,
+      pageSize: 25,
+      totalItems: 65,
+      totalPages: 3,
+    });
+    expect(publicPage.json().items).toHaveLength(25);
+
+    const capped = await app.inject("/emandar/api/public/community-events?pageSize=500");
+    expect(capped.json()).toMatchObject({
+      pageSize: 100,
+      totalItems: 65,
+      totalPages: 1,
+    });
+
+    const csrfToken = await csrf(app);
+    const adminSession = await loginWithSms(app, "+48 600 000 001", csrfToken);
+    const panelPage = await app.inject({
+      url: "/emandar/api/panel/read-models/events-page?kind=community&page=2&pageSize=10",
+      headers: {
+        cookie: mergeCookies(adminSession, csrfToken.cookie),
+      },
+    });
+    expect(panelPage.statusCode).toBe(200);
+    expect(panelPage.json()).toMatchObject({
+      page: 2,
+      pageSize: 10,
+      totalItems: 65,
+      totalPages: 7,
+    });
+    expect(panelPage.json().items).toHaveLength(10);
+    await app.close();
+  });
+
+  it("filters public event pages before pagination and returns full-collection facets", async () => {
+    const trainingEvents = [
+      {
+        id: "official-multiday",
+        title: "Official Multiday",
+        brandStatus: "official",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-1",
+        tags: ["NOWE OSOBY", "Weekend"],
+        startsAt: "2026-07-10T08:00:00.000Z",
+        endsAt: "2026-07-11T10:00:00.000Z",
+        scheduleDays: [
+          { startsAt: "2026-07-10T08:00:00.000Z", endsAt: "2026-07-10T10:00:00.000Z" },
+          { startsAt: "2026-07-11T08:00:00.000Z", endsAt: "2026-07-11T10:00:00.000Z" },
+        ],
+      },
+      {
+        id: "official-load",
+        title: "Official Load",
+        brandStatus: "official",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-2",
+        tags: ["LOAD-TEST"],
+        startsAt: "2026-07-20T08:00:00.000Z",
+        endsAt: "2026-07-20T10:00:00.000Z",
+      },
+      {
+        id: "official-new-trainer-2",
+        title: "Official New Trainer 2",
+        brandStatus: "official",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-2",
+        tags: ["nowe osoby"],
+        startsAt: "2026-08-01T08:00:00.000Z",
+        endsAt: "2026-08-01T10:00:00.000Z",
+      },
+      {
+        id: "community-trainer-1",
+        title: "Community Trainer 1",
+        brandStatus: "supported",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-1",
+        tags: ["Krąg"],
+        startsAt: "2026-07-15T08:00:00.000Z",
+        endsAt: "2026-07-15T10:00:00.000Z",
+      },
+      {
+        id: "community-trainer-3",
+        title: "Community Trainer 3",
+        brandStatus: "supported",
+        status: "active",
+        isPublished: true,
+        trainerId: "trainer-3",
+        tags: ["LOAD-TEST"],
+        startsAt: "2026-07-16T08:00:00.000Z",
+        endsAt: "2026-07-16T10:00:00.000Z",
+      },
+    ];
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository({
+        ...testStoreForPermissions("admin", ["admin"]),
+        trainers: [
+          { id: "trainer-1", displayName: "Anna", isVisible: true },
+          { id: "trainer-2", displayName: "Beata", isVisible: true },
+          { id: "trainer-3", displayName: "Celina", isVisible: true },
+        ],
+        trainingEvents,
+        publicTrainingEvents: trainingEvents,
+      }),
+    });
+
+    const tagPage = await app.inject("/emandar/api/public/events?tag=nowe%20osoby&pageSize=1");
+    expect(tagPage.statusCode).toBe(200);
+    expect(tagPage.json()).toMatchObject({
+      page: 1,
+      pageSize: 1,
+      totalItems: 2,
+      totalPages: 2,
+    });
+    expect(tagPage.json().items).toHaveLength(1);
+    expect(tagPage.json().filters.tags).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "NOWE OSOBY", label: "NOWE OSOBY", count: 2 }),
+        expect.objectContaining({ value: "LOAD-TEST", label: "LOAD-TEST", count: 1 }),
+      ]),
+    );
+
+    const combined = await app.inject("/emandar/api/public/events?tag=NOWE%20OSOBY&trainerId=trainer-2");
+    expect(combined.json().totalItems).toBe(1);
+    expect(combined.json().items[0].id).toBe("official-new-trainer-2");
+
+    const dateOverlap = await app.inject("/emandar/api/public/events?dateFrom=2026-07-11&dateTo=2026-07-11");
+    expect(dateOverlap.json().items.map((item: { id: string }) => item.id)).toContain("official-multiday");
+
+    const community = await app.inject("/emandar/api/public/community-events?trainerId=trainer-3");
+    expect(community.json().totalItems).toBe(1);
+    expect(community.json().items[0].id).toBe("community-trainer-3");
+
+    const invalidDate = await app.inject("/emandar/api/public/events?dateFrom=2026-02-31");
+    expect(invalidDate.statusCode).toBe(400);
+    expect(invalidDate.json()).toEqual({ error: "invalid-query" });
+
+    const invalidRange = await app.inject("/emandar/api/public/community-events?dateFrom=2026-08-01&dateTo=2026-07-01");
+    expect(invalidRange.statusCode).toBe(400);
+    expect(invalidRange.json()).toEqual({ error: "invalid-query" });
+
     await app.close();
   });
 

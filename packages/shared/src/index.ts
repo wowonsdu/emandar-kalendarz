@@ -92,6 +92,154 @@ export const publicEventListResponseSchema = z.object({
   events: z.array(z.record(z.unknown())),
 });
 
+const queryScalarSchema = z.preprocess(
+  (value) => (Array.isArray(value) ? value[0] : value),
+  z.union([z.string(), z.number()]).optional(),
+);
+
+const repeatedQueryStringSchema = z.preprocess(
+  (value) => {
+    if (value === undefined) {
+      return [];
+    }
+
+    return Array.isArray(value) ? value : [value];
+  },
+  z
+    .array(z.string())
+    .transform((values) => values.map((value) => value.trim()).filter(Boolean)),
+);
+
+function parsePositiveIntQueryParam(value: z.infer<typeof queryScalarSchema>, fallback: number, ctx: z.RefinementCtx) {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Expected a positive integer",
+    });
+    return z.NEVER;
+  }
+
+  return parsed;
+}
+
+function isValidCalendarDate(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
+
+const calendarDateQuerySchema = queryScalarSchema.transform((value, ctx) => {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (!isValidCalendarDate(normalized)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Expected YYYY-MM-DD",
+    });
+    return z.NEVER;
+  }
+
+  return normalized;
+});
+
+export const paginatedRecordsResponseSchema = z.object({
+  items: z.array(z.record(z.unknown())),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+  totalItems: z.number().int().nonnegative(),
+  totalPages: z.number().int().nonnegative(),
+});
+
+export const publicEventPageQuerySchema = z
+  .object({
+    page: queryScalarSchema.transform((value, ctx) => parsePositiveIntQueryParam(value, 1, ctx)),
+    pageSize: queryScalarSchema.transform((value, ctx) => parsePositiveIntQueryParam(value, 25, ctx)),
+    sort: queryScalarSchema.transform((value, ctx) => {
+      const normalized = String(value ?? "startsAtAsc").trim();
+      if (normalized === "startsAtAsc" || normalized === "startsAtDesc" || normalized === "createdAtDesc") {
+        return normalized;
+      }
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid sort",
+      });
+      return z.NEVER;
+    }),
+    tag: repeatedQueryStringSchema,
+    trainerId: repeatedQueryStringSchema,
+    dateFrom: calendarDateQuerySchema,
+    dateTo: calendarDateQuerySchema,
+  })
+  .partial()
+  .transform((value, ctx) => {
+    const dateFrom = value.dateFrom;
+    const dateTo = value.dateTo;
+    if (dateFrom && dateTo && dateFrom > dateTo) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "dateFrom must be before or equal to dateTo",
+        path: ["dateFrom"],
+      });
+      return z.NEVER;
+    }
+
+    return {
+      page: value.page ?? 1,
+      pageSize: value.pageSize ?? 25,
+      sort: value.sort ?? "startsAtAsc",
+      tag: value.tag ?? [],
+      trainerId: value.trainerId ?? [],
+      dateFrom,
+      dateTo,
+    };
+  });
+
+export type PublicEventPageQuery = z.infer<typeof publicEventPageQuerySchema>;
+
+export const publicEventFiltersResponseSchema = z.object({
+  tags: z.array(
+    z.object({
+      value: z.string(),
+      label: z.string(),
+      count: z.number().int().nonnegative(),
+    }),
+  ),
+  trainers: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string(),
+      count: z.number().int().nonnegative(),
+    }),
+  ),
+  dateBounds: z
+    .object({
+      min: z.string(),
+      max: z.string(),
+    })
+    .nullable(),
+});
+
+export const publicEventPageResponseSchema = paginatedRecordsResponseSchema.extend({
+  filters: publicEventFiltersResponseSchema,
+});
+
 export const publicEventDetailResponseSchema = z.object({
   event: z.record(z.unknown()).nullable(),
 });

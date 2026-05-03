@@ -5,6 +5,21 @@ import { cloneValue, normalizeStore } from "../store/default-store.js";
 import type { DemoStoreRecord, StoreRepository } from "../store/types.js";
 
 type RecordAny = Record<string, any>;
+type EventKind = "official" | "community" | "all";
+type EventSort = "startsAtAsc" | "startsAtDesc" | "createdAtDesc";
+
+export type EventPageQuery = {
+  page: number;
+  pageSize: number;
+  kind?: EventKind;
+  sort?: EventSort;
+  filters?: {
+    tags?: string[];
+    trainerIds?: string[];
+    dateFrom?: string;
+    dateTo?: string;
+  };
+};
 
 function nowIso() {
   return new Date().toISOString();
@@ -172,6 +187,222 @@ function cleanFileFields<T extends RecordAny>(input: T): T {
   return next;
 }
 
+function isCommunityEvent(event: RecordAny) {
+  return event.brandStatus === "supported" || event.type === "Wydarzenie społeczności";
+}
+
+function sortEvents(events: RecordAny[], sort: EventSort = "startsAtAsc") {
+  return [...events].sort((left, right) => {
+    const leftDate = Date.parse(String(sort === "createdAtDesc" ? left.createdAt ?? left.startsAt : left.startsAt ?? left.createdAt ?? ""));
+    const rightDate = Date.parse(String(sort === "createdAtDesc" ? right.createdAt ?? right.startsAt : right.startsAt ?? right.createdAt ?? ""));
+    const leftValue = Number.isFinite(leftDate) ? leftDate : 0;
+    const rightValue = Number.isFinite(rightDate) ? rightDate : 0;
+    return sort === "startsAtDesc" || sort === "createdAtDesc" ? rightValue - leftValue : leftValue - rightValue;
+  });
+}
+
+function filterEventsByKind(events: RecordAny[], kind: EventKind = "all") {
+  if (kind === "community") {
+    return events.filter(isCommunityEvent);
+  }
+  if (kind === "official") {
+    return events.filter((event) => !isCommunityEvent(event));
+  }
+  return events;
+}
+
+function normalizeFacetValue(value: string) {
+  return value.trim().toLocaleLowerCase("pl-PL");
+}
+
+function getEventTags(event: RecordAny) {
+  return Array.isArray(event.tags)
+    ? event.tags.map((tag) => String(tag).trim()).filter(Boolean)
+    : [];
+}
+
+function getEventScheduleDays(event: RecordAny) {
+  const scheduleDays = Array.isArray(event.scheduleDays)
+    ? event.scheduleDays
+    : [{ startsAt: event.startsAt, endsAt: event.endsAt }];
+
+  return scheduleDays
+    .map((day) => ({
+      startsAt: String(day?.startsAt ?? ""),
+      endsAt: String(day?.endsAt ?? ""),
+    }))
+    .filter((day) => Boolean(day.startsAt && day.endsAt))
+    .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
+}
+
+function getWarsawDateParts(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Warsaw",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(value.year),
+    month: Number(value.month),
+    day: Number(value.day),
+  };
+}
+
+function formatWarsawCalendarDate(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  const parts = getWarsawDateParts(new Date(timestamp));
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function getWarsawLocalDateTimeAsUtcMs(timestamp: number) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Warsaw",
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Date.UTC(
+    Number(value.year),
+    Number(value.month) - 1,
+    Number(value.day),
+    Number(value.hour),
+    Number(value.minute),
+    Number(value.second),
+  );
+}
+
+function warsawCalendarDateToUtcMs(date: string, dayOffset = 0) {
+  const [year, month, day] = date.split("-").map(Number);
+  const targetUtcMs = Date.UTC(year, month - 1, day + dayOffset, 0, 0, 0);
+  let guess = targetUtcMs;
+
+  for (let index = 0; index < 3; index += 1) {
+    const localAsUtcMs = getWarsawLocalDateTimeAsUtcMs(guess);
+    guess -= localAsUtcMs - targetUtcMs;
+  }
+
+  return guess;
+}
+
+function doIntervalsOverlap(left: { startsAt: string; endsAt: string }, right: { startsAtMs: number; endsAtMs: number }) {
+  const leftStartsAt = Date.parse(left.startsAt);
+  const leftEndsAt = Date.parse(left.endsAt);
+  return (
+    Number.isFinite(leftStartsAt) &&
+    Number.isFinite(leftEndsAt) &&
+    leftStartsAt < right.endsAtMs &&
+    leftEndsAt > right.startsAtMs
+  );
+}
+
+function eventOverlapsDateFilter(event: RecordAny, dateFrom?: string, dateTo?: string) {
+  if (!dateFrom && !dateTo) {
+    return true;
+  }
+
+  const startsAtMs = dateFrom ? warsawCalendarDateToUtcMs(dateFrom) : Number.NEGATIVE_INFINITY;
+  const endsAtMs = dateTo ? warsawCalendarDateToUtcMs(dateTo, 1) : Number.POSITIVE_INFINITY;
+  return getEventScheduleDays(event).some((day) => doIntervalsOverlap(day, { startsAtMs, endsAtMs }));
+}
+
+function filterPublicEvents(events: RecordAny[], filters: EventPageQuery["filters"] = {}) {
+  const tagFilter = new Set((filters.tags ?? []).map(normalizeFacetValue).filter(Boolean));
+  const trainerFilter = new Set((filters.trainerIds ?? []).map((trainerId) => trainerId.trim()).filter(Boolean));
+
+  return events.filter((event) => {
+    if (tagFilter.size > 0) {
+      const eventTags = new Set(getEventTags(event).map(normalizeFacetValue));
+      if (![...tagFilter].some((tag) => eventTags.has(tag))) {
+        return false;
+      }
+    }
+
+    if (trainerFilter.size > 0 && !trainerFilter.has(String(event.trainerId ?? ""))) {
+      return false;
+    }
+
+    return eventOverlapsDateFilter(event, filters.dateFrom, filters.dateTo);
+  });
+}
+
+function buildPublicEventFilters(events: RecordAny[], store: DemoStoreRecord) {
+  const tags = new Map<string, { value: string; label: string; count: number }>();
+  const trainers = new Map<string, { id: string; label: string; count: number }>();
+  const trainerProfiles = new Map(
+    arrayOf(store, "trainers")
+      .filter((trainer) => trainer.isVisible !== false)
+      .map((trainer) => [String(trainer.id), trainer]),
+  );
+  const dates: string[] = [];
+
+  for (const event of events) {
+    for (const tag of getEventTags(event)) {
+      const normalized = normalizeFacetValue(tag);
+      const current = tags.get(normalized);
+      tags.set(normalized, {
+        value: current?.value ?? tag,
+        label: current?.label ?? tag,
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+
+    const trainerId = String(event.trainerId ?? "").trim();
+    if (trainerId) {
+      const trainer = trainerProfiles.get(trainerId);
+      const current = trainers.get(trainerId);
+      trainers.set(trainerId, {
+        id: trainerId,
+        label: String(trainer?.displayName ?? current?.label ?? trainerId),
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+
+    for (const day of getEventScheduleDays(event)) {
+      const startsAt = formatWarsawCalendarDate(day.startsAt);
+      const endsAt = formatWarsawCalendarDate(day.endsAt);
+      if (startsAt) {
+        dates.push(startsAt);
+      }
+      if (endsAt) {
+        dates.push(endsAt);
+      }
+    }
+  }
+
+  dates.sort();
+
+  return {
+    tags: [...tags.values()].sort((left, right) => left.label.localeCompare(right.label, "pl")),
+    trainers: [...trainers.values()].sort((left, right) => left.label.localeCompare(right.label, "pl")),
+    dateBounds: dates.length > 0 ? { min: dates[0], max: dates[dates.length - 1] } : null,
+  };
+}
+
+function paginateItems<T>(items: T[], page: number, pageSize: number) {
+  const totalItems = items.length;
+  const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize);
+  const safePage = totalPages === 0 ? 1 : Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  return {
+    items: cloneValue(items.slice(start, start + pageSize)),
+    page: safePage,
+    pageSize,
+    totalItems,
+    totalPages,
+  };
+}
+
 export class DomainService {
   constructor(private store: StoreRepository) {}
 
@@ -184,6 +415,16 @@ export class DomainService {
       organizers: arrayOf(store, "organizers").filter((organizer) => organizer.isVisible !== false),
       publicTrainingEvents: cloneValue(store.publicTrainingEvents),
       trainingEvents: cloneValue(store.publicTrainingEvents),
+      appSettings: cloneValue(settings(store)),
+    };
+  }
+
+  async publicCatalogCore() {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    return {
+      trainers: arrayOf(store, "trainers").filter((trainer) => trainer.isVisible !== false),
+      organizers: arrayOf(store, "organizers").filter((organizer) => organizer.isVisible !== false),
       appSettings: cloneValue(settings(store)),
     };
   }
@@ -204,6 +445,18 @@ export class DomainService {
     );
   }
 
+  async publicEventPage(query: EventPageQuery) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    recomputePublicEvents(store);
+    const publicEvents = filterEventsByKind(arrayOf(store, "publicTrainingEvents"), query.kind);
+    const events = sortEvents(filterPublicEvents(publicEvents, query.filters), query.sort);
+    return {
+      ...paginateItems(events, query.page, query.pageSize),
+      filters: buildPublicEventFilters(publicEvents, store),
+    };
+  }
+
   async privateStore(actorUserId: string | null) {
     const snapshot = await this.store.readSnapshot();
     const store = normalizeStore(snapshot.store);
@@ -220,6 +473,14 @@ export class DomainService {
       response[key] = cloneValue(store[key]);
     }
     return response;
+  }
+
+  async panelEventPage(actorUserId: string | null, query: EventPageQuery) {
+    const snapshot = await this.store.readSnapshot();
+    const store = normalizeStore(snapshot.store);
+    requireActor(store, actorUserId);
+    const events = sortEvents(filterEventsByKind(arrayOf(store, "trainingEvents"), query.kind), query.sort);
+    return paginateItems(events, query.page, query.pageSize);
   }
 
   async panelNavigation(actorUserId: string | null) {

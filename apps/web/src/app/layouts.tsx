@@ -142,7 +142,7 @@ export function PublicLayout() {
       left: 0,
       behavior: "auto",
     });
-  }, [location.pathname]);
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -166,7 +166,7 @@ export function PublicLayout() {
       <header className="sticky top-0 z-30 border-b border-brand-line/70 bg-white/85 backdrop-blur-xl">
         <div
           className={buildStandardHeaderInnerClassName(
-            "mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 sm:gap-6 sm:px-6 lg:px-8",
+            "mx-auto flex max-w-[90rem] items-center justify-between gap-3 px-4 sm:gap-6 sm:px-6 md:grid md:grid-cols-[19rem_minmax(0,1fr)_auto] lg:px-8",
           )}
         >
           <div className="min-w-0 md:hidden">
@@ -537,6 +537,18 @@ export function PanelLayout() {
   useEffect(() => {
     setIsMobileMenuOpen(false);
   }, [location.pathname, currentUser?.role]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.scrollTo({
+      top: 0,
+      left: 0,
+      behavior: "auto",
+    });
+  }, [location.pathname, location.search]);
 
   useEffect(() => {
     if (typeof document === "undefined") {

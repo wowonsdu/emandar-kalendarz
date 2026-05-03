@@ -158,6 +158,26 @@ const calendarDateQuerySchema = queryScalarSchema.transform((value, ctx) => {
   return normalized;
 });
 
+export const publicEventAudienceQuerySchema = queryScalarSchema.transform((value, ctx) => {
+  const normalized = String(value ?? "all").trim();
+  if (normalized === "all" || normalized === "new-people" || normalized === "existing-practitioners") {
+    return normalized;
+  }
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: "Invalid audience",
+  });
+  return z.NEVER;
+});
+
+export type PublicEventAudienceQuery = z.infer<typeof publicEventAudienceQuerySchema>;
+
+const publicEventSearchQuerySchema = queryScalarSchema.transform((value) => {
+  const normalized = String(value ?? "").trim();
+  return normalized || undefined;
+});
+
 export const paginatedRecordsResponseSchema = z.object({
   items: z.array(z.record(z.unknown())),
   page: z.number().int().positive(),
@@ -182,10 +202,11 @@ export const publicEventPageQuerySchema = z
       });
       return z.NEVER;
     }),
-    tag: repeatedQueryStringSchema,
+    search: publicEventSearchQuerySchema,
     trainerId: repeatedQueryStringSchema,
     dateFrom: calendarDateQuerySchema,
     dateTo: calendarDateQuerySchema,
+    audience: publicEventAudienceQuerySchema,
   })
   .partial()
   .transform((value, ctx) => {
@@ -204,10 +225,11 @@ export const publicEventPageQuerySchema = z
       page: value.page ?? 1,
       pageSize: value.pageSize ?? 25,
       sort: value.sort ?? "startsAtAsc",
-      tag: value.tag ?? [],
+      search: value.search,
       trainerId: value.trainerId ?? [],
       dateFrom,
       dateTo,
+      audience: value.audience ?? "all",
     };
   });
 

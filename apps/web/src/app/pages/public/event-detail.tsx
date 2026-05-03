@@ -1583,7 +1583,7 @@ export function EventDetailsPage() {
               {isLoggedInEnrollmentFlow ? (
                 <div className="rounded-3xl border border-brand-navy bg-white px-5 py-5 text-left text-brand-navy shadow-soft">
                   <p className="text-sm font-semibold uppercase tracking-[0.2em]">
-                    Chcę wziąć udział
+                    Biorę udział
                   </p>
                   <p className="mt-2 text-sm">
                     Organizator skontaktuje się z Tobą, żeby potwierdzić Twój udział w wydarzeniu.
@@ -1690,7 +1690,7 @@ export function EventDetailsPage() {
               >
                 {loading
                   ? "Wysyłanie..."
-                  : "Chcę wziąć udział"}
+                  : "Biorę udział"}
                 <ArrowRight size={16} />
               </button>
             </div>

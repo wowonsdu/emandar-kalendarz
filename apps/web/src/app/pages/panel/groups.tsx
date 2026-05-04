@@ -4415,6 +4415,7 @@ function GroupListMobileCard({
   isParticipantGroupViewer,
   nearestEventLabel,
   onOpenGroup,
+  organizerName,
   trainerName,
 }: {
   activeMemberCount: number;
@@ -4424,6 +4425,7 @@ function GroupListMobileCard({
   isParticipantGroupViewer: boolean;
   nearestEventLabel: string | null;
   onOpenGroup: () => void;
+  organizerName: string;
   trainerName: string;
 }) {
   return (
@@ -4468,6 +4470,12 @@ function GroupListMobileCard({
             Trener
           </p>
           <p className="mt-1 font-semibold text-brand-navy">{trainerName}</p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-muted">
+            Organizator
+          </p>
+          <p className="mt-1 font-semibold text-brand-navy">{organizerName}</p>
         </div>
         <p>{activeMemberCount} aktywnych osób</p>
         <p>
@@ -4532,6 +4540,10 @@ export function GroupsPage() {
   const trainersById = useMemo(
     () => new Map((store.trainers ?? []).map((trainer) => [trainer.id, trainer])),
     [store.trainers],
+  );
+  const organizersById = useMemo(
+    () => new Map((store.organizers ?? []).map((organizer) => [organizer.id, organizer])),
+    [store.organizers],
   );
   const participantProfilesById = useMemo(
     () =>
@@ -5000,6 +5012,8 @@ export function GroupsPage() {
         <div className="space-y-4 lg:hidden">
           {groups.map((group) => {
             const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
+            const organizerName =
+              organizersById.get(group.organizerId)?.displayName ?? "Organizator";
             const isOwnedGroup = managedGroups.some((managedGroup) => managedGroup.id === group.id);
 
             return (
@@ -5014,6 +5028,7 @@ export function GroupsPage() {
                 onOpenGroup={() => {
                   void navigate(`/panel/grupy/${group.id}`);
                 }}
+                organizerName={organizerName}
                 trainerName={trainerName}
               />
             );
@@ -5022,14 +5037,15 @@ export function GroupsPage() {
 
         <div className="hidden overflow-hidden rounded-[1.5rem] border border-brand-line bg-white shadow-soft lg:block">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[940px] table-fixed border-collapse text-left">
+            <table className="w-full min-w-[1000px] table-fixed border-collapse text-left">
               <colgroup>
-                <col className="w-[27%]" />
-                <col className="w-[24%]" />
-                <col className="w-[8%]" />
-                <col className="w-[13%]" />
-                <col className="w-[15%]" />
-                <col className="w-[13%]" />
+                <col className="w-[22%]" />
+                <col className="w-[22%]" />
+                <col className="w-[7%]" />
+                <col className="w-[12%]" />
+                <col className="w-[12%]" />
+                <col className="w-[14%]" />
+                <col className="w-[11%]" />
               </colgroup>
               <thead className="bg-brand-shell/75 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
                 <tr>
@@ -5038,12 +5054,15 @@ export function GroupsPage() {
                   <th className="px-3 py-4 text-center">Osoby</th>
                   <th className="px-3 py-4 text-center">Wydarzenia</th>
                   <th className="px-4 py-4">Trener</th>
+                  <th className="px-4 py-4">Organizator</th>
                   <th className="px-4 py-4">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-line">
                 {groups.map((group) => {
                   const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
+                  const organizerName =
+                    organizersById.get(group.organizerId)?.displayName ?? "Organizator";
                   const isOwnedGroup = managedGroups.some(
                     (managedGroup) => managedGroup.id === group.id,
                   );
@@ -5087,6 +5106,9 @@ export function GroupsPage() {
                       </td>
                       <td className="px-4 py-5 text-sm text-brand-muted">
                         <span className="line-clamp-2">{trainerName}</span>
+                      </td>
+                      <td className="px-4 py-5 text-sm text-brand-muted">
+                        <span className="line-clamp-2">{organizerName}</span>
                       </td>
                       <td className="px-4 py-5">
                         <GroupListStatusBadges

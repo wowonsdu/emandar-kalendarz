@@ -4546,9 +4546,6 @@ export function EventsPage() {
       : hasOfficialManagementScope
         ? undefined
         : "Tutaj widzisz szkolenia Emandar, w których bierzesz udział.";
-  const officialListCounterpartyColumnLabel =
-    currentUser.role === "organizer" ? "Trener" : "Organizator";
-
   const availableTrainers = useMemo(
     () =>
       isOrganizerManager && organizerProfile
@@ -5674,16 +5671,17 @@ export function EventsPage() {
           {!isCommunitySection && listedEvents.length > 0 ? (
             <div className="hidden overflow-hidden rounded-[1.5rem] border border-brand-line bg-white shadow-soft lg:block">
               <div className="overflow-x-auto">
-                <table className="w-full table-fixed border-collapse text-left">
+                <table className="w-full min-w-[1000px] table-fixed border-collapse text-left">
                   <colgroup>
-                    <col className="w-[34%]" />
-                    <col className="w-[14%]" />
+                    <col className="w-[27%]" />
+                    <col className="w-[11%]" />
                     <col className="w-[7%]" />
                     <col className="w-[6%]" />
                     <col className="w-[5%]" />
-                    <col className="w-[6%]" />
-                    <col className="w-[16%]" />
+                    <col className="w-[5%]" />
                     <col className="w-[12%]" />
+                    <col className="w-[13%]" />
+                    <col className="w-[14%]" />
                   </colgroup>
                   <thead className="bg-brand-shell/75 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
                     <tr>
@@ -5693,7 +5691,8 @@ export function EventsPage() {
                       <th className="px-4 py-4 text-center">Potw.</th>
                       <th className="px-4 py-4 text-center">Próg</th>
                       <th className="px-4 py-4 text-center">Zgł.</th>
-                      <th className="px-4 py-4">{officialListCounterpartyColumnLabel}</th>
+                      <th className="px-4 py-4">Trener</th>
+                      <th className="px-4 py-4">Organizator</th>
                       <th className="px-4 py-4">Status</th>
                     </tr>
                   </thead>
@@ -5794,11 +5793,10 @@ export function EventsPage() {
                             {activeRequestsCount}
                           </td>
                           <td className="px-4 py-5 text-sm text-brand-muted">
-                            <span className="line-clamp-2">
-                              {currentUser.role === "organizer"
-                                ? ownerLabels.trainerName
-                                : ownerLabels.organizerName}
-                            </span>
+                            <span className="line-clamp-2">{ownerLabels.trainerName}</span>
+                          </td>
+                          <td className="px-4 py-5 text-sm text-brand-muted">
+                            <span className="line-clamp-2">{ownerLabels.organizerName}</span>
                           </td>
                           <td className="px-4 py-5">
                             <div className="flex flex-col gap-2">
@@ -5926,12 +5924,12 @@ export function EventsPage() {
                     <span>Chcą wziąć udział: {activeRequestsCount}</span>
                     {isCommunitySection ? (
                       <span>Gospodarz: {ownerLabels.trainerName}</span>
-                    ) : currentUser.role !== "organizer" ? (
-                      <span>Organizator: {ownerLabels.organizerName}</span>
-                    ) : null}
-                    {!isCommunitySection ? (
-                      <span>Przekazujący Wiedzę: {ownerLabels.trainerName}</span>
-                    ) : null}
+                    ) : (
+                      <>
+                        <span>Trener: {ownerLabels.trainerName}</span>
+                        <span>Organizator: {ownerLabels.organizerName}</span>
+                      </>
+                    )}
                   </div>
                   <div
                     className={`grid gap-3 ${

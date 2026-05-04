@@ -292,6 +292,16 @@ export function CommunityEventCard({
   const compactLocation = event.location;
   const durationDaysLabel = getEventDurationDaysLabel(event);
   const mobileSummarySchedule = scheduleRows.slice(0, 2);
+  const shouldCollapseDesktopSchedule = scheduleRows.length > 8;
+  const desktopLeadingScheduleRows = shouldCollapseDesktopSchedule
+    ? scheduleRows.slice(0, 6)
+    : scheduleRows;
+  const desktopFinalScheduleRow = shouldCollapseDesktopSchedule
+    ? scheduleRows[scheduleRows.length - 1]
+    : null;
+  const hiddenDesktopScheduleRowCount = shouldCollapseDesktopSchedule
+    ? scheduleRows.length - desktopLeadingScheduleRows.length - 1
+    : 0;
   const compactTags = eventTags.slice(0, 2);
   const hasMoreCompactTags = eventTags.length > compactTags.length;
   const shouldShowExpandedTagsIndicator = hasMoreCompactTags || isMobileExpanded;
@@ -505,7 +515,7 @@ export function CommunityEventCard({
                 scheduleRows.length > 1 ? "md:grid-cols-2 xl:grid-cols-4" : "grid-cols-1"
               }`}
             >
-              {scheduleRows.map((row) => (
+              {desktopLeadingScheduleRows.map((row) => (
                 <div
                   key={row.key}
                   className="rounded-2xl bg-brand-shell px-4 py-3 text-sm text-brand-muted"
@@ -518,6 +528,29 @@ export function CommunityEventCard({
                   <p>{row.range}</p>
                 </div>
               ))}
+              {shouldCollapseDesktopSchedule ? (
+                <div className="flex min-h-[5.5rem] items-center justify-center rounded-2xl border border-dashed border-brand-line bg-brand-shell px-4 py-3 text-brand-sky-deep">
+                  <div className="text-center">
+                    <p className="text-2xl font-semibold leading-none">...</p>
+                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.16em]">
+                      +{hiddenDesktopScheduleRowCount} dni
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+              {desktopFinalScheduleRow ? (
+                <div
+                  key={desktopFinalScheduleRow.key}
+                  className="rounded-2xl bg-brand-shell px-4 py-3 text-sm text-brand-muted"
+                >
+                  <div className="mb-1 flex items-center gap-2 font-semibold text-brand-navy">
+                    <CalendarDays size={16} />
+                    {desktopFinalScheduleRow.title}
+                  </div>
+                  <p>{desktopFinalScheduleRow.label}</p>
+                  <p>{desktopFinalScheduleRow.range}</p>
+                </div>
+              ) : null}
             </div>
 
             {eventTags.length > 0 && (

@@ -4891,6 +4891,12 @@ export function EventsPage() {
 
   const isOfficialEventSearchEmpty =
     !isCommunitySection && baseListedEvents.length > 0 && listedEvents.length === 0;
+  const visibleCreatorScheduleDays =
+    trainerEventForm.scheduleDays.length > 8
+      ? trainerEventForm.scheduleDays.slice(0, 7)
+      : trainerEventForm.scheduleDays;
+  const hiddenCreatorScheduleDayCount =
+    trainerEventForm.scheduleDays.length - visibleCreatorScheduleDays.length;
 
   function toggleEventSort(key: EventSortKey) {
     setEventSort((previous) => {
@@ -5535,8 +5541,8 @@ export function EventsPage() {
                 </label>
               </div>
 
-              <div className="grid gap-4 xl:col-span-2 xl:grid-cols-4">
-                {trainerEventForm.scheduleDays.map((day, index) => {
+              <div className="grid gap-4 xl:col-span-2 sm:grid-cols-2 lg:grid-cols-4">
+                {visibleCreatorScheduleDays.map((day, index) => {
                   const draftScheduleDays = buildScheduleDaysFromDrafts(
                     trainerEventForm.firstDayDate,
                     trainerEventForm.scheduleDays,
@@ -5600,6 +5606,16 @@ export function EventsPage() {
                     </div>
                   );
                 })}
+                {hiddenCreatorScheduleDayCount > 0 ? (
+                  <div className="flex min-h-[9.25rem] items-center justify-center rounded-3xl border border-dashed border-brand-line bg-brand-shell p-4 text-brand-sky-deep">
+                    <div className="text-center">
+                      <p className="text-3xl font-semibold leading-none">...</p>
+                      <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em]">
+                        +{hiddenCreatorScheduleDayCount} dni
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <div className="flex flex-col gap-4 xl:col-span-2 sm:flex-row sm:items-center sm:justify-between">

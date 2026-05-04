@@ -4548,6 +4548,7 @@ export function GroupsPage() {
   const [groupScope, setGroupScope] = useState<"all" | "mine">("mine");
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
   const [groupSort, setGroupSort] = useState<GroupSortState | null>(null);
+  const [groupDetailTab, setGroupDetailTab] = useState<"members" | "events">("members");
   const memberDraftsRef = useRef(memberDrafts);
   const memberSaveTimeoutsRef = useRef<Record<string, number>>({});
   const savingMemberIdsRef = useRef<Record<string, boolean>>({});
@@ -4699,14 +4700,27 @@ export function GroupsPage() {
     managedGroups.length > 0 ||
     (Boolean(organizerProfile) && hasInheritedRole(currentUser, "organizer")) ||
     (Boolean(trainerProfile) && hasInheritedRole(currentUser, "trainer"));
-  const isParticipantGroupViewer = !hasManagedGroupScope || groupScope === "all";
+  const isParticipantGroupListScope = !hasManagedGroupScope || groupScope === "all";
   const visibleGroups = useMemo(() => {
-    if (isParticipantGroupViewer) {
+    if (isParticipantGroupListScope) {
       return joinedGroups;
     }
 
     return managedGroups;
-  }, [isParticipantGroupViewer, joinedGroups, managedGroups]);
+  }, [isParticipantGroupListScope, joinedGroups, managedGroups]);
+  const detailAccessibleGroups = useMemo(() => {
+    const groupsById = new Map<string, Group>();
+
+    for (const group of managedGroups) {
+      groupsById.set(group.id, group);
+    }
+
+    for (const group of joinedGroups) {
+      groupsById.set(group.id, group);
+    }
+
+    return [...groupsById.values()];
+  }, [joinedGroups, managedGroups]);
   const normalizedGroupSearchQuery = normalizeListSearchText(groupSearchQuery.trim());
   const isGroupSearchApplied = normalizedGroupSearchQuery.length >= 3;
   const filteredVisibleGroups = useMemo(() => {
@@ -4792,7 +4806,7 @@ export function GroupsPage() {
   const isCreateGroupRoute = location.pathname === "/panel/grupy/utworz";
   const isGroupDetailView = Boolean(groupId);
   const selectedGroup = groupId
-    ? visibleGroups.find((group) => group.id === groupId) ?? null
+    ? detailAccessibleGroups.find((group) => group.id === groupId) ?? null
     : null;
   const selectedGroupMembers = useMemo(() => {
     if (!selectedGroup) {
@@ -4913,12 +4927,20 @@ export function GroupsPage() {
   const selectedGroupParticipantMembership = selectedGroup
     ? participantGroupMembershipsByGroupId.get(selectedGroup.id) ?? null
     : null;
+  const isParticipantGroupViewer =
+    isGroupDetailView && selectedGroup
+      ? !selectedGroupIsManagedByCurrentUser || groupScope === "all"
+      : isParticipantGroupListScope;
 
   useEffect(() => {
     if (!hasManagedGroupScope && groupScope !== "all") {
       setGroupScope("all");
     }
   }, [groupScope, hasManagedGroupScope]);
+
+  useEffect(() => {
+    setGroupDetailTab("members");
+  }, [groupId]);
 
   useEffect(() => {
     if (!canCreateGroups || editingGroupId || groupForm.trainerId || availableTrainers.length === 0) {
@@ -5700,64 +5722,64 @@ export function GroupsPage() {
 
       {!isGroupDetailView && !isCreateGroupRoute ? (
         <div className="space-y-6">
+          {hasManagedGroupScope || visibleGroups.length > 0 ? (
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              {hasManagedGroupScope ? (
+                <EventScopeSwitch
+                  activeScope={groupScope}
+                  joinedLabel="Uczestniczę"
+                  ownedLabel="Organizuję"
+                  onChange={setGroupScope}
+                />
+              ) : (
+                <div />
+              )}
+
+              <label className="grid w-full gap-2 lg:max-w-md">
+                <span className="text-sm font-semibold text-brand-navy">Szukaj grupy</span>
+                <input
+                  type="search"
+                  value={groupSearchQuery}
+                  onChange={(event) => setGroupSearchQuery(event.target.value)}
+                  placeholder="Nazwa, trener lub organizator"
+                  className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
+                />
+              </label>
+            </div>
+          ) : null}
+
           {visibleGroups.length === 0 ? (
             <EmptyPanelState
               title="Brak grup"
               description={
                 canCreateGroups
-                  ? "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
+                  ? isParticipantGroupListScope
+                    ? "Nie należysz jeszcze do żadnej grupy. Przełącz na Organizuję, żeby zobaczyć grupy, którymi zarządzasz."
+                    : "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
                   : isParticipantGroupViewer
                     ? "Nie należysz jeszcze do żadnej grupy i nie masz jeszcze własnych grup."
                     : "Nie masz jeszcze żadnych przypisanych grup."
               }
             />
+          ) : sortedVisibleGroups.length === 0 ? (
+            <EmptyPanelState
+              title="Brak wyników"
+              description="Zmień frazę wyszukiwania, żeby zobaczyć grupy z tej listy."
+            />
           ) : (
             <>
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                {hasManagedGroupScope ? (
-                  <EventScopeSwitch
-                    activeScope={groupScope}
-                    joinedLabel="Uczestniczę"
-                    ownedLabel="Organizuję"
-                    onChange={setGroupScope}
-                  />
-                ) : (
-                  <div />
-                )}
+              {activeVisibleGroups.length > 0 ? renderGroupRows(activeVisibleGroups) : null}
 
-                <label className="grid w-full gap-2 lg:max-w-md">
-                  <span className="text-sm font-semibold text-brand-navy">Szukaj grupy</span>
-                  <input
-                    type="search"
-                    value={groupSearchQuery}
-                    onChange={(event) => setGroupSearchQuery(event.target.value)}
-                    placeholder="Nazwa, trener lub organizator"
-                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
-                  />
-                </label>
-              </div>
-
-              {sortedVisibleGroups.length === 0 ? (
-                <EmptyPanelState
-                  title="Brak wyników"
-                  description="Zmień frazę wyszukiwania, żeby zobaczyć grupy z tej listy."
-                />
-              ) : (
-                <>
-                  {activeVisibleGroups.length > 0 ? renderGroupRows(activeVisibleGroups) : null}
-
-                  {archivedVisibleGroups.length > 0 ? (
-                    <EnrollmentRequestArchiveSectionBlock
-                      title="Archiwalne"
-                      count={archivedVisibleGroups.length}
-                      open={isArchivedGroupsOpen}
-                      onOpenChange={setIsArchivedGroupsOpen}
-                    >
-                      {renderGroupRows(archivedVisibleGroups)}
-                    </EnrollmentRequestArchiveSectionBlock>
-                  ) : null}
-                </>
-              )}
+              {archivedVisibleGroups.length > 0 ? (
+                <EnrollmentRequestArchiveSectionBlock
+                  title="Archiwalne"
+                  count={archivedVisibleGroups.length}
+                  open={isArchivedGroupsOpen}
+                  onOpenChange={setIsArchivedGroupsOpen}
+                >
+                  {renderGroupRows(archivedVisibleGroups)}
+                </EnrollmentRequestArchiveSectionBlock>
+              ) : null}
             </>
           )}
         </div>
@@ -5923,90 +5945,147 @@ export function GroupsPage() {
             </article>
           ) : null}
 
-          <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-              <div className="grid gap-4 md:grid-cols-2">
-                <StatCard
-                  label="Członkowie"
-                  value={activeMemberCounts[selectedGroup.id] ?? 0}
-                  icon={Users}
-                />
-                <StatCard
-                  label="Wydarzenia"
-                  value={groupEventCounts[selectedGroup.id] ?? 0}
-                  icon={CalendarDays}
-                />
-              </div>
-              <div className="mt-6 grid gap-3 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted md:grid-cols-2">
-                <div>
-                  <p className="font-semibold text-brand-navy">Trener</p>
-                  <p>{trainersById.get(selectedGroup.trainerId)?.displayName ?? "Brak"}</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-brand-navy">Typ domyślny</p>
-                  <p>{getGroupEventTypeLabel(selectedGroup.defaultEventType)}</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-brand-navy">Lokalizacja</p>
-                  <p>{selectedGroup.defaultLocation || "Brak ustawionej lokalizacji"}</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-brand-navy">SMS potwierdzenia udziału</p>
-                  <p>{selectedGroup.defaultConfirmationLeadTimeDays} dni przed wydarzeniem</p>
-                </div>
-                <div>
-                  <p className="font-semibold text-brand-navy">Mogą dołączyć</p>
-                  <p>{getTrainingJoinAudienceLabel(selectedGroup.defaultJoinAudience)}</p>
-                </div>
-              </div>
-              {selectedGroup.notes ? (
-                <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
-                  {selectedGroup.notes}
-                </div>
-              ) : null}
-              {isParticipantGroupViewer ? (
-                <div className="mt-4 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
-                  {selectedGroupIsManagedByCurrentUser
-                    ? canManageGroups
-                      ? "To Twoja grupa. W tym widoku oglądasz ją jak uczestnik, a pełne zarządzanie masz po przełączeniu na zakładkę Organizuję."
-                      : "To Twoja grupa, ale w tej chwili pozostaje dostępna tylko do podglądu."
-                    : selectedGroupParticipantMembership
-                      ? "Należysz do tej grupy jako uczestnik. Widzisz podgląd grupy i powiązane wydarzenia, bez ustawień administracyjnych."
-                      : "Widzisz tę grupę w trybie podglądu."}
-                </div>
-              ) : null}
-              {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
-                <div className="mt-6 flex flex-wrap gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingGroupId(selectedGroup.id);
-                      setGroupForm(createGroupFormStateFromGroup(selectedGroup));
-                    }}
-                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
-                  >
-                    <ShieldCheck size={16} />
-                    Edytuj grupę
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleArchiveSelectedGroup()}
-                    className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700 shadow-soft"
-                  >
-                    <Trash2 size={16} />
-                    Archiwizuj
-                  </button>
-                  <Link
-                    to={getGroupTrainingCreatePath(selectedGroup.id)}
-                    state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-                  >
-                    <CalendarDays size={16} />
-                    Utwórz wydarzenie
-                  </Link>
-                </div>
-              ) : null}
-            </article>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <StatCard
+              label="Trener"
+              value={trainersById.get(selectedGroup.trainerId)?.displayName ?? "Brak"}
+              icon={ShieldCheck}
+              layout="stacked"
+              valueClassName="text-base leading-snug sm:text-lg"
+            />
+            <StatCard
+              label="Organizator"
+              value={organizersById.get(selectedGroup.organizerId)?.displayName ?? "Brak"}
+              icon={Users}
+              layout="stacked"
+              valueClassName="text-base leading-snug sm:text-lg"
+            />
+            <StatCard
+              label="Członkowie"
+              value={activeMemberCounts[selectedGroup.id] ?? 0}
+              icon={Users}
+              layout="stacked"
+            />
+            <StatCard
+              label="Wydarzenia"
+              value={groupEventCounts[selectedGroup.id] ?? 0}
+              icon={CalendarDays}
+              layout="stacked"
+            />
+            <StatCard
+              label="Najbliższy termin"
+              value={nearestGroupEventLabels[selectedGroup.id] ?? "Brak"}
+              icon={CalendarDays}
+              layout="stacked"
+              valueClassName="text-base leading-snug sm:text-lg"
+            />
+          </div>
 
+          <article className="rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft sm:p-6">
+            <div className="grid gap-4 text-sm text-brand-muted md:grid-cols-2 xl:grid-cols-4">
+              <div>
+                <p className="font-semibold text-brand-navy">Typ</p>
+                <p>{getGroupEventTypeLabel(selectedGroup.defaultEventType)}</p>
+              </div>
+              <div>
+                <p className="font-semibold text-brand-navy">SMS z potwierdzeniem</p>
+                <p>{selectedGroup.defaultConfirmationLeadTimeDays} dni przed wydarzeniem</p>
+              </div>
+              <div>
+                <p className="font-semibold text-brand-navy">Lokalizacja</p>
+                <p>{selectedGroup.defaultLocation || "Brak ustawionej lokalizacji"}</p>
+              </div>
+              <div>
+                <p className="font-semibold text-brand-navy">Mogą dołączyć</p>
+                <p>{getTrainingJoinAudienceLabel(selectedGroup.defaultJoinAudience)}</p>
+              </div>
+            </div>
+
+            {selectedGroup.notes ? (
+              <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+                {selectedGroup.notes}
+              </div>
+            ) : null}
+            {isParticipantGroupViewer ? (
+              <div className="mt-5 rounded-3xl border border-brand-line bg-brand-shell/60 p-4 text-sm text-brand-muted">
+                {selectedGroupIsManagedByCurrentUser
+                  ? canManageGroups
+                    ? "To Twoja grupa. W tym widoku oglądasz ją jak uczestnik, a pełne zarządzanie masz po przełączeniu na zakładkę Organizuję."
+                    : "To Twoja grupa, ale w tej chwili pozostaje dostępna tylko do podglądu."
+                  : selectedGroupParticipantMembership
+                    ? "Należysz do tej grupy jako uczestnik. Widzisz podgląd grupy i powiązane wydarzenia, bez ustawień administracyjnych."
+                    : "Widzisz tę grupę w trybie podglądu."}
+              </div>
+            ) : null}
+            {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
+              <div className="mt-6 flex flex-wrap gap-3 lg:justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingGroupId(selectedGroup.id);
+                    setGroupForm(createGroupFormStateFromGroup(selectedGroup));
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy shadow-soft"
+                >
+                  <ShieldCheck size={16} />
+                  Edytuj grupę
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleArchiveSelectedGroup()}
+                  className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700 shadow-soft"
+                >
+                  <Trash2 size={16} />
+                  Archiwizuj
+                </button>
+                <Link
+                  to={getGroupTrainingCreatePath(selectedGroup.id)}
+                  state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
+                  className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                >
+                  <CalendarDays size={16} />
+                  Utwórz wydarzenie
+                </Link>
+              </div>
+            ) : null}
+          </article>
+
+          <div
+            role="tablist"
+            aria-label="Zawartość grupy"
+            className="flex flex-wrap gap-2 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft sm:w-fit"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={groupDetailTab === "members"}
+              onClick={() => setGroupDetailTab("members")}
+              className={cn(
+                "min-w-0 rounded-[1.35rem] px-4 py-2.5 text-sm font-semibold transition",
+                groupDetailTab === "members"
+                  ? "bg-brand-navy text-white"
+                  : "text-brand-muted hover:text-brand-navy",
+              )}
+            >
+              Członkowie
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={groupDetailTab === "events"}
+              onClick={() => setGroupDetailTab("events")}
+              className={cn(
+                "min-w-0 rounded-[1.35rem] px-4 py-2.5 text-sm font-semibold transition",
+                groupDetailTab === "events"
+                  ? "bg-brand-navy text-white"
+                  : "text-brand-muted hover:text-brand-navy",
+              )}
+            >
+              Wydarzenia
+            </button>
+          </div>
+
+          {groupDetailTab === "members" ? (
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Członkowie grupy"
@@ -6297,7 +6376,9 @@ export function GroupsPage() {
                 )}
               </div>
             </article>
+          ) : null}
 
+          {groupDetailTab === "events" ? (
             <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
                 title="Wydarzenia grupy"
@@ -6307,18 +6388,6 @@ export function GroupsPage() {
                     : "Tutaj widać wszystkie szkolenia przypięte do tej grupy i możesz szybko dodawać kolejne terminy."
                 }
               />
-              {canManageGroups && selectedGroupIsManagedByCurrentUser && selectedGroup.status === "active" ? (
-                <div className="mt-6">
-                  <Link
-                    to={getGroupTrainingCreatePath(selectedGroup.id)}
-                    state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
-                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-                  >
-                    <CalendarDays size={16} />
-                    Utwórz wydarzenie
-                  </Link>
-                </div>
-              ) : null}
               <div className="mt-6 space-y-3">
                 {selectedGroupEvents.length === 0 ? (
                   <EmptyPanelState
@@ -6377,6 +6446,7 @@ export function GroupsPage() {
                 )}
               </div>
             </article>
+          ) : null}
         </div>
       ) : null}
     </PanelSection>

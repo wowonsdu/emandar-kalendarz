@@ -4567,6 +4567,8 @@ export function GroupsPage() {
   const [groupSearchQuery, setGroupSearchQuery] = useState("");
   const [groupSort, setGroupSort] = useState<GroupSortState | null>(null);
   const [groupDetailTab, setGroupDetailTab] = useState<"members" | "events">("members");
+  const [archiveGroupDialogOpen, setArchiveGroupDialogOpen] = useState(false);
+  const [isAddMemberFormOpen, setIsAddMemberFormOpen] = useState(false);
   const memberDraftsRef = useRef(memberDrafts);
   const memberSaveTimeoutsRef = useRef<Record<string, number>>({});
   const savingMemberIdsRef = useRef<Record<string, boolean>>({});
@@ -4955,6 +4957,8 @@ export function GroupsPage() {
 
   useEffect(() => {
     setGroupDetailTab("members");
+    setIsAddMemberFormOpen(false);
+    setArchiveGroupDialogOpen(false);
   }, [groupId]);
 
   useEffect(() => {
@@ -5512,6 +5516,7 @@ export function GroupsPage() {
       });
       toast.success("Dodano członka grupy.");
       setMemberForm(createEmptyGroupMemberFormState());
+      setIsAddMemberFormOpen(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Nie udało się dodać członka.");
     } finally {
@@ -5537,63 +5542,88 @@ export function GroupsPage() {
   }
 
   return (
-    <PanelSection
-      eyebrow="Grupy"
-      title={
-        isCreateGroupRoute
-          ? "Nowa grupa"
-          : isGroupDetailView && selectedGroup
-            ? getGroupDetailTitle(selectedGroup)
-            : "Grupy Emandar"
-      }
-      description={
-        isCreateGroupRoute
-          ? undefined
-          : isGroupDetailView
+    <>
+      <Dialog open={archiveGroupDialogOpen} onOpenChange={setArchiveGroupDialogOpen}>
+        <DialogContent className="rounded-[2rem] border-brand-line bg-white text-brand-navy">
+          <DialogHeader>
+            <DialogTitle>Zarchiwizować grupę?</DialogTitle>
+            <DialogDescription className="text-brand-muted">
+              Grupa zniknie z aktywnej listy. Możesz anulować tę akcję albo potwierdzić
+              archiwizację.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setArchiveGroupDialogOpen(false)}
+              className="inline-flex items-center justify-center rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+            >
+              Nie
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setArchiveGroupDialogOpen(false);
+                void handleArchiveSelectedGroup();
+              }}
+              className="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-5 py-3 text-sm font-semibold text-red-700"
+            >
+              Tak, archiwizuj
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <PanelSection
+        eyebrow="Grupy"
+        title={
+          isCreateGroupRoute
+            ? "Nowa grupa"
+            : isGroupDetailView && selectedGroup
+              ? getGroupDetailTitle(selectedGroup)
+              : "Grupy Emandar"
+        }
+        description={
+          isCreateGroupRoute
             ? undefined
-            : isParticipantGroupViewer
+            : isGroupDetailView
               ? undefined
-              : canManageGroups
+              : isParticipantGroupViewer
                 ? undefined
-                : "To Twoje grupy. Obecnie masz do nich tylko dostęp podglądowy."
-      }
-      showLeadText={isCreateGroupRoute || isGroupDetailView}
-      action={
-        isCreateGroupRoute ? undefined : isGroupDetailView ? (
-          canManageGroups && selectedGroup && selectedGroupIsManagedByCurrentUser ? (
-            <div className="flex flex-wrap gap-2 sm:gap-3 lg:justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditingGroupId(selectedGroup.id);
-                  setGroupForm(createGroupFormStateFromGroup(selectedGroup));
-                }}
-                className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft sm:px-5"
-              >
-                <ShieldCheck size={16} />
-                Edytuj grupę
-              </button>
-              <Link
-                to={getGroupTrainingCreatePath(selectedGroup.id)}
-                state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-4 py-3 text-sm font-semibold text-white shadow-soft sm:px-5"
-              >
-                <CalendarDays size={16} />
-                Utwórz wydarzenie
-              </Link>
-              <button
-                type="button"
-                onClick={() => void handleArchiveSelectedGroup()}
-                className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700 shadow-soft sm:px-5"
-              >
-                <Trash2 size={16} />
-                Archiwizuj
-              </button>
-            </div>
+                : canManageGroups
+                  ? undefined
+                  : "To Twoje grupy. Obecnie masz do nich tylko dostęp podglądowy."
+        }
+        showLeadText={isCreateGroupRoute || isGroupDetailView}
+        action={
+          isCreateGroupRoute ? undefined : isGroupDetailView ? (
+            canManageGroups && selectedGroup && selectedGroupIsManagedByCurrentUser ? (
+              <div className="flex flex-wrap gap-2 sm:gap-3 lg:justify-end">
+                <button
+                  type="button"
+                  aria-label="Archiwizuj grupę"
+                  title="Archiwizuj grupę"
+                  onClick={() => setArchiveGroupDialogOpen(true)}
+                  className="inline-flex size-11 items-center justify-center rounded-full border border-red-200 bg-red-50 text-red-700 shadow-soft"
+                >
+                  <Trash2 size={17} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingGroupId(selectedGroup.id);
+                    setGroupForm(createGroupFormStateFromGroup(selectedGroup));
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy shadow-soft sm:px-5"
+                >
+                  <ShieldCheck size={16} />
+                  Edytuj grupę
+                </button>
+              </div>
+            ) : undefined
           ) : undefined
-        ) : undefined
-      }
-    >
+        }
+      >
       {isCreateGroupFormVisible ? (
         <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
           <form onSubmit={handleSaveGroup} className="grid gap-4 lg:grid-cols-2">
@@ -5820,6 +5850,41 @@ export function GroupsPage() {
         </div>
       ) : selectedGroup ? (
         <div className="space-y-6">
+          <div
+            role="tablist"
+            aria-label="Zawartość grupy"
+            className="flex flex-wrap gap-2 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft sm:w-fit"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={groupDetailTab === "members"}
+              onClick={() => setGroupDetailTab("members")}
+              className={cn(
+                "min-w-0 rounded-[1.35rem] px-4 py-2.5 text-sm font-semibold transition",
+                groupDetailTab === "members"
+                  ? "bg-brand-navy text-white"
+                  : "text-brand-muted hover:text-brand-navy",
+              )}
+            >
+              Członkowie
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={groupDetailTab === "events"}
+              onClick={() => setGroupDetailTab("events")}
+              className={cn(
+                "min-w-0 rounded-[1.35rem] px-4 py-2.5 text-sm font-semibold transition",
+                groupDetailTab === "events"
+                  ? "bg-brand-navy text-white"
+                  : "text-brand-muted hover:text-brand-navy",
+              )}
+            >
+              Wydarzenia
+            </button>
+          </div>
+
           {isEditGroupFormVisible ? (
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
               <SectionBlockHeading
@@ -6029,52 +6094,32 @@ export function GroupsPage() {
             />
           </div>
 
-          <div
-            role="tablist"
-            aria-label="Zawartość grupy"
-            className="flex flex-wrap gap-2 rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft sm:w-fit"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={groupDetailTab === "members"}
-              onClick={() => setGroupDetailTab("members")}
-              className={cn(
-                "min-w-0 rounded-[1.35rem] px-4 py-2.5 text-sm font-semibold transition",
-                groupDetailTab === "members"
-                  ? "bg-brand-navy text-white"
-                  : "text-brand-muted hover:text-brand-navy",
-              )}
-            >
-              Członkowie
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={groupDetailTab === "events"}
-              onClick={() => setGroupDetailTab("events")}
-              className={cn(
-                "min-w-0 rounded-[1.35rem] px-4 py-2.5 text-sm font-semibold transition",
-                groupDetailTab === "events"
-                  ? "bg-brand-navy text-white"
-                  : "text-brand-muted hover:text-brand-navy",
-              )}
-            >
-              Wydarzenia
-            </button>
-          </div>
-
           {groupDetailTab === "members" ? (
             <article className="min-w-0 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-              <SectionBlockHeading
-                title="Członkowie grupy"
-                description={
-                  isParticipantGroupViewer
-                    ? "W podglądzie uczestnika pokazujemy tylko skład grupy bez danych administracyjnych."
-                    : "Priorytet członka steruje tym, kto wpada automatycznie do rosteru wydarzenia i kto ma pierwszeństwo przy obsłudze listy."
-                }
-              />
-              {canManageGroups && selectedGroupIsManagedByCurrentUser && selectedGroup.status === "active" ? (
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <SectionBlockHeading
+                  title="Członkowie grupy"
+                  description={
+                    isParticipantGroupViewer
+                      ? "W podglądzie uczestnika pokazujemy tylko skład grupy bez danych administracyjnych."
+                      : "Priorytet członka steruje tym, kto wpada automatycznie do rosteru wydarzenia i kto ma pierwszeństwo przy obsłudze listy."
+                  }
+                />
+                {canManageGroups && selectedGroupIsManagedByCurrentUser && selectedGroup.status === "active" ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsAddMemberFormOpen((current) => !current)}
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                  >
+                    <Users size={16} />
+                    Dodaj członka
+                  </button>
+                ) : null}
+              </div>
+              {isAddMemberFormOpen &&
+              canManageGroups &&
+              selectedGroupIsManagedByCurrentUser &&
+              selectedGroup.status === "active" ? (
                 <form onSubmit={handleAddMember} className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
                   <div className="grid min-w-0 gap-4 lg:col-span-2 lg:grid-cols-2">
                     <label className="grid min-w-0 gap-2">
@@ -6167,7 +6212,7 @@ export function GroupsPage() {
                           className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
                         >
                           <Users size={16} />
-                          {savingMember ? "Dodawanie..." : "Dodaj członka"}
+                          {savingMember ? "Dodawanie..." : "Dodaj do grupy"}
                         </button>
                       </div>
                     </>
@@ -6359,14 +6404,26 @@ export function GroupsPage() {
 
           {groupDetailTab === "events" ? (
             <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-              <SectionBlockHeading
-                title="Wydarzenia grupy"
-                description={
-                  isParticipantGroupViewer
-                    ? "Tutaj widać szkolenia przypięte do tej grupy. Szczegóły uczestnictwa sprawdzisz z poziomu listy szkoleń."
-                    : "Tutaj widać wszystkie szkolenia przypięte do tej grupy i możesz szybko dodawać kolejne terminy."
-                }
-              />
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <SectionBlockHeading
+                  title="Wydarzenia grupy"
+                  description={
+                    isParticipantGroupViewer
+                      ? "Tutaj widać szkolenia przypięte do tej grupy. Szczegóły uczestnictwa sprawdzisz z poziomu listy szkoleń."
+                      : "Tutaj widać wszystkie szkolenia przypięte do tej grupy i możesz szybko dodawać kolejne terminy."
+                  }
+                />
+                {canManageGroups && selectedGroupIsManagedByCurrentUser ? (
+                  <Link
+                    to={getGroupTrainingCreatePath(selectedGroup.id)}
+                    state={{ headerBackPath: `/panel/grupy/${selectedGroup.id}` }}
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
+                  >
+                    <CalendarDays size={16} />
+                    Utwórz wydarzenie
+                  </Link>
+                ) : null}
+              </div>
               <div className="mt-6 space-y-3">
                 {selectedGroupEvents.length === 0 ? (
                   <EmptyPanelState
@@ -6428,6 +6485,7 @@ export function GroupsPage() {
           ) : null}
         </div>
       ) : null}
-    </PanelSection>
+      </PanelSection>
+    </>
   );
 }

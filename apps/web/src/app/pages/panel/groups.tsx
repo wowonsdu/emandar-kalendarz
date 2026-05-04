@@ -5626,8 +5626,8 @@ export function GroupsPage() {
       >
       {isCreateGroupFormVisible ? (
         <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
-          <form onSubmit={handleSaveGroup} className="grid gap-4 lg:grid-cols-2">
-            <label className="grid gap-2 lg:col-span-2">
+          <form onSubmit={handleSaveGroup} className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">Nazwa grupy</span>
               <input
                 required
@@ -5668,6 +5668,22 @@ export function GroupsPage() {
                 }
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
               />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+              <select
+                value={groupForm.defaultJoinAudience}
+                onChange={(event) =>
+                  setGroupForm((previous) => ({
+                    ...previous,
+                    defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
+                  }))
+                }
+                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+              >
+                <option value="existing-practitioners">Tylko Ćwiczący</option>
+                <option value="new-people">Nowe osoby</option>
+              </select>
             </label>
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-brand-navy">Domyślny typ</span>
@@ -5717,25 +5733,10 @@ export function GroupsPage() {
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
               />
             </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
-              <select
-                value={groupForm.defaultJoinAudience}
-                onChange={(event) =>
-                  setGroupForm((previous) => ({
-                    ...previous,
-                    defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-              >
-                <option value="existing-practitioners">Tylko Ćwiczący</option>
-                <option value="new-people">Nowe osoby</option>
-              </select>
-            </label>
-            <label className="grid gap-2 lg:col-span-2">
+            <label className="grid gap-2 md:col-span-1 xl:col-span-2">
               <span className="text-sm font-semibold text-brand-navy">Tagi domyślne</span>
-              <input
+              <textarea
+                rows={3}
                 value={groupForm.defaultTagsText}
                 onChange={(event) =>
                   setGroupForm((previous) => ({
@@ -5747,7 +5748,7 @@ export function GroupsPage() {
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
               />
             </label>
-            <label className="grid gap-2 lg:col-span-2">
+            <label className="grid gap-2 md:col-span-1 xl:col-span-2">
               <span className="text-sm font-semibold text-brand-navy">Notatki</span>
               <textarea
                 rows={3}
@@ -5758,7 +5759,7 @@ export function GroupsPage() {
                 className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
               />
             </label>
-            <div className="flex flex-wrap gap-3 lg:col-span-2">
+            <div className="flex flex-wrap gap-3 md:col-span-2 xl:col-span-4">
               <button
                 type="submit"
                 disabled={savingGroup}
@@ -5891,8 +5892,8 @@ export function GroupsPage() {
                 title="Edytuj grupę"
                 description="Zmieniasz ustawienia nadrzędne tej grupy i jej przyszłych szkoleń."
               />
-              <form onSubmit={handleSaveGroup} className="mt-6 grid gap-4 lg:grid-cols-2">
-                <label className="grid gap-2 lg:col-span-2">
+              <form onSubmit={handleSaveGroup} className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Nazwa grupy</span>
                   <input
                     required
@@ -5933,6 +5934,22 @@ export function GroupsPage() {
                     }
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                   />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+                  <select
+                    value={groupForm.defaultJoinAudience}
+                    onChange={(event) =>
+                      setGroupForm((previous) => ({
+                        ...previous,
+                        defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
+                  >
+                    <option value="existing-practitioners">Tylko Ćwiczący</option>
+                    <option value="new-people">Nowe osoby</option>
+                  </select>
                 </label>
                 <label className="grid gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Domyślny typ</span>
@@ -5982,25 +5999,10 @@ export function GroupsPage() {
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                   />
                 </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
-                  <select
-                    value={groupForm.defaultJoinAudience}
-                    onChange={(event) =>
-                      setGroupForm((previous) => ({
-                        ...previous,
-                        defaultJoinAudience: event.target.value as GroupFormState["defaultJoinAudience"],
-                      }))
-                    }
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                  >
-                    <option value="existing-practitioners">Tylko Ćwiczący</option>
-                    <option value="new-people">Nowe osoby</option>
-                  </select>
-                </label>
-                <label className="grid gap-2 lg:col-span-2">
+                <label className="grid gap-2 md:col-span-1 xl:col-span-2">
                   <span className="text-sm font-semibold text-brand-navy">Tagi domyślne</span>
-                  <input
+                  <textarea
+                    rows={3}
                     value={groupForm.defaultTagsText}
                     onChange={(event) =>
                       setGroupForm((previous) => ({
@@ -6012,7 +6014,7 @@ export function GroupsPage() {
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                   />
                 </label>
-                <label className="grid gap-2 lg:col-span-2">
+                <label className="grid gap-2 md:col-span-1 xl:col-span-2">
                   <span className="text-sm font-semibold text-brand-navy">Notatki</span>
                   <textarea
                     rows={3}
@@ -6023,7 +6025,7 @@ export function GroupsPage() {
                     className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                   />
                 </label>
-                <div className="flex flex-wrap gap-3 lg:col-span-2">
+                <div className="flex flex-wrap gap-3 md:col-span-2 xl:col-span-4">
                   <button
                     type="submit"
                     disabled={savingGroup}

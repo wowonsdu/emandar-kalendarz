@@ -201,6 +201,12 @@ interface AppStateContextValue {
     joinAudienceSetting?: "default" | "existing-practitioners" | "new-people",
     publicationDecision?: "accepted" | "rejected",
     publicationReviewMessage?: string,
+    groupId?: string,
+    trainerId?: string,
+    organizerId?: string,
+    type?: string,
+    eventTypeSystem?: "training" | "post",
+    isPublished?: boolean,
   ) => Promise<void>;
   notificationsCount: number;
   getPublicSignedInPath: () => string;
@@ -687,6 +693,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
         joinAudienceSetting,
         publicationDecision,
         publicationReviewMessage,
+        groupId,
+        trainerId,
+        organizerId,
+        type,
+        eventTypeSystem,
+        isPublished,
       ) {
         if (!currentUser) {
           throw new Error("Musisz byÄ‡ zalogowany.");
@@ -713,6 +725,12 @@ export function AppProviders({ children }: { children: ReactNode }) {
               joinAudienceSetting,
               publicationDecision,
               publicationReviewMessage,
+              groupId,
+              trainerId,
+              organizerId,
+              type,
+              eventTypeSystem,
+              isPublished,
             },
             currentUser,
           ),

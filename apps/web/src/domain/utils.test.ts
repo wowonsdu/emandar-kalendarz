@@ -671,7 +671,7 @@ describe("permissions and sorting", () => {
     ).toBe(false);
   });
 
-  it("allows creator to manage pending shared event and invited side only to decide", () => {
+  it("allows creator or assigned organizer to manage official training but not assigned trainer", () => {
     const event = {
       trainerId: "trainer-1",
       organizerId: "organizer-1",
@@ -679,10 +679,20 @@ describe("permissions and sorting", () => {
       trainerCollaborationStatus: "accepted" as const,
       organizerCollaborationStatus: "pending" as const,
       createdByRole: "trainer" as const,
+      creatorUserId: "user-creator",
     };
 
     expect(
       canManageTrainingEvent(event, {
+        id: "user-trainer",
+        role: "trainer",
+        trainerProfileId: "trainer-1",
+      }),
+    ).toBe(false);
+
+    expect(
+      canManageTrainingEvent(event, {
+        id: "user-creator",
         role: "trainer",
         trainerProfileId: "trainer-1",
       }),
@@ -690,10 +700,11 @@ describe("permissions and sorting", () => {
 
     expect(
       canManageTrainingEvent(event, {
+        id: "user-organizer",
         role: "organizer",
         organizerProfileId: "organizer-1",
       }),
-    ).toBe(false);
+    ).toBe(true);
 
     expect(
       canDecideTrainingEventCollaboration(event, {
@@ -703,7 +714,7 @@ describe("permissions and sorting", () => {
     ).toBe(true);
   });
 
-  it("blocks organizer from archived training while trainer keeps access", () => {
+  it("does not grant management to trainer only because training is assigned", () => {
     const event = {
       trainerId: "trainer-1",
       organizerId: "organizer-1",
@@ -712,21 +723,24 @@ describe("permissions and sorting", () => {
       organizerCollaborationStatus: "accepted" as const,
       createdByRole: "trainer" as const,
       archivedAt: "2026-03-10T10:00:00.000Z",
+      creatorUserId: "user-creator",
     };
 
     expect(isTrainingEventArchived(event)).toBe(true);
     expect(
       canManageTrainingEvent(event, {
+        id: "user-organizer",
         role: "organizer",
         organizerProfileId: "organizer-1",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       canManageTrainingEvent(event, {
+        id: "user-trainer",
         role: "trainer",
         trainerProfileId: "trainer-1",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       canDecideTrainingEventCollaboration(event, {
         role: "organizer",

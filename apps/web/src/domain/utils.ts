@@ -360,12 +360,8 @@ export function canManageTrainingEvent(
     | "brandStatus"
     | "archivedAt"
     | "creatorUserId"
-    | "createdByRole"
     | "organizerId"
-    | "selfManagedByTrainer"
-    | "trainerCollaborationStatus"
-    | "organizerCollaborationStatus"
-    | "trainerId"
+    | "organizerUserId"
   >,
   actor: CapabilityUser,
 ) {
@@ -382,38 +378,21 @@ export function canManageTrainingEvent(
     return true;
   }
 
-  const canUseTrainerLayer =
-    getRoleHierarchyLevel(actorRole) >= getRoleHierarchyLevel("trainer");
   const canUseOrganizerLayer =
     getRoleHierarchyLevel(actorRole) >= getRoleHierarchyLevel("organizer");
 
-  if (canUseTrainerLayer && actor.trainerProfileId === event.trainerId) {
-    return (
-      isSelfManagedTrainingEvent(event) ||
-      resolveTrainerCollaborationStatus(event) === "accepted" ||
-      event.createdByRole === "trainer"
-    );
+  if (actor.id === event.creatorUserId) {
+    return true;
   }
 
   if (
     canUseOrganizerLayer &&
-    actor.organizerProfileId === event.organizerId
+    (actor.id === event.organizerUserId || actor.organizerProfileId === event.organizerId)
   ) {
     if (isOrganizerFunctionsBlocked(actor)) {
       return false;
     }
 
-    if (isTrainingEventArchived(event)) {
-      return false;
-    }
-
-    return (
-      resolveOrganizerCollaborationStatus(event) === "accepted" ||
-      event.createdByRole === "organizer"
-    );
-  }
-
-  if (actor.id === event.creatorUserId) {
     return true;
   }
 

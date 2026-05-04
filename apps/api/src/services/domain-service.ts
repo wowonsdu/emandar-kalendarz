@@ -158,13 +158,74 @@ function recomputeEventCounts(store: DemoStoreRecord, eventId: string) {
 function assertCanManageEvent(actor: RecordAny, event: RecordAny) {
   if (
     hasRole(actor, "admin") ||
-    event.trainerUserId === actor.id ||
     event.organizerUserId === actor.id ||
+    event.organizerId === actor.organizerProfileId ||
     event.creatorUserId === actor.id
   ) {
     return;
   }
   throw new Error("Nie możesz zarządzać tym wydarzeniem.");
+}
+
+function applyTrainingEventRelationsFromInput(
+  event: RecordAny,
+  input: RecordAny,
+  store: DemoStoreRecord,
+  actor: RecordAny,
+) {
+  const group = findById(store, "groups", input.groupId ?? event.groupId);
+  const trainer = findById(store, "trainers", group?.trainerId ?? input.trainerId ?? event.trainerId);
+  const organizer = findById(store, "organizers", group?.organizerId ?? input.organizerId ?? event.organizerId);
+
+  if (group) {
+    const canUseGroup =
+      hasRole(actor, "admin") ||
+      group.organizerUserId === actor.id ||
+      group.organizerId === actor.organizerProfileId ||
+      group.trainerUserId === actor.id ||
+      group.trainerId === actor.trainerProfileId;
+
+    if (!canUseGroup) {
+      throw new Error("Nie możesz przypisać szkolenia do tej grupy.");
+    }
+
+    event.groupId = group.id;
+    event.groupName = group.name;
+    event.trainerId = group.trainerId;
+    event.trainerUserId = group.trainerUserId ?? trainer?.userId ?? event.trainerUserId ?? null;
+    event.organizerId = group.organizerId;
+    event.organizerUserId = group.organizerUserId ?? organizer?.userId ?? event.organizerUserId ?? null;
+    return;
+  }
+
+  if (input.trainerId !== undefined) {
+    event.trainerId = trainer?.id ?? input.trainerId ?? null;
+    event.trainerUserId = trainer?.userId ?? null;
+  }
+
+  if (input.organizerId !== undefined) {
+    event.organizerId = organizer?.id ?? input.organizerId ?? null;
+    event.organizerUserId = organizer?.userId ?? null;
+  }
+}
+
+function applyTrainingEventScheduleFromInput(event: RecordAny, input: RecordAny) {
+  if (!Array.isArray(input.scheduleDays)) {
+    return;
+  }
+
+  const scheduleDays = input.scheduleDays.filter(
+    (day: RecordAny) => typeof day?.startsAt === "string" && typeof day?.endsAt === "string",
+  );
+
+  event.scheduleDays = scheduleDays;
+
+  if (scheduleDays.length === 0) {
+    return;
+  }
+
+  event.startsAt = scheduleDays[0].startsAt;
+  event.endsAt = scheduleDays.at(-1)?.endsAt ?? scheduleDays[0].endsAt;
 }
 
 function assertCanModerateEvents(actor: RecordAny) {
@@ -914,8 +975,9 @@ export class DomainService {
         return this.mutate(actorUserId, (store, actor) => {
           if (!actor) throw new Error("Musisz być zalogowany.");
           const isCommunityEvent = input.brandStatus === "supported" || input.type === "Wydarzenie społeczności";
-          const trainer = findById(store, "trainers", input.trainerId ?? actor.trainerProfileId);
-          const organizer = findById(store, "organizers", input.organizerId ?? actor.organizerProfileId);
+          const group = findById(store, "groups", input.groupId);
+          const trainer = findById(store, "trainers", group?.trainerId ?? input.trainerId ?? actor.trainerProfileId);
+          const organizer = findById(store, "organizers", group?.organizerId ?? input.organizerId ?? actor.organizerProfileId);
           if (!isCommunityEvent && !hasRole(actor, "organizer") && !hasRole(actor, "trainer")) {
             throw new Error("Brak uprawnień.");
           }
@@ -927,9 +989,11 @@ export class DomainService {
             id: eventId,
             title: input.title?.trim() || input.location || "Nowe wydarzenie",
             trainerId: trainer?.id ?? input.trainerId ?? null,
-            trainerUserId: trainer?.userId ?? (actor.trainerProfileId ? actor.id : null),
+            trainerUserId: group?.trainerUserId ?? trainer?.userId ?? (actor.trainerProfileId ? actor.id : null),
             organizerId: organizer?.id ?? input.organizerId ?? null,
-            organizerUserId: organizer?.userId ?? (actor.organizerProfileId ? actor.id : null),
+            organizerUserId: group?.organizerUserId ?? organizer?.userId ?? (actor.organizerProfileId ? actor.id : null),
+            groupId: group?.id ?? input.groupId ?? null,
+            groupName: group?.name ?? input.groupName ?? null,
             creatorUserId: actor.id,
             creatorDisplayName: actor.displayName,
             creatorPhone: actor.phone,
@@ -995,7 +1059,11 @@ export class DomainService {
           } else {
             assertCanManageEvent(actor, event);
           }
-          Object.assign(event, cleanFileFields(input), { updatedAt: nowIso() });
+          const cleanedInput = cleanFileFields(input);
+          delete cleanedInput.eventId;
+          Object.assign(event, cleanedInput, { updatedAt: nowIso() });
+          applyTrainingEventRelationsFromInput(event, input, store, actor);
+          applyTrainingEventScheduleFromInput(event, input);
           if (input.status) event.status = input.status;
           if (input.brandStatus) event.brandStatus = input.brandStatus;
           if (input.publicationDecision) {

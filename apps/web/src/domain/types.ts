@@ -566,6 +566,11 @@ export interface TrainingEventBrandStatusUpdateInput {
 
 export interface TrainingEventManagementUpdateInput {
   eventId: string;
+  groupId?: string;
+  trainerId?: string;
+  organizerId?: string;
+  type?: string;
+  eventTypeSystem?: GroupEventType;
   status: TrainingEventStatus;
   capacity: number;
   minimumParticipants: number;
@@ -581,6 +586,7 @@ export interface TrainingEventManagementUpdateInput {
   transferTargetEventId?: string | null;
   enrollmentPhotoRequirement?: EnrollmentPhotoRequirement;
   joinAudienceSetting?: TrainingJoinAudienceSetting;
+  isPublished?: boolean;
   publicationDecision?: "accepted" | "rejected";
   publicationReviewMessage?: string;
 }

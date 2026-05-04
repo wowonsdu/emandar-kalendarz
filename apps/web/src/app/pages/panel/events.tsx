@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
+  type Ref,
   type ReactNode,
 } from "react";
 import {
@@ -373,6 +374,10 @@ type TrainingEventFormState = {
 };
 
 type EventManagementSettingsDraft = {
+  groupId: string;
+  trainerId: string;
+  organizerId: string;
+  selfManagedByTrainer: boolean;
   status: TrainingEventStatus;
   capacity: string;
   minimumParticipants: string;
@@ -383,11 +388,14 @@ type EventManagementSettingsDraft = {
   useEventImageAsCover: boolean;
   summary: string;
   description: string;
+  type: string;
+  eventTypeSystem: GroupEventType;
   enrollmentPhotoRequirement: "default" | "required" | "optional";
   joinAudience: "existing-practitioners" | "new-people";
   tags: string;
   firstDayDate: string;
   scheduleDays: ScheduleDayDraft[];
+  isPublished: boolean;
 };
 
 type CommunityEventEditorValues = {
@@ -474,11 +482,11 @@ export function getLatestGroupTrainingCopy(
   };
 }
 
-export function applyOfficialGroupDefaultsToTrainingForm(
-  previous: TrainingEventFormState,
+export function applyOfficialGroupDefaultsToTrainingForm<TValues extends TrainingEventFormState>(
+  previous: TValues,
   group: Group | null,
   events: TrainingEvent[],
-): TrainingEventFormState {
+): TValues {
   if (!group) {
     return previous;
   }
@@ -3746,6 +3754,451 @@ function EventDetailScopeSwitch({
   );
 }
 
+function OfficialEventDetailScopeSwitch({
+  activeTab,
+  onChange,
+  requestCount,
+  participantCountLabel,
+}: {
+  activeTab: "participants" | "requests";
+  onChange: (nextTab: "participants" | "requests") => void;
+  requestCount: number;
+  participantCountLabel: string;
+}) {
+  const items = [
+    {
+      id: "participants" as const,
+      label: "Uczestnicy",
+      badge: participantCountLabel,
+      icon: <Users size={15} />,
+    },
+    {
+      id: "requests" as const,
+      label: "Zgłoszenia",
+      badge: requestCount > 0 ? String(requestCount) : undefined,
+      icon: <Bell size={15} />,
+    },
+  ];
+
+  return (
+    <div className="w-full rounded-[1.75rem] border border-brand-line bg-white p-1 shadow-soft">
+      <div className="grid gap-1 md:grid-cols-2">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onChange(item.id)}
+            className={`flex min-w-0 items-center justify-center gap-2 rounded-[1.35rem] px-3 py-2.5 text-center text-sm font-semibold transition ${
+              activeTab === item.id
+                ? "bg-brand-navy text-white"
+                : "text-brand-muted hover:text-brand-navy"
+            }`}
+          >
+            {item.icon}
+            <span className="truncate">{item.label}</span>
+            {item.badge ? (
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                  activeTab === item.id
+                    ? "bg-white/18 text-white"
+                    : "bg-brand-shell text-brand-navy"
+                }`}
+              >
+                {item.badge}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OfficialTrainingEventFields<TValues extends TrainingEventFormState>({
+  values,
+  groups,
+  trainerNamesById,
+  disabled = false,
+  scheduleStartInputRef,
+  onChange,
+  onGroupChange,
+}: {
+  values: TValues;
+  groups: Group[];
+  trainerNamesById: Map<string, string>;
+  disabled?: boolean;
+  scheduleStartInputRef?: Ref<HTMLInputElement>;
+  onChange: (updater: (previous: TValues) => TValues) => void;
+  onGroupChange: (groupId: string) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-2 xl:col-span-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(9rem,max-content)_minmax(12rem,max-content)] xl:items-end">
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Grupa</span>
+          <select
+            required
+            disabled={disabled}
+            value={values.groupId}
+            onChange={(event) => onGroupChange(event.target.value)}
+            className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+          >
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name} / {trainerNamesById.get(group.trainerId) ?? "Przekazujący Wiedzę"}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Nagłówek miejsca</span>
+          <input
+            disabled={disabled}
+            value={values.location}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                location: event.target.value,
+              }))
+            }
+            placeholder="np. Warszawa, dolnośląskie"
+            className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+          />
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
+          <select
+            disabled={disabled}
+            value={values.eventTypeSystem}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                type: getGroupEventTypeLabel(event.target.value as GroupEventType),
+                eventTypeSystem: event.target.value as GroupEventType,
+              }))
+            }
+            className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+          >
+            <option value="training">Szkolenie</option>
+            <option value="post">Post</option>
+          </select>
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
+          <select
+            disabled={disabled}
+            value={values.status}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                status: event.target.value as TrainingEventStatus,
+              }))
+            }
+            className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+          >
+            <option value="active">Aktywne</option>
+            <option value="confirmed">Potwierdzone zorganizowanie</option>
+            <option value="cancelled">Anulowane</option>
+          </select>
+        </label>
+      </div>
+
+      <label className="grid min-w-0 gap-2">
+        <span className="text-sm font-semibold text-brand-navy">
+          Krótka informacja od organizatora (opcjonalnie)
+        </span>
+        <textarea
+          disabled={disabled}
+          rows={6}
+          maxLength={180}
+          value={values.summary}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              summary: event.target.value,
+            }))
+          }
+          className="min-h-36 rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <label className="grid min-w-0 gap-2">
+        <span className="text-sm font-semibold text-brand-navy">
+          Dłuższy opis na widoku szczegółowym (opcjonalnie)
+        </span>
+        <textarea
+          disabled={disabled}
+          rows={6}
+          value={values.description}
+          onChange={(event) =>
+            onChange((previous) => ({
+              ...previous,
+              description: event.target.value,
+            }))
+          }
+          className="min-h-36 rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+        />
+      </label>
+
+      <div className="grid gap-4 xl:col-span-2 xl:grid-cols-2">
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
+          <input
+            disabled={disabled}
+            value={values.tags}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                tags: event.target.value,
+              }))
+            }
+            placeholder="np. ognisko, pożywienie, nocleg, samodzielna kuchnia"
+            className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+          />
+          <span className="text-sm text-brand-muted">
+            Oddziel tagi przecinkami. Pokażą się publicznie jako chmura tagów.
+          </span>
+        </label>
+
+        <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <label className="grid min-w-0 content-start gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Miejsca</span>
+            <input
+              disabled={disabled}
+              min={1}
+              type="number"
+              value={values.capacity}
+              onChange={(event) =>
+                onChange((previous) => ({
+                  ...previous,
+                  capacity: event.target.value,
+                }))
+              }
+              className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+            />
+          </label>
+
+          <label className="grid min-w-0 content-start gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Próg potwierdzenia</span>
+            <input
+              required
+              disabled={disabled}
+              min={1}
+              type="number"
+              value={values.minimumParticipants}
+              onChange={(event) =>
+                onChange((previous) => ({
+                  ...previous,
+                  minimumParticipants: event.target.value,
+                }))
+              }
+              className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+            />
+          </label>
+
+          <label className="grid min-w-0 content-start gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Potwierdzenie SMS</span>
+            <input
+              disabled={disabled}
+              min={0}
+              type="number"
+              value={values.confirmationLeadTimeDays}
+              onChange={(event) =>
+                onChange((previous) => ({
+                  ...previous,
+                  confirmationLeadTimeDays: event.target.value,
+                }))
+              }
+              className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+            />
+          </label>
+
+          <label className="grid min-w-0 content-start gap-2">
+            <span className="text-sm font-semibold text-brand-navy">Mogą Dołączyć</span>
+            <select
+              disabled={disabled}
+              value={values.joinAudience}
+              onChange={(event) =>
+                onChange((previous) => ({
+                  ...previous,
+                  joinAudience: event.target.value as TValues["joinAudience"],
+                }))
+              }
+              className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+            >
+              <option value="existing-practitioners">Tylko Ćwiczący</option>
+              <option value="new-people">Nowe osoby</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:col-span-2 md:grid-cols-3 xl:w-[calc(50%-0.5rem)]">
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Data od</span>
+          <input
+            ref={scheduleStartInputRef}
+            required
+            disabled={disabled}
+            type="date"
+            value={values.firstDayDate}
+            onChange={(event) =>
+              onChange((previous) => ({
+                ...previous,
+                firstDayDate: event.target.value,
+              }))
+            }
+            className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+          />
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Data do</span>
+          <input
+            required
+            disabled={disabled}
+            type="date"
+            value={getScheduleEndDateInputValue(values.firstDayDate, values.scheduleDays.length)}
+            onChange={(event) => {
+              const nextDayCount = getInclusiveDateRangeDayCount(
+                values.firstDayDate,
+                event.target.value,
+              );
+              onChange((previous) => ({
+                ...previous,
+                scheduleDays: resizeScheduleDayDrafts(nextDayCount, previous.scheduleDays),
+              }));
+            }}
+            className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+          />
+        </label>
+
+        <label className="grid min-w-0 gap-2">
+          <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
+          <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] rounded-2xl border border-brand-line bg-brand-shell">
+            <button
+              type="button"
+              aria-label="Zmniejsz liczbę dni"
+              disabled={disabled || values.scheduleDays.length <= 1}
+              onClick={() =>
+                onChange((previous) => ({
+                  ...previous,
+                  scheduleDays: resizeScheduleDayDrafts(
+                    Math.max(1, previous.scheduleDays.length - 1),
+                    previous.scheduleDays,
+                  ),
+                }))
+              }
+              className="inline-flex items-center justify-center rounded-l-2xl text-brand-navy transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Minus aria-hidden="true" size={16} />
+            </button>
+            <input
+              disabled={disabled}
+              min={1}
+              type="number"
+              value={values.scheduleDays.length}
+              onChange={(event) => {
+                const nextDayCount = Math.max(1, Number(event.target.value) || 1);
+                onChange((previous) => ({
+                  ...previous,
+                  scheduleDays: resizeScheduleDayDrafts(nextDayCount, previous.scheduleDays),
+                }));
+              }}
+              className="w-full min-w-0 border-x border-brand-line bg-transparent px-3 py-3.5 text-center text-brand-navy outline-none disabled:opacity-70"
+            />
+            <button
+              type="button"
+              aria-label="Zwiększ liczbę dni"
+              disabled={disabled}
+              onClick={() =>
+                onChange((previous) => ({
+                  ...previous,
+                  scheduleDays: resizeScheduleDayDrafts(
+                    previous.scheduleDays.length + 1,
+                    previous.scheduleDays,
+                  ),
+                }))
+              }
+              className="inline-flex items-center justify-center rounded-r-2xl text-brand-navy transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Plus aria-hidden="true" size={16} />
+            </button>
+          </div>
+        </label>
+      </div>
+
+      <div className="grid gap-4 xl:col-span-2 sm:grid-cols-2 lg:grid-cols-4">
+        {values.scheduleDays.map((day, index) => {
+          const draftScheduleDays = buildScheduleDaysFromDrafts(
+            values.firstDayDate,
+            values.scheduleDays,
+          );
+
+          return (
+            <div
+              key={`official-training-day-${index + 1}`}
+              className="rounded-3xl border border-brand-line bg-brand-shell p-4"
+            >
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
+                  Dzień {index + 1}
+                </p>
+                <p className="text-sm text-brand-muted">
+                  {draftScheduleDays[index]?.startsAt
+                    ? formatDate(draftScheduleDays[index].startsAt)
+                    : "Wybierz pierwszy dzień"}
+                </p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Godzina startu</span>
+                  <input
+                    required
+                    disabled={disabled}
+                    type="time"
+                    value={day.startTime}
+                    onChange={(event) =>
+                      onChange((previous) => ({
+                        ...previous,
+                        scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, startTime: event.target.value } : item,
+                        ),
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Godzina końca</span>
+                  <input
+                    required
+                    disabled={disabled}
+                    type="time"
+                    value={day.endTime}
+                    onChange={(event) =>
+                      onChange((previous) => ({
+                        ...previous,
+                        scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, endTime: event.target.value } : item,
+                        ),
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none disabled:opacity-70"
+                  />
+                </label>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function CommunityEventEditorFields({
   values,
   disabled = false,
@@ -5088,14 +5541,17 @@ export function EventsPage() {
                       ? trainerEventForm.groupId
                       : undefined,
                   trainerId:
-                    !isCommunitySection && isOrganizerManager
-                      ? trainerEventForm.trainerId
+                    !isCommunitySection && selectedOfficialGroup
+                      ? selectedOfficialGroup.trainerId
                       : undefined,
                   title: isCommunitySection ? trainerEventForm.title : undefined,
                   eventImages: isCommunitySection ? trainerEventForm.eventImages : undefined,
                   useEventImageAsCover:
                     isCommunitySection ? trainerEventForm.useEventImageAsCover : undefined,
-                  organizerId: undefined,
+                  organizerId:
+                    !isCommunitySection && selectedOfficialGroup
+                      ? selectedOfficialGroup.organizerId
+                      : undefined,
                   summary: trainerEventForm.summary,
                   description: trainerEventForm.description,
                   tags: parseEventTags(trainerEventForm.tags),
@@ -5168,439 +5624,16 @@ export function EventsPage() {
             }}
             className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
           >
-            <div className="grid gap-4 xl:grid-cols-2">
-              {!isCommunitySection && hasOfficialManagementScope && (
-                <div className="grid gap-4 md:grid-cols-2 xl:col-span-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(9rem,max-content)_minmax(12rem,max-content)] xl:items-end">
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Grupa</span>
-                    <select
-                      required
-                      value={trainerEventForm.groupId}
-                      onChange={(event) => applyOfficialGroupToTrainingForm(event.target.value)}
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    >
-                      {availableOfficialGroups.map((group) => (
-                        <option key={group.id} value={group.id}>
-                          {group.name} /{" "}
-                          {trainerNamesById.get(group.trainerId) ?? "Przekazujący Wiedzę"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Nagłówek miejsca</span>
-                    <input
-                      value={trainerEventForm.location}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          location: event.target.value,
-                        }))
-                      }
-                      placeholder="np. Warszawa, dolnośląskie"
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    />
-                  </label>
-
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
-                    <select
-                      value={trainerEventForm.eventTypeSystem}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          type: getGroupEventTypeLabel(event.target.value as GroupEventType),
-                          eventTypeSystem: event.target.value as GroupEventType,
-                        }))
-                      }
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    >
-                      <option value="training">Szkolenie</option>
-                      <option value="post">Post</option>
-                    </select>
-                  </label>
-
-                  <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
-                    <select
-                      value={trainerEventForm.status}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          status: event.target.value as TrainingEventStatus,
-                        }))
-                      }
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    >
-                      <option value="active">Aktywne</option>
-                      <option value="confirmed">Potwierdzone zorganizowanie</option>
-                      <option value="cancelled">Anulowane</option>
-                    </select>
-                  </label>
-                </div>
-              )}
-
-              {isCommunitySection && (
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Tytuł wydarzenia</span>
-                  <input
-                    required
-                    value={trainerEventForm.title}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        title: event.target.value,
-                      }))
-                    }
-                    placeholder="np. Kajaki nad Bugiem"
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                </label>
-              )}
-
-              {isCommunitySection && (
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Lokalizacja</span>
-                  <input
-                    required
-                    value={trainerEventForm.location}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        location: event.target.value,
-                      }))
-                    }
-                    placeholder="np. Warszawa, dolnośląskie"
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                </label>
-              )}
-
-              {isCommunitySection && (
-                <label className="grid gap-2 xl:col-span-2">
-                  <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
-                  <select
-                    value={trainerEventForm.status}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        status: event.target.value as TrainingEventStatus,
-                      }))
-                    }
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  >
-                    <option value="active">Aktywne</option>
-                    <option value="confirmed">Potwierdzone zorganizowanie</option>
-                    <option value="cancelled">Anulowane</option>
-                  </select>
-                </label>
-              )}
-
-              <label className={`grid gap-2 ${isCommunitySection ? "xl:col-span-2" : "min-w-0"}`}>
-                <span className="text-sm font-semibold text-brand-navy">
-                  {isCommunitySection
-                    ? "Krótka informacja o wydarzeniu"
-                    : "Krótka informacja od organizatora (opcjonalnie)"}
-                </span>
-                <textarea
-                  required={isCommunitySection}
-                  rows={isCommunitySection ? 3 : 6}
-                  maxLength={180}
-                  value={trainerEventForm.summary}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      summary: event.target.value,
-                    }))
-                  }
-                  className="min-h-36 rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <label className={`grid gap-2 ${isCommunitySection ? "xl:col-span-2" : "min-w-0"}`}>
-                <span className="text-sm font-semibold text-brand-navy">
-                  {isCommunitySection
-                    ? "Informacja do prośby o dołączenie"
-                    : "Dłuższy opis na widoku szczegółowym (opcjonalnie)"}
-                </span>
-                <textarea
-                  required={isCommunitySection}
-                  rows={6}
-                  value={trainerEventForm.description}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      description: event.target.value,
-                    }))
-                  }
-                  className="min-h-36 rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                {isCommunitySection && (
-                  <span className="text-sm text-brand-muted">
-                    Ten tekst pokaże się osobie przed wysłaniem prośby o dołączenie.
-                  </span>
-                )}
-              </label>
-
-              <div className="grid gap-4 xl:col-span-2 xl:grid-cols-2">
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
-                  <input
-                    value={trainerEventForm.tags}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        tags: event.target.value,
-                      }))
-                    }
-                    placeholder="np. ognisko, pożywienie, nocleg, samodzielna kuchnia"
-                    className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                  <span className="text-sm text-brand-muted">
-                    Oddziel tagi przecinkami. Pokażą się publicznie jako chmura tagów.
-                  </span>
-                </label>
-
-                <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <label className="grid min-w-0 content-start gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Miejsca</span>
-                    <input
-                      min={1}
-                      type="number"
-                      value={trainerEventForm.capacity}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          capacity: event.target.value,
-                        }))
-                      }
-                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    />
-                  </label>
-
-                  <label className="grid min-w-0 content-start gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">
-                      Próg potwierdzenia
-                    </span>
-                    <input
-                      required
-                      min={1}
-                      type="number"
-                      value={trainerEventForm.minimumParticipants}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          minimumParticipants: event.target.value,
-                        }))
-                      }
-                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    />
-                  </label>
-
-                  <label className="grid min-w-0 content-start gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">
-                      Potwierdzenie SMS
-                    </span>
-                    <input
-                      min={0}
-                      type="number"
-                      value={trainerEventForm.confirmationLeadTimeDays}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          confirmationLeadTimeDays: event.target.value,
-                        }))
-                      }
-                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    />
-                  </label>
-
-                  <label className="grid min-w-0 content-start gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Mogą Dołączyć</span>
-                    <select
-                      value={trainerEventForm.joinAudience}
-                      onChange={(event) =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          joinAudience: event.target.value as TrainingEventFormState["joinAudience"],
-                        }))
-                      }
-                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    >
-                      <option value="existing-practitioners">Tylko Ćwiczący</option>
-                      <option value="new-people">Nowe osoby</option>
-                    </select>
-                  </label>
-                </div>
-              </div>
-
-              <div className="grid gap-4 xl:col-span-2 md:grid-cols-3 xl:w-[calc(50%-0.5rem)]">
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Data od</span>
-                  <input
-                    ref={scheduleStartInputRef}
-                    required
-                    type="date"
-                    value={trainerEventForm.firstDayDate}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        firstDayDate: event.target.value,
-                      }))
-                    }
-                    className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                </label>
-
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Data do</span>
-                  <input
-                    required
-                    type="date"
-                    value={getScheduleEndDateInputValue(
-                      trainerEventForm.firstDayDate,
-                      trainerEventForm.scheduleDays.length,
-                    )}
-                    onChange={(event) => {
-                      const nextDayCount = getInclusiveDateRangeDayCount(
-                        trainerEventForm.firstDayDate,
-                        event.target.value,
-                      );
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        scheduleDays: resizeScheduleDayDrafts(
-                          nextDayCount,
-                          previous.scheduleDays,
-                        ),
-                      }));
-                    }}
-                    className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                </label>
-
-                <label className="grid min-w-0 gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
-                  <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] rounded-2xl border border-brand-line bg-brand-shell">
-                    <button
-                      type="button"
-                      aria-label="Zmniejsz liczbę dni"
-                      disabled={trainerEventForm.scheduleDays.length <= 1}
-                      onClick={() =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          scheduleDays: resizeScheduleDayDrafts(
-                            Math.max(1, previous.scheduleDays.length - 1),
-                            previous.scheduleDays,
-                          ),
-                        }))
-                      }
-                      className="inline-flex items-center justify-center rounded-l-2xl text-brand-navy transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <Minus aria-hidden="true" size={16} />
-                    </button>
-                    <input
-                      min={1}
-                      type="number"
-                      value={trainerEventForm.scheduleDays.length}
-                      onChange={(event) => {
-                        const nextDayCount = Math.max(1, Number(event.target.value) || 1);
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          scheduleDays: resizeScheduleDayDrafts(
-                            nextDayCount,
-                            previous.scheduleDays,
-                          ),
-                        }));
-                      }}
-                      className="w-full min-w-0 border-x border-brand-line bg-transparent px-3 py-3.5 text-center text-brand-navy outline-none"
-                    />
-                    <button
-                      type="button"
-                      aria-label="Zwiększ liczbę dni"
-                      onClick={() =>
-                        setTrainerEventForm((previous) => ({
-                          ...previous,
-                          scheduleDays: resizeScheduleDayDrafts(
-                            previous.scheduleDays.length + 1,
-                            previous.scheduleDays,
-                          ),
-                        }))
-                      }
-                      className="inline-flex items-center justify-center rounded-r-2xl text-brand-navy transition-colors hover:bg-white"
-                    >
-                      <Plus aria-hidden="true" size={16} />
-                    </button>
-                  </div>
-                </label>
-              </div>
-
-              <div className="grid gap-4 xl:col-span-2 sm:grid-cols-2 lg:grid-cols-4">
-                {trainerEventForm.scheduleDays.map((day, index) => {
-                  const draftScheduleDays = buildScheduleDaysFromDrafts(
-                    trainerEventForm.firstDayDate,
-                    trainerEventForm.scheduleDays,
-                  );
-
-                  return (
-                    <div
-                      key={`creator-day-${index + 1}`}
-                      className="rounded-3xl border border-brand-line bg-brand-shell p-4"
-                    >
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                          Dzień {index + 1}
-                        </p>
-                        <p className="text-sm text-brand-muted">
-                          {draftScheduleDays[index]?.startsAt
-                            ? formatDate(draftScheduleDays[index].startsAt)
-                            : "Wybierz pierwszy dzień"}
-                        </p>
-                      </div>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <label className="grid gap-2">
-                          <span className="text-sm font-semibold text-brand-navy">Godzina startu</span>
-                          <input
-                            required
-                            type="time"
-                            value={day.startTime}
-                            onChange={(event) =>
-                              setTrainerEventForm((previous) => ({
-                                ...previous,
-                                scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
-                                  itemIndex === index
-                                    ? { ...item, startTime: event.target.value }
-                                    : item,
-                                ),
-                              }))
-                            }
-                            className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                          />
-                        </label>
-                        <label className="grid gap-2">
-                          <span className="text-sm font-semibold text-brand-navy">Godzina końca</span>
-                          <input
-                            required
-                            type="time"
-                            value={day.endTime}
-                            onChange={(event) =>
-                              setTrainerEventForm((previous) => ({
-                                ...previous,
-                                scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
-                                  itemIndex === index
-                                    ? { ...item, endTime: event.target.value }
-                                    : item,
-                                ),
-                              }))
-                            }
-                            className="rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy outline-none"
-                          />
-                        </label>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+            <div className="grid gap-4">
+              <OfficialTrainingEventFields
+                values={trainerEventForm}
+                groups={availableOfficialGroups}
+                trainerNamesById={trainerNamesById}
+                disabled={creatingEvent}
+                scheduleStartInputRef={scheduleStartInputRef}
+                onChange={setTrainerEventForm}
+                onGroupChange={applyOfficialGroupToTrainingForm}
+              />
 
               <div className="flex flex-col gap-4 xl:col-span-2 sm:flex-row sm:items-center sm:justify-between">
                 <label className="flex min-w-0 items-center gap-3 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy">
@@ -6221,6 +6254,9 @@ export function EventManagementPage() {
   const [communityDetailTab, setCommunityDetailTab] = useState<
     "requests" | "participants" | "reserve"
   >("requests");
+  const [officialDetailTab, setOfficialDetailTab] = useState<"participants" | "requests">(
+    "participants",
+  );
   const [publishingEvent, setPublishingEvent] = useState(false);
   const {
     dialog: acceptedRequestGroupDialog,
@@ -6229,6 +6265,10 @@ export function EventManagementPage() {
     addGroupMember,
   });
   const [settingsDraft, setSettingsDraft] = useState<EventManagementSettingsDraft>({
+    groupId: "",
+    trainerId: "",
+    organizerId: "",
+    selfManagedByTrainer: false,
     status: "active" as TrainingEventStatus,
     capacity: "1",
     minimumParticipants: "1",
@@ -6239,16 +6279,49 @@ export function EventManagementPage() {
     useEventImageAsCover: false,
     summary: "",
     description: "",
+    type: "Szkolenie",
+    eventTypeSystem: "training",
     enrollmentPhotoRequirement: "default" as "default" | "required" | "optional",
     joinAudience: "new-people",
     tags: "",
     firstDayDate: "",
     scheduleDays: resizeScheduleDayDrafts(2, []),
+    isPublished: true,
   });
   const event = store.trainingEvents.find((item) => item.id === eventId);
   const eventGroup = event?.groupId
     ? (store.groups ?? []).find((item) => item.id === event.groupId) ?? null
     : null;
+  const trainerNamesById = useMemo(
+    () => new Map(store.trainers.map((trainer) => [trainer.id, trainer.displayName])),
+    [store.trainers],
+  );
+  const editableOfficialGroups = useMemo(() => {
+    const activeGroups = (store.groups ?? []).filter(
+      (group) => group.status === "active" || group.id === event?.groupId,
+    );
+
+    if (currentUser?.role === "admin") {
+      return activeGroups.sort((left, right) => left.name.localeCompare(right.name, "pl"));
+    }
+
+    return activeGroups
+      .filter(
+        (group) =>
+          group.organizerUserId === currentUser?.id ||
+          group.organizerId === currentUser?.organizerProfileId ||
+          group.trainerUserId === currentUser?.id ||
+          group.trainerId === currentUser?.trainerProfileId,
+      )
+      .sort((left, right) => left.name.localeCompare(right.name, "pl"));
+  }, [
+    currentUser?.id,
+    currentUser?.organizerProfileId,
+    currentUser?.role,
+    currentUser?.trainerProfileId,
+    event?.groupId,
+    store.groups,
+  ]);
   const resolvedEventJoinAudience = event
     ? resolveTrainingJoinAudienceForEvent(event, eventGroup)
     : "new-people";
@@ -6272,6 +6345,10 @@ export function EventManagementPage() {
 
   function createEventManagementSettingsDraft(sourceEvent: TrainingEvent) {
     return {
+      groupId: sourceEvent.groupId ?? "",
+      trainerId: sourceEvent.trainerId ?? "",
+      organizerId: sourceEvent.organizerId ?? "",
+      selfManagedByTrainer: sourceEvent.selfManagedByTrainer === true,
       status: resolveTrainingEventStatus(sourceEvent.status),
       capacity: String(sourceEvent.capacity),
       minimumParticipants: String(resolveMinimumParticipants(sourceEvent)),
@@ -6282,9 +6359,12 @@ export function EventManagementPage() {
       useEventImageAsCover: sourceEvent.useEventImageAsCover === true,
       summary: sourceEvent.summary,
       description: sourceEvent.description,
+      type: sourceEvent.type ?? getGroupEventTypeLabel(sourceEvent.eventTypeSystem ?? "training"),
+      eventTypeSystem: sourceEvent.eventTypeSystem ?? "training",
       enrollmentPhotoRequirement: sourceEvent.enrollmentPhotoRequirement ?? "default",
       joinAudience: resolveTrainingJoinAudienceForEvent(sourceEvent, eventGroup),
       tags: (sourceEvent.tags ?? []).join(", "),
+      isPublished: sourceEvent.isPublished,
       ...getScheduleDraftsFromEvent(sourceEvent),
     };
   }
@@ -7134,439 +7214,174 @@ export function EventManagementPage() {
           </p>
         )}
 
-        {canManageEvent && !eventIsArchived && <div className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-4">
-          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-            <SectionBlockHeading
-              title="Ustawienia szkolenia"
-              description="W tym miejscu ustawiasz status, limity i prog potwierdzenia."
-            />
-            {currentUser.role === "admin" && (
-              <div className="w-full max-w-sm">
-                <AdminBrandStatusSelect
-                  value={event.brandStatus}
-                  onChange={(brandStatus) =>
-                    updateTrainingEventBrandStatus(event.id, brandStatus)
-                  }
-                />
+        {canManageEvent && !eventIsArchived ? (
+          <Collapsible className="mt-6 rounded-3xl border border-brand-line bg-brand-shell p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <SectionBlockHeading
+                title="Edycja szkolenia"
+                description="Rozwiń formularz, żeby zmienić dane szkolenia tym samym układem co przy tworzeniu."
+              />
+              <div className="flex flex-wrap items-center gap-3">
+                {currentUser.role === "admin" ? (
+                  <div className="w-full min-w-[16rem] max-w-sm">
+                    <AdminBrandStatusSelect
+                      value={event.brandStatus}
+                      onChange={(brandStatus) => updateTrainingEventBrandStatus(event.id, brandStatus)}
+                    />
+                  </div>
+                ) : null}
+                <CollapsibleTrigger className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft">
+                  Edytuj szkolenie
+                  <ChevronDown size={16} />
+                </CollapsibleTrigger>
               </div>
-            )}
-          </div>
-          <div className="grid gap-4 md:grid-cols-[1fr_220px_220px_220px]">
-            {isCommunityEvent && (
-              <>
-                <label className="grid gap-2 md:col-span-3">
-                  <span className="text-sm font-semibold text-brand-navy">Tytuł wydarzenia</span>
-                  <input
-                    value={settingsDraft.title}
-                    onChange={(changeEvent) =>
-                      updateSettingsDraft((previous) => ({
-                        ...previous,
-                        title: changeEvent.target.value,
-                      }))
-                    }
-                    placeholder="np. Kajaki nad Bugiem"
-                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                  />
-                </label>
-                <label className="grid gap-2 md:col-span-3">
-                  <span className="text-sm font-semibold text-brand-navy">Lokalizacja wydarzenia</span>
-                  <input
-                    value={settingsDraft.location}
-                    onChange={(changeEvent) =>
-                      updateSettingsDraft((previous) => ({
-                        ...previous,
-                        location: changeEvent.target.value,
-                      }))
-                    }
-                    placeholder="np. Drohiczyn, nad Bugiem"
-                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                  />
-                </label>
-                <div className="md:col-span-3">
-                  <EventGalleryField
-                    images={settingsDraft.eventImages}
-                    useEventImageAsCover={settingsDraft.useEventImageAsCover}
-                    uploading={uploadingSettingsImages}
-                    disabled={savingSettings || archivingEvent}
-                    onUpload={async (files) => {
-                      const availableSlots = Math.max(0, 8 - settingsDraft.eventImages.length);
-                      const filesToUpload = files.slice(0, availableSlots);
+            </div>
+            <CollapsibleContent className="mt-5">
+              <form
+                className="space-y-5"
+                onSubmit={async (submitEvent) => {
+                  submitEvent.preventDefault();
+                  setSavingSettings(true);
 
-                      if (filesToUpload.length === 0) {
-                        toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
+                  try {
+                    const selectedSettingsGroup =
+                      editableOfficialGroups.find((group) => group.id === settingsDraft.groupId) ??
+                      eventGroup;
+                    const officialCapacity = Math.max(
+                      1,
+                      Number(settingsDraft.capacity) || selectedSettingsGroup?.defaultCapacity || event.capacity,
+                    );
+                    const officialMinimumParticipants = Math.max(
+                      1,
+                      Number(settingsDraft.minimumParticipants) || resolveMinimumParticipants(event),
+                    );
+                    const officialConfirmationLeadTimeDays = Math.max(
+                      0,
+                      Number(settingsDraft.confirmationLeadTimeDays) ||
+                        selectedSettingsGroup?.defaultConfirmationLeadTimeDays ||
+                        event.confirmationLeadTimeDays ||
+                        0,
+                    );
+                    const officialLocation =
+                      settingsDraft.location.trim() || selectedSettingsGroup?.defaultLocation || event.location;
+
+                    await updateTrainingEventManagement(
+                      event.id,
+                      settingsDraft.status,
+                      officialCapacity,
+                      officialMinimumParticipants,
+                      officialConfirmationLeadTimeDays,
+                      undefined,
+                      officialLocation,
+                      settingsDraft.summary,
+                      settingsDraft.description,
+                      parseEventTags(settingsDraft.tags),
+                      undefined,
+                      undefined,
+                      buildScheduleDaysFromDrafts(
+                        settingsDraft.firstDayDate,
+                        settingsDraft.scheduleDays,
+                      ),
+                      undefined,
+                      settingsDraft.enrollmentPhotoRequirement,
+                      getPersistedJoinAudienceSetting(settingsDraft.joinAudience, selectedSettingsGroup),
+                      undefined,
+                      undefined,
+                      settingsDraft.groupId || undefined,
+                      (selectedSettingsGroup?.trainerId ?? settingsDraft.trainerId) || undefined,
+                      (selectedSettingsGroup?.organizerId ?? settingsDraft.organizerId) || undefined,
+                      getGroupEventTypeLabel(settingsDraft.eventTypeSystem),
+                      settingsDraft.eventTypeSystem,
+                      settingsDraft.isPublished,
+                    );
+                    toast.success("Zapisano szkolenie.");
+                    setIsSettingsDirty(false);
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : "Nie udało się zapisać ustawień szkolenia.",
+                    );
+                  } finally {
+                    setSavingSettings(false);
+                  }
+                }}
+              >
+                <OfficialTrainingEventFields
+                  values={settingsDraft}
+                  groups={editableOfficialGroups}
+                  trainerNamesById={trainerNamesById}
+                  disabled={savingSettings || archivingEvent}
+                  onChange={updateSettingsDraft}
+                  onGroupChange={(groupId) => {
+                    const nextGroup =
+                      editableOfficialGroups.find((group) => group.id === groupId) ?? null;
+                    updateSettingsDraft((previous) =>
+                      nextGroup
+                        ? applyOfficialGroupDefaultsToTrainingForm(previous, nextGroup, store.trainingEvents)
+                        : previous,
+                    );
+                  }}
+                />
+                <label className="flex max-w-xl min-w-0 items-center gap-3 rounded-2xl border border-brand-line bg-white px-4 py-3.5 text-brand-navy">
+                  <input
+                    type="checkbox"
+                    checked={settingsDraft.isPublished}
+                    onChange={(changeEvent) =>
+                      updateSettingsDraft((previous) => ({
+                        ...previous,
+                        isPublished: changeEvent.target.checked,
+                      }))
+                    }
+                  />
+                  <span className="text-sm font-semibold">Szkolenie opublikowane</span>
+                </label>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    type="submit"
+                    disabled={savingSettings || archivingEvent}
+                    className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
+                  >
+                    {savingSettings ? "Zapisywanie..." : "Zapisz szkolenie"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingSettings || archivingEvent}
+                    onClick={async () => {
+                      if (!window.confirm("Zarchiwizować to szkolenie i wyłączyć nowe zapisy?")) {
                         return;
                       }
 
-                      setUploadingSettingsImages(true);
+                      setArchivingEvent(true);
 
                       try {
-                        const uploadedImages = await uploadCommunityEventImages(filesToUpload);
-                        updateSettingsDraft((previous) => ({
-                          ...previous,
-                          eventImages: [...previous.eventImages, ...uploadedImages],
-                        }));
+                        await archiveTrainingEvent(event.id);
+                        toast.success("Szkolenie zostało zarchiwizowane.");
+                      } catch (error) {
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Nie udało się zarchiwizować szkolenia.",
+                        );
                       } finally {
-                        setUploadingSettingsImages(false);
+                        setArchivingEvent(false);
                       }
                     }}
-                    onRemove={(imageId) =>
-                      updateSettingsDraft((previous) => ({
-                        ...previous,
-                        eventImages: previous.eventImages.filter((image) => image.id !== imageId),
-                        useEventImageAsCover:
-                          previous.eventImages.filter((image) => image.id !== imageId).length > 0
-                            ? previous.useEventImageAsCover
-                            : false,
-                      }))
-                    }
-                    onToggleUseEventImageAsCover={(nextValue) =>
-                      updateSettingsDraft((previous) => ({
-                        ...previous,
-                        useEventImageAsCover: nextValue && previous.eventImages.length > 0,
-                      }))
-                    }
-                    onMakePrimary={(imageId) =>
-                      updateSettingsDraft((previous) => ({
-                        ...previous,
-                        eventImages: moveEventImageToFront(previous.eventImages, imageId),
-                      }))
-                    }
-                  />
+                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
+                  >
+                    {archivingEvent ? "Archiwizowanie..." : "Zarchiwizuj szkolenie"}
+                  </button>
+                  <Link
+                    to={fallbackListPath}
+                    className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
+                  >
+                    {backListLabel}
+                  </Link>
                 </div>
-              </>
-            )}
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Status szkolenia</span>
-              <select
-                value={settingsDraft.status}
-                onChange={(changeEvent) =>
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    status: changeEvent.target.value as TrainingEventStatus,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-              >
-                <option value="active">Aktywne</option>
-                <option value="confirmed">Potwierdzone zorganizowanie</option>
-                <option value="cancelled">Anulowane</option>
-              </select>
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Maks. miejsc</span>
-              <input
-                min={1}
-                type="number"
-                value={settingsDraft.capacity}
-                onChange={(changeEvent) =>
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    capacity: changeEvent.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Minimalny prog osob</span>
-              <input
-                min={1}
-                type="number"
-                value={settingsDraft.minimumParticipants}
-                onChange={(changeEvent) =>
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    minimumParticipants: changeEvent.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">
-                SMS potwierdzenia udziału
-              </span>
-              <input
-                min={0}
-                type="number"
-                value={settingsDraft.confirmationLeadTimeDays}
-                onChange={(changeEvent) =>
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    confirmationLeadTimeDays: changeEvent.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-              />
-              <span className="text-xs text-brand-muted">
-                {eventGroup
-                  ? `Grupa bazowa ma teraz ustawione ${eventGroup.defaultConfirmationLeadTimeDays} dni.`
-                  : "Dla wydarzeń społeczności ustawiasz timing bezpośrednio tutaj."}
-              </span>
-            </label>
-          </div>
-
-          <div className="mt-4 grid gap-4 xl:grid-cols-2">
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Pierwszy dzien szkolenia</span>
-              <input
-                required
-                type="date"
-                value={settingsDraft.firstDayDate}
-                onChange={(changeEvent) =>
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    firstDayDate: changeEvent.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
-              <input
-                required
-                min={1}
-                type="number"
-                value={settingsDraft.scheduleDays.length}
-                onChange={(changeEvent) => {
-                  const nextDayCount = Math.max(1, Number(changeEvent.target.value) || 1);
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    scheduleDays: resizeScheduleDayDrafts(
-                      nextDayCount,
-                      previous.scheduleDays,
-                    ),
-                  }));
-                }}
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-              />
-            </label>
-          </div>
-
-          <label className="mt-4 grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">
-              Zdjęcie w formularzu zapisu
-            </span>
-            <select
-              value={settingsDraft.enrollmentPhotoRequirement}
-              onChange={(changeEvent) =>
-                updateSettingsDraft((previous) => ({
-                  ...previous,
-                  enrollmentPhotoRequirement: changeEvent.target.value as
-                    | "default"
-                    | "required"
-                    | "optional",
-                }))
-              }
-              className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-            >
-              <option value="default">Dziedzicz z ustawień globalnych portalu</option>
-              <option value="required">Zawsze wymagaj zdjęcia</option>
-              <option value="optional">Zdjęcie opcjonalne</option>
-            </select>
-          </label>
-
-          {!isCommunityEvent ? (
-            <label className="mt-4 grid gap-2">
-              <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
-              <select
-                value={settingsDraft.joinAudience}
-                onChange={(changeEvent) =>
-                  updateSettingsDraft((previous) => ({
-                    ...previous,
-                    joinAudience: changeEvent.target.value as EventManagementSettingsDraft["joinAudience"],
-                  }))
-                }
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-              >
-                <option value="existing-practitioners">Tylko Ćwiczący</option>
-                <option value="new-people">Nowe osoby</option>
-              </select>
-              <span className="text-xs text-brand-muted">
-                {eventGroup
-                  ? `Grupa bazowa ma teraz ustawione ${getTrainingJoinAudienceLabel(eventGroup.defaultJoinAudience)}.`
-                  : `Aktualnie to szkolenie pokazuje ${getTrainingJoinAudienceLabel(resolvedEventJoinAudience)}.`}
-              </span>
-            </label>
-          ) : null}
-
-          <div className="mt-4 grid gap-4 xl:grid-cols-4">
-            {settingsDraft.scheduleDays.map((day, index) => {
-              const draftScheduleDays = buildScheduleDaysFromDrafts(
-                settingsDraft.firstDayDate,
-                settingsDraft.scheduleDays,
-              );
-
-              return (
-                <div
-                  key={`management-day-${index + 1}`}
-                  className="rounded-3xl border border-brand-line bg-white p-4"
-                >
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                      Dzien {index + 1}
-                    </p>
-                    <p className="text-sm text-brand-muted">
-                      {draftScheduleDays[index]?.startsAt
-                        ? formatDate(draftScheduleDays[index].startsAt)
-                        : "Wybierz pierwszy dzien"}
-                    </p>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <label className="grid gap-2">
-                      <span className="text-sm font-semibold text-brand-navy">Godzina startu</span>
-                      <input
-                        required
-                        type="time"
-                        value={day.startTime}
-                        onChange={(changeEvent) =>
-                          updateSettingsDraft((previous) => ({
-                            ...previous,
-                            scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? {
-                                    ...item,
-                                    startTime: changeEvent.target.value,
-                                  }
-                                : item,
-                            ),
-                          }))
-                        }
-                        className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                      />
-                    </label>
-                    <label className="grid gap-2">
-                      <span className="text-sm font-semibold text-brand-navy">Godzina konca</span>
-                      <input
-                        required
-                        type="time"
-                        value={day.endTime}
-                        onChange={(changeEvent) =>
-                          updateSettingsDraft((previous) => ({
-                            ...previous,
-                            scheduleDays: previous.scheduleDays.map((item, itemIndex) =>
-                              itemIndex === index
-                                ? {
-                                    ...item,
-                                    endTime: changeEvent.target.value,
-                                  }
-                                : item,
-                            ),
-                          }))
-                        }
-                        className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-                      />
-                    </label>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <label className="mt-4 grid gap-2">
-            <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
-            <input
-              value={settingsDraft.tags}
-              onChange={(changeEvent) =>
-                updateSettingsDraft((previous) => ({
-                  ...previous,
-                  tags: changeEvent.target.value,
-                }))
-              }
-              placeholder="np. ognisko, pozywienie, nocleg, samodzielna kuchnia"
-              className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-sm font-semibold text-brand-navy outline-none"
-            />
-            <span className="text-sm text-brand-muted">
-              Oddziel tagi przecinkami. Pokaza sie publicznie jako chmura tagow.
-            </span>
-          </label>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              type="button"
-              disabled={savingSettings || archivingEvent}
-              onClick={async () => {
-                setSavingSettings(true);
-
-                try {
-	                  await updateTrainingEventManagement(
-	                    event.id,
-	                    settingsDraft.status,
-	                    Number(settingsDraft.capacity) || event.capacity,
-	                    Number(settingsDraft.minimumParticipants) ||
-	                      resolveMinimumParticipants(event),
-	                    Number(settingsDraft.confirmationLeadTimeDays) || 0,
-	                    isCommunityEvent ? settingsDraft.title : undefined,
-	                    isCommunityEvent ? settingsDraft.location : undefined,
-	                    undefined,
-	                    undefined,
-	                    parseEventTags(settingsDraft.tags),
-	                    isCommunityEvent ? settingsDraft.eventImages : undefined,
-	                    isCommunityEvent ? settingsDraft.useEventImageAsCover : undefined,
-	                    buildScheduleDaysFromDrafts(
-	                      settingsDraft.firstDayDate,
-	                      settingsDraft.scheduleDays,
-	                    ),
-	                    undefined,
-	                    settingsDraft.enrollmentPhotoRequirement,
-	                    isCommunityEvent
-	                      ? undefined
-	                      : getPersistedJoinAudienceSetting(settingsDraft.joinAudience, eventGroup),
-                  );
-                  toast.success("Zapisano ustawienia szkolenia.");
-                  setIsSettingsDirty(false);
-                } catch (error) {
-                  toast.error(
-                    error instanceof Error
-                      ? error.message
-                      : "Nie udało się zapisać ustawień szkolenia.",
-                  );
-                } finally {
-                  setSavingSettings(false);
-                }
-              }}
-              className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              {savingSettings ? "Zapisywanie..." : "Zapisz ustawienia"}
-            </button>
-            <button
-              type="button"
-              disabled={savingSettings || archivingEvent}
-              onClick={async () => {
-                if (!window.confirm("Zarchiwizowac to szkolenie i wylaczyc nowe zapisy?")) {
-                  return;
-                }
-
-                setArchivingEvent(true);
-
-                try {
-                  await archiveTrainingEvent(event.id);
-                  toast.success("Szkolenie zostalo zarchiwizowane.");
-                } catch (error) {
-                  toast.error(
-                    error instanceof Error
-                      ? error.message
-                      : "Nie udalo sie zarchiwizowac szkolenia.",
-                  );
-                } finally {
-                  setArchivingEvent(false);
-                }
-              }}
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy disabled:opacity-60"
-            >
-              {archivingEvent ? "Archiwizowanie..." : "Zarchiwizuj szkolenie"}
-            </button>
-            <Link
-              to={fallbackListPath}
-              className="inline-flex items-center gap-2 rounded-full border border-brand-line bg-white px-5 py-3 text-sm font-semibold text-brand-navy"
-            >
-              {backListLabel}
-            </Link>
-          </div>
-          <p className="mt-3 text-sm text-brand-muted">
-            Po osiagnieciu minimalnego progu status zmieni sie automatycznie na potwierdzone.
-          </p>
-        </div>}
+              </form>
+            </CollapsibleContent>
+          </Collapsible>
+        ) : null}
 
         {canModerateEvent ? (
           <div className="mt-6 flex flex-wrap gap-3">
@@ -7633,7 +7448,14 @@ export function EventManagementPage() {
         ) : null}
       </article>
 
-      {event.groupId ? (
+      <OfficialEventDetailScopeSwitch
+        activeTab={officialDetailTab}
+        onChange={setOfficialDetailTab}
+        requestCount={pendingRequestsCount}
+        participantCountLabel={getEventParticipantCountLabel(event)}
+      />
+
+      {officialDetailTab === "participants" && event.groupId ? (
         <article className="space-y-4 rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <SectionBlockHeading
@@ -7747,7 +7569,7 @@ export function EventManagementPage() {
         </article>
       ) : null}
 
-      {canManageEvent && !eventIsArchived ? (
+      {officialDetailTab === "requests" && canManageEvent && !eventIsArchived ? (
         <>
           <ManagedEnrollmentRequestsSection
             canManageRequests={true}

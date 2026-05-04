@@ -997,6 +997,72 @@ describe("emandar api", () => {
     await app.close();
   });
 
+  it("does not let an assigned trainer update official training unless they created it", async () => {
+    const baseStore = testStoreForPermissions("trainer", ["trainer"]);
+    const store = {
+      ...baseStore,
+      users: baseStore.users.map((user) =>
+        user.id === "user-actor"
+          ? { ...user, trainerProfileId: "trainer-actor" }
+          : user.id === "user-target"
+            ? { ...user, organizerProfileId: "organizer-target" }
+            : user,
+      ),
+      trainers: [{ id: "trainer-actor", userId: "user-actor", displayName: "Trainer" }],
+      organizers: [{ id: "organizer-target", userId: "user-target", displayName: "Organizer" }],
+      trainingEvents: [
+        {
+          id: "event-assigned-trainer",
+          title: "Official",
+          brandStatus: "official",
+          status: "active",
+          isPublished: true,
+          trainerId: "trainer-actor",
+          trainerUserId: "user-actor",
+          organizerId: "organizer-target",
+          organizerUserId: "user-target",
+          creatorUserId: "user-target",
+          startsAt: "2026-06-01T10:00:00.000Z",
+          endsAt: "2026-06-01T12:00:00.000Z",
+          capacity: 12,
+        },
+      ],
+    };
+    const app = await buildApp({
+      config,
+      store: new MemoryStoreRepository(store),
+    });
+    const csrfToken = await csrf(app);
+    const trainerSession = await loginWithSms(app, "+48 600 000 003", csrfToken);
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/events/event-assigned-trainer/management",
+      headers: {
+        cookie: mergeCookies(trainerSession, csrfToken.cookie),
+        "x-emandar-csrf": csrfToken.token,
+      },
+      payload: { status: "confirmed", capacity: 14, minimumParticipants: 10 },
+    });
+
+    expect(rejected.statusCode).toBe(400);
+
+    const organizerCsrf = await csrf(app);
+    const organizerSession = await loginWithSms(app, "+48 600 000 004", organizerCsrf);
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/emandar/api/panel/events/event-assigned-trainer/management",
+      headers: {
+        cookie: mergeCookies(organizerSession, organizerCsrf.cookie),
+        "x-emandar-csrf": organizerCsrf.token,
+      },
+      payload: { status: "confirmed", capacity: 14, minimumParticipants: 10 },
+    });
+
+    expect(accepted.statusCode).toBe(200);
+    await app.close();
+  });
+
   it("limits role, block, and settings endpoints to admins", async () => {
     const authStore = new InMemoryAuthStore();
     const app = await buildApp({

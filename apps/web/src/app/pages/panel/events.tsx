@@ -5362,9 +5362,9 @@ export function EventsPage() {
                   </span>
                 </label>
 
-                <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+                <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Limit miejsc</span>
+                    <span className="text-sm font-semibold text-brand-navy">Miejsca</span>
                     <input
                       min={1}
                       type="number"
@@ -5381,7 +5381,7 @@ export function EventsPage() {
 
                   <label className="grid min-w-0 gap-2">
                     <span className="text-sm font-semibold text-brand-navy">
-                      Próg potwierdzenia wydarzenia
+                      Próg potwierdzenia
                     </span>
                     <input
                       required
@@ -5400,7 +5400,7 @@ export function EventsPage() {
 
                   <label className="grid min-w-0 gap-2">
                     <span className="text-sm font-semibold text-brand-navy">
-                      SMS potwierdzenia udziału
+                      Potwierdzenie SMS
                     </span>
                     <input
                       min={0}
@@ -5414,16 +5414,10 @@ export function EventsPage() {
                       }
                       className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                     />
-                    <span className="text-sm text-brand-muted">
-                      Ile dni przed wydarzeniem wysłać SMS.
-                      {selectedOfficialGroup
-                        ? " Domyślnie z ustawień grupy."
-                        : ""}
-                    </span>
                   </label>
 
                   <label className="grid min-w-0 gap-2">
-                    <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+                    <span className="text-sm font-semibold text-brand-navy">Mogą Dołączyć</span>
                     <select
                       value={trainerEventForm.joinAudience}
                       onChange={(event) =>
@@ -5441,7 +5435,7 @@ export function EventsPage() {
                 </div>
               </div>
 
-              <div className="grid gap-4 xl:col-span-2 md:grid-cols-3">
+              <div className="grid gap-4 xl:col-span-2 md:grid-cols-3 xl:w-[calc(50%-0.5rem)]">
                 <label className="grid min-w-0 gap-2">
                   <span className="text-sm font-semibold text-brand-navy">Data od</span>
                   <input

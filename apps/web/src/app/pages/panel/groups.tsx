@@ -4384,112 +4384,97 @@ function EnrollmentPhotoCard({ request }: { request: EnrollmentRequest }) {
 }
 
 
-function GroupListSlimRow({
+function GroupListStatusBadges({
+  group,
+  isOwnedGroup,
+  isParticipantGroupViewer,
+}: {
+  group: Group;
+  isOwnedGroup: boolean;
+  isParticipantGroupViewer: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      <span className="rounded-full bg-brand-shell px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+        {group.status === "active" ? "Aktywna" : "Archiwum"}
+      </span>
+      {isOwnedGroup && !isParticipantGroupViewer ? (
+        <span className="rounded-full border border-brand-line px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-brand-navy">
+          Twoja grupa
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function GroupListMobileCard({
   activeMemberCount,
   eventCount,
   group,
-  isExpanded,
   isOwnedGroup,
   isParticipantGroupViewer,
   nearestEventLabel,
-  onExpandedChange,
+  onOpenGroup,
   trainerName,
 }: {
   activeMemberCount: number;
   eventCount: number;
   group: Group;
-  isExpanded: boolean;
   isOwnedGroup: boolean;
   isParticipantGroupViewer: boolean;
   nearestEventLabel: string | null;
-  onExpandedChange: (open: boolean) => void;
+  onOpenGroup: () => void;
   trainerName: string;
 }) {
   return (
-    <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
-      <article
-        className={cn(
-          "bg-white px-6 py-3",
-          "sm:rounded-3xl sm:border sm:bg-white sm:p-4 sm:shadow-soft",
-        )}
-      >
-        <div className="flex min-w-0 items-center gap-1.5 sm:gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              {isOwnedGroup && !isParticipantGroupViewer ? (
-                <span className="rounded-full bg-brand-navy/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-navy sm:text-xs sm:tracking-[0.2em]">
-                  Twoja grupa
-                </span>
-              ) : null}
-              <span className="rounded-full bg-brand-sky/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-sky-deep sm:text-xs sm:tracking-[0.2em]">
-                {group.status === "active" ? "Aktywna" : "Archiwum"}
-              </span>
-              <span className="text-xs text-brand-muted">
-                {getGroupEventTypeLabel(group.defaultEventType)}
-              </span>
-            </div>
-            <p className="mt-2 truncate text-[15px] font-semibold leading-tight text-brand-navy sm:text-lg">
-              {group.name}
-            </p>
-          </div>
-
-          <div className="shrink-0 text-right text-[11px] text-brand-muted sm:min-w-[132px] sm:text-sm">
-            <p>{activeMemberCount} aktywnych osób</p>
-            <p className="mt-1">{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</p>
-          </div>
-
-          <CollapsibleTrigger asChild>
-            <button
-              type="button"
-              className="inline-flex size-9 shrink-0 items-center justify-center rounded-none border-l border-brand-line bg-transparent text-brand-navy sm:size-12 sm:rounded-full sm:border sm:bg-white sm:shadow-soft"
-              aria-label={
-                isExpanded ? `Ukryj szczegóły ${group.name}` : `Pokaż szczegóły ${group.name}`
-              }
-            >
-              <ChevronDown
-                size={16}
-                className={cn(
-                  "transition-transform duration-200",
-                  isExpanded ? "rotate-180" : "",
-                  "sm:size-[18px]",
-                )}
-              />
-            </button>
-          </CollapsibleTrigger>
+    <article
+      role="link"
+      tabIndex={0}
+      aria-label={`Otwórz grupę ${group.name}`}
+      onClick={onOpenGroup}
+      onKeyDown={(keyEvent) => {
+        if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+          keyEvent.preventDefault();
+          onOpenGroup();
+        }
+      }}
+      className="cursor-pointer rounded-[2rem] border border-brand-line bg-white p-5 shadow-soft transition-colors hover:bg-brand-shell/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-lg font-semibold leading-snug text-brand-navy">{group.name}</h3>
+          <p className="mt-1 text-sm font-semibold text-brand-sky-deep">
+            {getGroupEventTypeLabel(group.defaultEventType)}
+          </p>
         </div>
+        <GroupListStatusBadges
+          group={group}
+          isOwnedGroup={isOwnedGroup}
+          isParticipantGroupViewer={isParticipantGroupViewer}
+        />
+      </div>
 
-        <CollapsibleContent className="mt-2 border-t border-brand-line/60 pt-2.5 sm:mt-4 sm:border-t sm:border-brand-line/70 sm:pt-4">
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-3 text-xs text-brand-muted sm:text-sm">
-                <span className="inline-flex items-center gap-2">
-                  <Users size={14} />
-                  {trainerName}
-                </span>
-                <span>{activeMemberCount} aktywnych osób</span>
-                <span>{eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}</span>
-              </div>
-
-              <p className="text-sm text-brand-muted">
-                Najbliższe szkolenie:{" "}
-                <span className="font-semibold text-brand-navy">
-                  {nearestEventLabel ?? "Brak nadchodzącego szkolenia"}
-                </span>
-              </p>
-            </div>
-
-            <div className="flex items-start justify-start lg:justify-end">
-              <Link
-                to={`/panel/grupy/${group.id}`}
-                className="inline-flex items-center gap-2 rounded-full bg-brand-navy px-5 py-3 text-sm font-semibold text-white shadow-soft"
-              >
-                Otwórz grupę
-              </Link>
-            </div>
-          </div>
-        </CollapsibleContent>
-      </article>
-    </Collapsible>
+      <div className="mt-4 grid gap-3 text-sm text-brand-muted sm:grid-cols-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-muted">
+            Najbliższe
+          </p>
+          <p className="mt-1 font-semibold text-brand-navy">
+            {nearestEventLabel ?? "Brak nadchodzącego szkolenia"}
+          </p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brand-muted">
+            Trener
+          </p>
+          <p className="mt-1 font-semibold text-brand-navy">{trainerName}</p>
+        </div>
+        <p>{activeMemberCount} aktywnych osób</p>
+        <p>
+          {eventCount} {eventCount === 1 ? "wydarzenie" : "wydarzeń"}
+        </p>
+      </div>
+    </article>
   );
 }
 
@@ -4516,7 +4501,6 @@ export function GroupsPage() {
   const [memberSaveStates, setMemberSaveStates] = useState<Record<string, GroupMemberSaveState>>(
     {},
   );
-  const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
   const [isArchivedGroupsOpen, setIsArchivedGroupsOpen] = useState(false);
   const [expandedMemberIds, setExpandedMemberIds] = useState<string[]>([]);
   const [savingGroup, setSavingGroup] = useState(false);
@@ -5010,38 +4994,114 @@ export function GroupsPage() {
     }
   }
 
-  function toggleExpandedGroup(groupId: string, open: boolean) {
-    setExpandedGroupIds((previous) => {
-      if (open) {
-        return previous.includes(groupId) ? previous : [...previous, groupId];
-      }
-
-      return previous.filter((id) => id !== groupId);
-    });
-  }
-
   function renderGroupRows(groups: Group[]) {
     return (
-      <div className="divide-y divide-brand-line/70 border-y border-brand-line/70 bg-white sm:space-y-3 sm:divide-y-0 sm:border-y-0 sm:bg-transparent">
-        {groups.map((group) => {
-          const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
-          const isOwnedGroup = managedGroups.some((managedGroup) => managedGroup.id === group.id);
+      <div>
+        <div className="space-y-4 lg:hidden">
+          {groups.map((group) => {
+            const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
+            const isOwnedGroup = managedGroups.some((managedGroup) => managedGroup.id === group.id);
 
-          return (
-            <GroupListSlimRow
-              key={group.id}
-              activeMemberCount={activeMemberCounts[group.id] ?? 0}
-              eventCount={groupEventCounts[group.id] ?? 0}
-              group={group}
-              isExpanded={expandedGroupIds.includes(group.id)}
-              isOwnedGroup={isOwnedGroup}
-              isParticipantGroupViewer={isParticipantGroupViewer}
-              nearestEventLabel={nearestGroupEventLabels[group.id] ?? null}
-              onExpandedChange={(open) => toggleExpandedGroup(group.id, open)}
-              trainerName={trainerName}
-            />
-          );
-        })}
+            return (
+              <GroupListMobileCard
+                key={group.id}
+                activeMemberCount={activeMemberCounts[group.id] ?? 0}
+                eventCount={groupEventCounts[group.id] ?? 0}
+                group={group}
+                isOwnedGroup={isOwnedGroup}
+                isParticipantGroupViewer={isParticipantGroupViewer}
+                nearestEventLabel={nearestGroupEventLabels[group.id] ?? null}
+                onOpenGroup={() => {
+                  void navigate(`/panel/grupy/${group.id}`);
+                }}
+                trainerName={trainerName}
+              />
+            );
+          })}
+        </div>
+
+        <div className="hidden overflow-hidden rounded-[1.5rem] border border-brand-line bg-white shadow-soft lg:block">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[940px] table-fixed border-collapse text-left">
+              <colgroup>
+                <col className="w-[27%]" />
+                <col className="w-[24%]" />
+                <col className="w-[8%]" />
+                <col className="w-[13%]" />
+                <col className="w-[15%]" />
+                <col className="w-[13%]" />
+              </colgroup>
+              <thead className="bg-brand-shell/75 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
+                <tr>
+                  <th className="px-5 py-4">Grupa</th>
+                  <th className="px-4 py-4">Najbliższe</th>
+                  <th className="px-3 py-4 text-center">Osoby</th>
+                  <th className="px-3 py-4 text-center">Wydarzenia</th>
+                  <th className="px-4 py-4">Trener</th>
+                  <th className="px-4 py-4">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-brand-line">
+                {groups.map((group) => {
+                  const trainerName = trainersById.get(group.trainerId)?.displayName ?? "Trener";
+                  const isOwnedGroup = managedGroups.some(
+                    (managedGroup) => managedGroup.id === group.id,
+                  );
+                  const groupDetailPath = `/panel/grupy/${group.id}`;
+
+                  return (
+                    <tr
+                      key={group.id}
+                      role="link"
+                      tabIndex={0}
+                      aria-label={`Otwórz grupę ${group.name}`}
+                      onClick={() => {
+                        void navigate(groupDetailPath);
+                      }}
+                      onKeyDown={(keyEvent) => {
+                        if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+                          keyEvent.preventDefault();
+                          void navigate(groupDetailPath);
+                        }
+                      }}
+                      className="cursor-pointer align-top transition-colors hover:bg-brand-shell/45 focus-visible:bg-brand-shell/55 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-brand-sky"
+                    >
+                      <td className="max-w-[22rem] px-5 py-5">
+                        <p className="text-lg font-semibold leading-snug text-brand-navy">
+                          {group.name}
+                        </p>
+                        <p className="mt-1 line-clamp-1 text-sm font-semibold text-brand-sky-deep">
+                          {getGroupEventTypeLabel(group.defaultEventType)}
+                        </p>
+                      </td>
+                      <td className="px-4 py-5 text-sm font-semibold text-brand-navy">
+                        <span className="line-clamp-2">
+                          {nearestGroupEventLabels[group.id] ?? "Brak nadchodzącego szkolenia"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-5 text-center text-sm font-semibold text-brand-navy">
+                        {activeMemberCounts[group.id] ?? 0}
+                      </td>
+                      <td className="px-3 py-5 text-center text-sm font-semibold text-brand-navy">
+                        {groupEventCounts[group.id] ?? 0}
+                      </td>
+                      <td className="px-4 py-5 text-sm text-brand-muted">
+                        <span className="line-clamp-2">{trainerName}</span>
+                      </td>
+                      <td className="px-4 py-5">
+                        <GroupListStatusBadges
+                          group={group}
+                          isOwnedGroup={isOwnedGroup}
+                          isParticipantGroupViewer={isParticipantGroupViewer}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     );
   }

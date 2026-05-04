@@ -345,6 +345,7 @@ type TrainingEventFormState = {
   description: string;
   tags: string;
   type: string;
+  eventTypeSystem: GroupEventType;
   status: TrainingEventStatus;
   firstDayDate: string;
   scheduleDays: ScheduleDayDraft[];
@@ -416,7 +417,8 @@ function createEmptyTrainingEventFormState(): TrainingEventFormState {
     summary: "",
     description: "",
     tags: "",
-    type: "Warsztat stacjonarny",
+    type: "Szkolenie",
+    eventTypeSystem: "training",
     status: "active",
     firstDayDate: "",
     scheduleDays: resizeScheduleDayDrafts(2, []),
@@ -474,6 +476,8 @@ export function applyOfficialGroupDefaultsToTrainingForm(
     trainerId: group.trainerId,
     summary: latestGroupCopy.summary,
     description: latestGroupCopy.description,
+    type: getGroupEventTypeLabel(group.defaultEventType),
+    eventTypeSystem: group.defaultEventType,
     location: group.defaultLocation ?? "",
     capacity:
       typeof group.defaultCapacity === "number" ? String(group.defaultCapacity) : previous.capacity,

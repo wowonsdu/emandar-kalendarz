@@ -355,6 +355,7 @@ type TrainingEventFormState = {
   description: string;
   tags: string;
   type: string;
+  eventTypeSystem: GroupEventType;
   status: TrainingEventStatus;
   firstDayDate: string;
   scheduleDays: ScheduleDayDraft[];
@@ -426,7 +427,8 @@ function createEmptyTrainingEventFormState(): TrainingEventFormState {
     summary: "",
     description: "",
     tags: "",
-    type: "Warsztat stacjonarny",
+    type: "Szkolenie",
+    eventTypeSystem: "training",
     status: "active",
     firstDayDate: "",
     scheduleDays: resizeScheduleDayDrafts(2, []),
@@ -484,6 +486,8 @@ export function applyOfficialGroupDefaultsToTrainingForm(
     trainerId: group.trainerId,
     summary: latestGroupCopy.summary,
     description: latestGroupCopy.description,
+    type: getGroupEventTypeLabel(group.defaultEventType),
+    eventTypeSystem: group.defaultEventType,
     location: group.defaultLocation ?? "",
     capacity:
       typeof group.defaultCapacity === "number" ? String(group.defaultCapacity) : previous.capacity,
@@ -4449,7 +4453,6 @@ export function EventsPage() {
   );
   const highestRole = getHighestRole(currentUser);
   const hasModerationScope = hasModeratorAccess(currentUser);
-  const isCommunityTrainer = isCommunityTrainerProfile(trainerProfile?.brandStatus);
   const isOrganizerManager =
     canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
   const isTrainerManager =
@@ -4770,28 +4773,19 @@ export function EventsPage() {
   ]);
   const selectedOfficialGroup =
     availableOfficialGroups.find((group) => group.id === trainerEventForm.groupId) ?? null;
+  const trainerNamesById = useMemo(
+    () =>
+      new Map(
+        store.trainers.map((trainer) => [trainer.id, trainer.displayName]),
+      ),
+    [store.trainers],
+  );
   const creatorSearchParams = useMemo(
     () => new URLSearchParams(location.search),
     [location.search],
   );
   const requestedOfficialGroupId = creatorSearchParams.get("groupId") ?? "";
   const returnToGroupId = creatorSearchParams.get("returnToGroupId") ?? "";
-  const selectedOfficialGroupTrainerName = selectedOfficialGroup
-    ? store.trainers.find((trainer) => trainer.id === selectedOfficialGroup.trainerId)?.displayName ??
-      "Przekazujący Wiedzę"
-    : null;
-  const selectedOfficialGroupEvents = useMemo(
-    () =>
-      selectedOfficialGroup
-        ? sortEventsByDate(
-            store.trainingEvents.filter(
-              (event) =>
-                !isCommunityPanelEvent(event) && event.groupId === selectedOfficialGroup.id,
-            ),
-          )
-        : [],
-    [selectedOfficialGroup, store.trainingEvents],
-  );
 
   useEffect(() => {
     if (!isCommunitySection && !hasModerationScope && !hasOfficialManagementScope && eventScope !== "all") {
@@ -5080,7 +5074,8 @@ export function EventsPage() {
                 );
                 const officialLocation =
                   trainerEventForm.location.trim() || selectedOfficialGroup?.defaultLocation || "";
-                const officialType = trainerEventForm.type.trim() || "Warsztat stacjonarny";
+                const officialEventType = trainerEventForm.eventTypeSystem;
+                const officialType = getGroupEventTypeLabel(officialEventType);
 
                 await createTrainingEvent({
                   groupId:
@@ -5127,8 +5122,8 @@ export function EventsPage() {
                           selectedOfficialGroup,
                         ),
                   eventTypeSystem:
-                    !isCommunitySection && selectedOfficialGroup
-                      ? selectedOfficialGroup.defaultEventType
+                    !isCommunitySection
+                      ? officialEventType
                       : undefined,
                   selfManagedByTrainer: undefined,
                 });
@@ -5169,114 +5164,76 @@ export function EventsPage() {
             className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft"
           >
             <div className="grid gap-4 xl:grid-cols-2">
-              {!isCommunitySection &&
-                hasOfficialManagementScope && (
-                <label className="grid gap-2 xl:col-span-2">
-                  <span className="text-sm font-semibold text-brand-navy">Grupa</span>
-                  <select
-                    required
-                    value={trainerEventForm.groupId}
-                    onChange={(event) => applyOfficialGroupToTrainingForm(event.target.value)}
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  >
-                    {availableOfficialGroups.map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              {!isCommunitySection &&
-                selectedOfficialGroup &&
-                hasOfficialManagementScope && (
-                <div className="rounded-3xl border border-brand-line bg-brand-shell/70 p-4 xl:col-span-2">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-sky-deep">
-                        Wybrana grupa
-                      </p>
-                      <p className="mt-2 text-lg font-semibold text-brand-navy">
-                        {selectedOfficialGroup.name}
-                      </p>
-                      <p className="mt-1 text-sm text-brand-muted">
-                        Trener: {selectedOfficialGroupTrainerName}
-                      </p>
-                      <p className="mt-1 text-sm text-brand-muted">
-                        Mogą dołączyć: {getTrainingJoinAudienceLabel(selectedOfficialGroup.defaultJoinAudience)}
-                      </p>
-                    </div>
-                    <p className="text-sm text-brand-muted">
-                      {selectedOfficialGroupEvents.length === 0
-                        ? "Brak zaplanowanych szkoleń tej grupy."
-                        : `${selectedOfficialGroupEvents.length} zaplanowanych szkoleń.`}
-                    </p>
-                  </div>
-
-                  {selectedOfficialGroupEvents.length > 0 ? (
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                      {selectedOfficialGroupEvents.slice(0, 4).map((event) => (
-                        <div
-                          key={`${selectedOfficialGroup.id}-${event.id}`}
-                          className="rounded-2xl border border-brand-line bg-white px-4 py-3"
-                        >
-                          <p className="text-sm font-semibold text-brand-navy">
-                            {getPanelScheduleRangeLabel(event)}
-                          </p>
-                          <p className="mt-1 text-sm text-brand-muted">{event.location}</p>
-                        </div>
+              {!isCommunitySection && hasOfficialManagementScope && (
+                <div className="grid gap-4 md:grid-cols-2 xl:col-span-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(9rem,max-content)_minmax(12rem,max-content)] xl:items-end">
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">Grupa</span>
+                    <select
+                      required
+                      value={trainerEventForm.groupId}
+                      onChange={(event) => applyOfficialGroupToTrainingForm(event.target.value)}
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    >
+                      {availableOfficialGroups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name} /{" "}
+                          {trainerNamesById.get(group.trainerId) ?? "Przekazujący Wiedzę"}
+                        </option>
                       ))}
-                    </div>
-                  ) : null}
+                    </select>
+                  </label>
 
-                  <p className="mt-4 text-sm text-brand-muted">
-                    Formularz startuje z trenerem i ustawieniami tej grupy. Datę oraz godziny ustawisz niżej.
-                  </p>
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">Nagłówek miejsca</span>
+                    <input
+                      value={trainerEventForm.location}
+                      onChange={(event) =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          location: event.target.value,
+                        }))
+                      }
+                      placeholder="np. Warszawa, dolnośląskie"
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    />
+                  </label>
+
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
+                    <select
+                      value={trainerEventForm.eventTypeSystem}
+                      onChange={(event) =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          type: getGroupEventTypeLabel(event.target.value as GroupEventType),
+                          eventTypeSystem: event.target.value as GroupEventType,
+                        }))
+                      }
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    >
+                      <option value="training">Szkolenie</option>
+                      <option value="post">Post</option>
+                    </select>
+                  </label>
+
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
+                    <select
+                      value={trainerEventForm.status}
+                      onChange={(event) =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          status: event.target.value as TrainingEventStatus,
+                        }))
+                      }
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    >
+                      <option value="active">Aktywne</option>
+                      <option value="confirmed">Potwierdzone zorganizowanie</option>
+                      <option value="cancelled">Anulowane</option>
+                    </select>
+                  </label>
                 </div>
-              )}
-
-              {!isCommunitySection &&
-                isOrganizerManager && (
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">
-                    Przekazujący Wiedzę
-                  </span>
-                  <select
-                    required
-                    value={trainerEventForm.trainerId}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        trainerId: event.target.value,
-                      }))
-                    }
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                    disabled={isOrganizerManager && Boolean(selectedOfficialGroup)}
-                  >
-                    {availableTrainers.map((trainer) => (
-                      <option key={trainer.id} value={trainer.id}>
-                        {trainer.displayName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              {!isCommunitySection && !isCommunityTrainer && hasOfficialManagementScope && (
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Typ szkolenia</span>
-                  <input
-                    value={trainerEventForm.type}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        type: event.target.value,
-                      }))
-                    }
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  />
-                </label>
               )}
 
               {isCommunitySection && (
@@ -5297,43 +5254,45 @@ export function EventsPage() {
                 </label>
               )}
 
-              <label className={`grid gap-2 ${isCommunitySection ? "" : "xl:col-span-2"}`}>
-                <span className="text-sm font-semibold text-brand-navy">
-                  {isCommunitySection ? "Lokalizacja" : "Nagłówek miejsca"}
-                </span>
-                <input
-                  required={isCommunitySection}
-                  value={trainerEventForm.location}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      location: event.target.value,
-                    }))
-                  }
-                  placeholder="np. Warszawa, dolnośląskie"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
+              {isCommunitySection && (
+                <label className="grid gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Lokalizacja</span>
+                  <input
+                    required
+                    value={trainerEventForm.location}
+                    onChange={(event) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        location: event.target.value,
+                      }))
+                    }
+                    placeholder="np. Warszawa, dolnośląskie"
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                </label>
+              )}
 
-              <label className={`${isCommunitySection ? "grid gap-2 xl:col-span-2" : "grid gap-2"}`}>
-                <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
-                <select
-                  value={trainerEventForm.status}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      status: event.target.value as TrainingEventStatus,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                >
-                  <option value="active">Aktywne</option>
-                  <option value="confirmed">Potwierdzone zorganizowanie</option>
-                  <option value="cancelled">Anulowane</option>
-                </select>
-              </label>
+              {isCommunitySection && (
+                <label className="grid gap-2 xl:col-span-2">
+                  <span className="text-sm font-semibold text-brand-navy">Status wydarzenia</span>
+                  <select
+                    value={trainerEventForm.status}
+                    onChange={(event) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        status: event.target.value as TrainingEventStatus,
+                      }))
+                    }
+                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  >
+                    <option value="active">Aktywne</option>
+                    <option value="confirmed">Potwierdzone zorganizowanie</option>
+                    <option value="cancelled">Anulowane</option>
+                  </select>
+                </label>
+              )}
 
-              <label className="grid gap-2 xl:col-span-2">
+              <label className={`grid gap-2 ${isCommunitySection ? "xl:col-span-2" : "min-w-0"}`}>
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunitySection
                     ? "Krótka informacja o wydarzeniu"
@@ -5341,7 +5300,7 @@ export function EventsPage() {
                 </span>
                 <textarea
                   required={isCommunitySection}
-                  rows={3}
+                  rows={isCommunitySection ? 3 : 6}
                   maxLength={180}
                   value={trainerEventForm.summary}
                   onChange={(event) =>
@@ -5350,11 +5309,11 @@ export function EventsPage() {
                       summary: event.target.value,
                     }))
                   }
-                  className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  className="min-h-36 rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
               </label>
 
-              <label className="grid gap-2 xl:col-span-2">
+              <label className={`grid gap-2 ${isCommunitySection ? "xl:col-span-2" : "min-w-0"}`}>
                 <span className="text-sm font-semibold text-brand-navy">
                   {isCommunitySection
                     ? "Informacja do prośby o dołączenie"
@@ -5370,7 +5329,7 @@ export function EventsPage() {
                       description: event.target.value,
                     }))
                   }
-                  className="rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  className="min-h-36 rounded-3xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                 />
                 {isCommunitySection && (
                   <span className="text-sm text-brand-muted">

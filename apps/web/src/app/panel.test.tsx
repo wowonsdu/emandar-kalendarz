@@ -3,6 +3,7 @@ import { StaticRouter } from "react-router";
 import { describe, expect, it } from "vitest";
 import {
   AcceptedRequestGroupDialogBody,
+  applyOfficialGroupDefaultsToTrainingForm,
   buildParticipantOfficialEnrollmentSections,
   buildCommunityParticipantSections,
   buildCommunityReserveSections,
@@ -867,6 +868,39 @@ describe("group training creator helpers", () => {
       summary: "Najnowszy opis",
       description: "Najnowszy długi opis",
     });
+  });
+
+  it("prefills the official event type from the selected group default", () => {
+    const result = applyOfficialGroupDefaultsToTrainingForm(
+      {
+        groupId: "",
+        trainerId: "",
+        organizerId: "",
+        selfManagedByTrainer: false,
+        title: "",
+        eventImages: [],
+        useEventImageAsCover: false,
+        summary: "",
+        description: "",
+        tags: "",
+        type: "Szkolenie",
+        eventTypeSystem: "training",
+        status: "active",
+        firstDayDate: "",
+        scheduleDays: [],
+        location: "",
+        capacity: "20",
+        minimumParticipants: "10",
+        confirmationLeadTimeDays: "5",
+        joinAudience: "new-people",
+        isPublished: true,
+      },
+      createGroup({ defaultEventType: "post" }),
+      [],
+    );
+
+    expect(result.eventTypeSystem).toBe("post");
+    expect(result.type).toBe("Post");
   });
 });
 

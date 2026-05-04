@@ -312,6 +312,20 @@ type GroupMemberDraftState = {
   notes: string;
 };
 
+type SortDirection = "asc" | "desc";
+type GroupSortKey =
+  | "name"
+  | "nearest"
+  | "members"
+  | "events"
+  | "trainer"
+  | "organizer"
+  | "status";
+type GroupSortState = {
+  key: GroupSortKey;
+  direction: SortDirection;
+};
+
 type GroupMemberSaveState = {
   status: "idle" | "saving" | "saved" | "error";
   message?: string;
@@ -593,6 +607,22 @@ function sortGroupsByStatusAndName(groups: Group[]) {
 
     return left.name.localeCompare(right.name, "pl");
   });
+}
+
+function normalizeListSearchText(value: string) {
+  return value
+    .toLocaleLowerCase("pl")
+    .replace(/[łŁ]/g, "l")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function compareListText(left: string, right: string) {
+  return left.localeCompare(right, "pl", { numeric: true, sensitivity: "base" });
+}
+
+function applySortDirection(value: number, direction: SortDirection) {
+  return direction === "asc" ? value : -value;
 }
 
 export function splitGroupsByArchivedStatus(groups: Group[]) {
@@ -4514,6 +4544,8 @@ export function GroupsPage() {
   const [savingGroup, setSavingGroup] = useState(false);
   const [savingMember, setSavingMember] = useState(false);
   const [groupScope, setGroupScope] = useState<"all" | "mine">("mine");
+  const [groupSearchQuery, setGroupSearchQuery] = useState("");
+  const [groupSort, setGroupSort] = useState<GroupSortState | null>(null);
   const memberDraftsRef = useRef(memberDrafts);
   const memberSaveTimeoutsRef = useRef<Record<string, number>>({});
   const savingMemberIdsRef = useRef<Record<string, boolean>>({});
@@ -4619,6 +4651,29 @@ export function GroupsPage() {
     },
     [store.trainingEvents],
   );
+  const nearestGroupEventTimestamps = useMemo(
+    () => {
+      const nextTimestamps: Record<string, number> = {};
+
+      for (const event of sortEventsByDate(
+        (store.trainingEvents ?? []).filter(
+          (item) =>
+            Boolean(item.groupId) &&
+            !isTrainingEventArchived(item) &&
+            new Date(item.startsAt).getTime() > Date.now(),
+        ),
+      )) {
+        if (!event.groupId || nextTimestamps[event.groupId]) {
+          continue;
+        }
+
+        nextTimestamps[event.groupId] = new Date(event.startsAt).getTime();
+      }
+
+      return nextTimestamps;
+    },
+    [store.trainingEvents],
+  );
   const managedGroups = useMemo(
     () =>
       getManagedGroupsForUser({
@@ -4650,9 +4705,87 @@ export function GroupsPage() {
 
     return managedGroups;
   }, [isParticipantGroupViewer, joinedGroups, managedGroups]);
+  const normalizedGroupSearchQuery = normalizeListSearchText(groupSearchQuery.trim());
+  const isGroupSearchApplied = normalizedGroupSearchQuery.length >= 3;
+  const filteredVisibleGroups = useMemo(() => {
+    if (!isGroupSearchApplied) {
+      return visibleGroups;
+    }
+
+    return visibleGroups.filter((group) => {
+      const trainerName = trainersById.get(group.trainerId)?.displayName ?? "";
+      const organizerName = organizersById.get(group.organizerId)?.displayName ?? "";
+      const searchHaystack = normalizeListSearchText(
+        [group.name, trainerName, organizerName].join(" "),
+      );
+
+      return searchHaystack.includes(normalizedGroupSearchQuery);
+    });
+  }, [
+    isGroupSearchApplied,
+    normalizedGroupSearchQuery,
+    organizersById,
+    trainersById,
+    visibleGroups,
+  ]);
+  const sortedVisibleGroups = useMemo(() => {
+    if (!groupSort) {
+      return filteredVisibleGroups;
+    }
+
+    return [...filteredVisibleGroups].sort((left, right) => {
+      let result = 0;
+
+      switch (groupSort.key) {
+        case "name":
+          result = compareListText(left.name, right.name);
+          break;
+        case "nearest":
+          result =
+            (nearestGroupEventTimestamps[left.id] ?? Number.POSITIVE_INFINITY) -
+            (nearestGroupEventTimestamps[right.id] ?? Number.POSITIVE_INFINITY);
+          break;
+        case "members":
+          result = (activeMemberCounts[left.id] ?? 0) - (activeMemberCounts[right.id] ?? 0);
+          break;
+        case "events":
+          result = (groupEventCounts[left.id] ?? 0) - (groupEventCounts[right.id] ?? 0);
+          break;
+        case "trainer":
+          result = compareListText(
+            trainersById.get(left.trainerId)?.displayName ?? "",
+            trainersById.get(right.trainerId)?.displayName ?? "",
+          );
+          break;
+        case "organizer":
+          result = compareListText(
+            organizersById.get(left.organizerId)?.displayName ?? "",
+            organizersById.get(right.organizerId)?.displayName ?? "",
+          );
+          break;
+        case "status":
+          result = compareListText(left.status, right.status);
+          break;
+      }
+
+      if (result === 0) {
+        result = compareListText(left.name, right.name);
+      }
+
+      return applySortDirection(result, groupSort.direction);
+    });
+  }, [
+    activeMemberCounts,
+    filteredVisibleGroups,
+    groupEventCounts,
+    groupSort,
+    nearestGroupEventTimestamps,
+    organizersById,
+    trainersById,
+  ]);
   const { active: activeVisibleGroups, archived: archivedVisibleGroups } = useMemo(
-    () => splitGroupsByArchivedStatus(visibleGroups),
-    [visibleGroups],
+    () => splitGroupsByArchivedStatus(sortedVisibleGroups),
+    [sortedVisibleGroups],
   );
   const isCreateGroupRoute = location.pathname === "/panel/grupy/utworz";
   const isGroupDetailView = Boolean(groupId);
@@ -5006,6 +5139,44 @@ export function GroupsPage() {
     }
   }
 
+  function toggleGroupSort(key: GroupSortKey) {
+    setGroupSort((previous) => {
+      if (previous?.key === key) {
+        return {
+          key,
+          direction: previous.direction === "asc" ? "desc" : "asc",
+        };
+      }
+
+      return { key, direction: "asc" };
+    });
+  }
+
+  function renderGroupSortHeader(
+    key: GroupSortKey,
+    label: string,
+    className = "px-4 py-4",
+  ) {
+    const isActive = groupSort?.key === key;
+    const directionLabel = groupSort?.direction === "desc" ? "malejąco" : "rosnąco";
+
+    return (
+      <th className={className}>
+        <button
+          type="button"
+          onClick={() => toggleGroupSort(key)}
+          className="flex w-full flex-col items-start gap-1 text-left uppercase tracking-[0.18em] transition-colors hover:text-brand-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky"
+          aria-label={`Sortuj po kolumnie ${label}`}
+        >
+          <span>{label}</span>
+          <span className="text-[10px] font-semibold normal-case tracking-normal text-brand-sky-deep">
+            {isActive ? directionLabel : "sortuj"}
+          </span>
+        </button>
+      </th>
+    );
+  }
+
   function renderGroupRows(groups: Group[]) {
     return (
       <div>
@@ -5049,13 +5220,13 @@ export function GroupsPage() {
               </colgroup>
               <thead className="bg-brand-shell/75 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
                 <tr>
-                  <th className="px-5 py-4">Grupa</th>
-                  <th className="px-4 py-4">Najbliższe</th>
-                  <th className="px-3 py-4 text-center">Osoby</th>
-                  <th className="px-3 py-4 text-center">Wydarzenia</th>
-                  <th className="px-4 py-4">Trener</th>
-                  <th className="px-4 py-4">Organizator</th>
-                  <th className="px-4 py-4">Status</th>
+                  {renderGroupSortHeader("name", "Grupa", "px-5 py-4")}
+                  {renderGroupSortHeader("nearest", "Najbliższe")}
+                  {renderGroupSortHeader("members", "Osoby", "px-3 py-4 text-center")}
+                  {renderGroupSortHeader("events", "Wydarzenia", "px-3 py-4 text-center")}
+                  {renderGroupSortHeader("trainer", "Trener")}
+                  {renderGroupSortHeader("organizer", "Organizator")}
+                  {renderGroupSortHeader("status", "Status")}
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-line">
@@ -5531,23 +5702,43 @@ export function GroupsPage() {
                   ? "Utwórz pierwszą grupę, zanim zaczniesz planować szkolenia Emandar."
                   : isParticipantGroupViewer
                     ? "Nie należysz jeszcze do żadnej grupy i nie masz jeszcze własnych grup."
-                  : "Nie masz jeszcze żadnych przypisanych grup."
+                    : "Nie masz jeszcze żadnych przypisanych grup."
               }
             />
           ) : (
             <>
-              {activeVisibleGroups.length > 0 ? renderGroupRows(activeVisibleGroups) : null}
+              <label className="grid gap-2 lg:max-w-md">
+                <span className="text-sm font-semibold text-brand-navy">Szukaj grupy</span>
+                <input
+                  type="search"
+                  value={groupSearchQuery}
+                  onChange={(event) => setGroupSearchQuery(event.target.value)}
+                  placeholder="Nazwa, trener lub organizator"
+                  className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
+                />
+              </label>
 
-              {archivedVisibleGroups.length > 0 ? (
-                <EnrollmentRequestArchiveSectionBlock
-                  title="Archiwalne"
-                  count={archivedVisibleGroups.length}
-                  open={isArchivedGroupsOpen}
-                  onOpenChange={setIsArchivedGroupsOpen}
-                >
-                  {renderGroupRows(archivedVisibleGroups)}
-                </EnrollmentRequestArchiveSectionBlock>
-              ) : null}
+              {sortedVisibleGroups.length === 0 ? (
+                <EmptyPanelState
+                  title="Brak wyników"
+                  description="Zmień frazę wyszukiwania, żeby zobaczyć grupy z tej listy."
+                />
+              ) : (
+                <>
+                  {activeVisibleGroups.length > 0 ? renderGroupRows(activeVisibleGroups) : null}
+
+                  {archivedVisibleGroups.length > 0 ? (
+                    <EnrollmentRequestArchiveSectionBlock
+                      title="Archiwalne"
+                      count={archivedVisibleGroups.length}
+                      open={isArchivedGroupsOpen}
+                      onOpenChange={setIsArchivedGroupsOpen}
+                    >
+                      {renderGroupRows(archivedVisibleGroups)}
+                    </EnrollmentRequestArchiveSectionBlock>
+                  ) : null}
+                </>
+              )}
             </>
           )}
         </div>

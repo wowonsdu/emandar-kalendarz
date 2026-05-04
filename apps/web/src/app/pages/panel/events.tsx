@@ -320,6 +320,22 @@ type GroupMemberDraftState = {
   notes: string;
 };
 
+type SortDirection = "asc" | "desc";
+type EventSortKey =
+  | "training"
+  | "date"
+  | "capacity"
+  | "confirmed"
+  | "minimum"
+  | "requests"
+  | "trainer"
+  | "organizer"
+  | "status";
+type EventSortState = {
+  key: EventSortKey;
+  direction: SortDirection;
+};
+
 type GroupMemberSaveState = {
   status: "idle" | "saving" | "saved" | "error";
   message?: string;
@@ -660,6 +676,22 @@ function getBrandStatusLabel(status: EmandarBrandStatus | undefined) {
   return resolveBrandStatus(status) === "supported"
     ? "Wspierane przez Emandar"
     : "Oficjalny Emandar";
+}
+
+function normalizeListSearchText(value: string) {
+  return value
+    .toLocaleLowerCase("pl")
+    .replace(/[łŁ]/g, "l")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function compareListText(left: string, right: string) {
+  return left.localeCompare(right, "pl", { numeric: true, sensitivity: "base" });
+}
+
+function applySortDirection(value: number, direction: SortDirection) {
+  return direction === "asc" ? value : -value;
 }
 
 function getEventLifecycleLabel(event: TrainingEvent) {
@@ -4434,6 +4466,8 @@ export function EventsPage() {
   const [eventScope, setEventScope] = useState<"all" | "mine">(
     isCommunitySection ? "all" : hasOfficialManagementScope ? "mine" : "all",
   );
+  const [eventSearchQuery, setEventSearchQuery] = useState("");
+  const [eventSort, setEventSort] = useState<EventSortState | null>(null);
   const [communityModerationScope, setCommunityModerationScope] =
     useState<CommunityModerationTimelineScope>("pending");
   const participantEnrollmentRecords = useMemo(
@@ -4485,7 +4519,7 @@ export function EventsPage() {
       communityEvents.filter((item) => item.creatorUserId === currentUser.id),
     [communityEvents, currentUser.id],
   );
-  const listedEvents = isCommunitySection
+  const baseListedEvents = isCommunitySection
     ? isCommunityModerationSection
       ? [...communityEvents]
           .filter((event) => {
@@ -4510,6 +4544,135 @@ export function EventsPage() {
       ? communityEvents
       : ownCommunityEvents
     : officialListedEvents;
+  const activeEnrollmentRequestCountsByEventId = useMemo(() => {
+    const eventsById = new Map((store.trainingEvents ?? []).map((event) => [event.id, event]));
+    const nextCounts: Record<string, number> = {};
+
+    for (const request of store.enrollmentRequests ?? []) {
+      const event = eventsById.get(request.eventId);
+      if (!event) {
+        continue;
+      }
+
+      const isActiveRequest = event.groupId
+        ? !request.eventParticipantId && request.finalStatus !== "rejected"
+        : request.finalStatus !== "rejected";
+
+      if (isActiveRequest) {
+        nextCounts[event.id] = (nextCounts[event.id] ?? 0) + 1;
+      }
+    }
+
+    return nextCounts;
+  }, [store.enrollmentRequests, store.trainingEvents]);
+  const groupsById = useMemo(
+    () => new Map((store.groups ?? []).map((group) => [group.id, group])),
+    [store.groups],
+  );
+  const normalizedEventSearchQuery = normalizeListSearchText(eventSearchQuery.trim());
+  const isEventSearchApplied = normalizedEventSearchQuery.length >= 3;
+  const listedEvents = useMemo(() => {
+    if (isCommunitySection) {
+      return baseListedEvents;
+    }
+
+    const filteredEvents = isEventSearchApplied
+      ? baseListedEvents.filter((event) => {
+          const ownerLabels = getEventOwnerLabel(event, store);
+          const listTitle = getEventCardTitle(event, currentUser, store);
+          const groupName = event.groupId ? groupsById.get(event.groupId)?.name ?? "" : "";
+          const searchHaystack = normalizeListSearchText(
+            [
+              listTitle,
+              event.title,
+              groupName,
+              event.groupName ?? "",
+              ownerLabels.trainerName,
+              ownerLabels.organizerName,
+            ].join(" "),
+          );
+
+          return searchHaystack.includes(normalizedEventSearchQuery);
+        })
+      : baseListedEvents;
+
+    if (!eventSort) {
+      return filteredEvents;
+    }
+
+    return [...filteredEvents].sort((left, right) => {
+      let result = 0;
+
+      switch (eventSort.key) {
+        case "training":
+          result = compareListText(
+            getEventCardTitle(left, currentUser, store),
+            getEventCardTitle(right, currentUser, store),
+          );
+          break;
+        case "date":
+          result = new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+          break;
+        case "capacity":
+          result = left.capacity - right.capacity;
+          break;
+        case "confirmed":
+          result =
+            (isOfficialGroupTrainingEvent(left) ? left.enrolledCount : 0) -
+            (isOfficialGroupTrainingEvent(right) ? right.enrolledCount : 0);
+          break;
+        case "minimum":
+          result = resolveMinimumParticipants(left) - resolveMinimumParticipants(right);
+          break;
+        case "requests":
+          result =
+            (activeEnrollmentRequestCountsByEventId[left.id] ?? 0) -
+            (activeEnrollmentRequestCountsByEventId[right.id] ?? 0);
+          break;
+        case "trainer":
+          result = compareListText(
+            getEventOwnerLabel(left, store).trainerName,
+            getEventOwnerLabel(right, store).trainerName,
+          );
+          break;
+        case "organizer":
+          result = compareListText(
+            getEventOwnerLabel(left, store).organizerName,
+            getEventOwnerLabel(right, store).organizerName,
+          );
+          break;
+        case "status":
+          result = compareListText(
+            `${left.isPublished ? "opublikowane" : "ukryte"} ${getEventLifecycleLabel(left)}`,
+            `${right.isPublished ? "opublikowane" : "ukryte"} ${getEventLifecycleLabel(right)}`,
+          );
+          break;
+      }
+
+      if (result === 0) {
+        result = new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+      }
+
+      if (result === 0) {
+        result = compareListText(
+          getEventCardTitle(left, currentUser, store),
+          getEventCardTitle(right, currentUser, store),
+        );
+      }
+
+      return applySortDirection(result, eventSort.direction);
+    });
+  }, [
+    activeEnrollmentRequestCountsByEventId,
+    baseListedEvents,
+    currentUser,
+    eventSort,
+    groupsById,
+    isCommunitySection,
+    isEventSearchApplied,
+    normalizedEventSearchQuery,
+    store,
+  ]);
   const isCommunityJoinedView =
     !isCommunityModerationSection && isCommunitySection && eventScope === "all";
   const isOfficialJoinedView =
@@ -4723,6 +4886,47 @@ export function EventsPage() {
 
   if (isCommunityCreatorView && !canCreateCommunityEvent) {
     return <Navigate to="/panel/wydarzenia-spolecznosci" replace />;
+  }
+
+  const isOfficialEventSearchEmpty =
+    !isCommunitySection && baseListedEvents.length > 0 && listedEvents.length === 0;
+
+  function toggleEventSort(key: EventSortKey) {
+    setEventSort((previous) => {
+      if (previous?.key === key) {
+        return {
+          key,
+          direction: previous.direction === "asc" ? "desc" : "asc",
+        };
+      }
+
+      return { key, direction: "asc" };
+    });
+  }
+
+  function renderEventSortHeader(
+    key: EventSortKey,
+    label: string,
+    className = "px-4 py-4",
+  ) {
+    const isActive = eventSort?.key === key;
+    const directionLabel = eventSort?.direction === "desc" ? "malejąco" : "rosnąco";
+
+    return (
+      <th className={className}>
+        <button
+          type="button"
+          onClick={() => toggleEventSort(key)}
+          className="flex w-full flex-col items-start gap-1 text-left uppercase tracking-[0.18em] transition-colors hover:text-brand-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky"
+          aria-label={`Sortuj po kolumnie ${label}`}
+        >
+          <span>{label}</span>
+          <span className="text-[10px] font-semibold normal-case tracking-normal text-brand-sky-deep">
+            {isActive ? directionLabel : "sortuj"}
+          </span>
+        </button>
+      </th>
+    );
   }
 
   return (
@@ -5658,13 +5862,34 @@ export function EventsPage() {
         </div>
       ) : !isCreatorView ? (
         <div className="space-y-4">
+          {!isCommunitySection && baseListedEvents.length > 0 ? (
+            <label className="grid gap-2 lg:max-w-md">
+              <span className="text-sm font-semibold text-brand-navy">Szukaj szkolenia</span>
+              <input
+                type="search"
+                value={eventSearchQuery}
+                onChange={(event) => setEventSearchQuery(event.target.value)}
+                placeholder="Szkolenie, grupa, trener lub organizator"
+                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
+              />
+            </label>
+          ) : null}
+
           {listedEvents.length === 0 && (
             <EmptyPanelState
-              title={isCommunitySection ? "Brak wydarzeń społeczności" : "Brak szkoleń"}
+              title={
+                isOfficialEventSearchEmpty
+                  ? "Brak wyników"
+                  : isCommunitySection
+                    ? "Brak wydarzeń społeczności"
+                    : "Brak szkoleń"
+              }
               description={
-                isCommunitySection
-                  ? "Tutaj pojawią się Twoje wydarzenia społeczności po ich dodaniu."
-                  : "Tutaj pojawią się szkolenia Emandar, którymi zarządzasz."
+                isOfficialEventSearchEmpty
+                  ? "Zmień frazę wyszukiwania, żeby zobaczyć szkolenia z tej listy."
+                  : isCommunitySection
+                    ? "Tutaj pojawią się Twoje wydarzenia społeczności po ich dodaniu."
+                    : "Tutaj pojawią się szkolenia Emandar, którymi zarządzasz."
               }
             />
           )}
@@ -5685,27 +5910,21 @@ export function EventsPage() {
                   </colgroup>
                   <thead className="bg-brand-shell/75 text-[11px] font-semibold uppercase tracking-[0.18em] text-brand-muted">
                     <tr>
-                      <th className="px-5 py-4">Szkolenie</th>
-                      <th className="px-4 py-4">Termin</th>
-                      <th className="px-4 py-4 text-center">Miejsca</th>
-                      <th className="px-4 py-4 text-center">Potw.</th>
-                      <th className="px-4 py-4 text-center">Próg</th>
-                      <th className="px-4 py-4 text-center">Zgł.</th>
-                      <th className="px-4 py-4">Trener</th>
-                      <th className="px-4 py-4">Organizator</th>
-                      <th className="px-4 py-4">Status</th>
+                      {renderEventSortHeader("training", "Szkolenie", "px-5 py-4")}
+                      {renderEventSortHeader("date", "Termin")}
+                      {renderEventSortHeader("capacity", "Miejsca", "px-4 py-4 text-center")}
+                      {renderEventSortHeader("confirmed", "Potw.", "px-4 py-4 text-center")}
+                      {renderEventSortHeader("minimum", "Próg", "px-4 py-4 text-center")}
+                      {renderEventSortHeader("requests", "Zgł.", "px-4 py-4 text-center")}
+                      {renderEventSortHeader("trainer", "Trener")}
+                      {renderEventSortHeader("organizer", "Organizator")}
+                      {renderEventSortHeader("status", "Status")}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-brand-line">
                     {listedEvents.map((event) => {
-                      const eventRequests = store.enrollmentRequests.filter(
-                        (item) => item.eventId === event.id,
-                      );
-                      const activeRequestsCount = eventRequests.filter((item) =>
-                        event.groupId
-                          ? !item.eventParticipantId && item.finalStatus !== "rejected"
-                          : item.finalStatus !== "rejected",
-                      ).length;
+                      const activeRequestsCount =
+                        activeEnrollmentRequestCountsByEventId[event.id] ?? 0;
                       const ownerLabels = getEventOwnerLabel(event, store);
                       const listTitle = getEventCardTitle(event, currentUser, store);
                       const locationParts = getEventLocationParts(event.location);
@@ -5818,14 +6037,8 @@ export function EventsPage() {
           ) : null}
           <div className={cn("space-y-4", !isCommunitySection && "lg:hidden")}>
             {listedEvents.map((event) => {
-              const eventRequests = store.enrollmentRequests.filter(
-                (item) => item.eventId === event.id,
-              );
-              const activeRequestsCount = eventRequests.filter((item) =>
-                event.groupId
-                  ? !item.eventParticipantId && item.finalStatus !== "rejected"
-                  : item.finalStatus !== "rejected",
-              ).length;
+              const activeRequestsCount =
+                activeEnrollmentRequestCountsByEventId[event.id] ?? 0;
               const ownerLabels = getEventOwnerLabel(event, store);
               const listTitle = getEventCardTitle(event, currentUser, store);
               const locationParts = getEventLocationParts(event.location);

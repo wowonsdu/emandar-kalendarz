@@ -5363,7 +5363,7 @@ export function EventsPage() {
                 </label>
 
                 <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <label className="grid min-w-0 gap-2">
+                  <label className="grid min-w-0 content-start gap-2">
                     <span className="text-sm font-semibold text-brand-navy">Miejsca</span>
                     <input
                       min={1}
@@ -5375,11 +5375,11 @@ export function EventsPage() {
                           capacity: event.target.value,
                         }))
                       }
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                     />
                   </label>
 
-                  <label className="grid min-w-0 gap-2">
+                  <label className="grid min-w-0 content-start gap-2">
                     <span className="text-sm font-semibold text-brand-navy">
                       Próg potwierdzenia
                     </span>
@@ -5394,11 +5394,11 @@ export function EventsPage() {
                           minimumParticipants: event.target.value,
                         }))
                       }
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                     />
                   </label>
 
-                  <label className="grid min-w-0 gap-2">
+                  <label className="grid min-w-0 content-start gap-2">
                     <span className="text-sm font-semibold text-brand-navy">
                       Potwierdzenie SMS
                     </span>
@@ -5412,11 +5412,11 @@ export function EventsPage() {
                           confirmationLeadTimeDays: event.target.value,
                         }))
                       }
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                     />
                   </label>
 
-                  <label className="grid min-w-0 gap-2">
+                  <label className="grid min-w-0 content-start gap-2">
                     <span className="text-sm font-semibold text-brand-navy">Mogą Dołączyć</span>
                     <select
                       value={trainerEventForm.joinAudience}
@@ -5426,7 +5426,7 @@ export function EventsPage() {
                           joinAudience: event.target.value as TrainingEventFormState["joinAudience"],
                         }))
                       }
-                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                      className="h-[54px] w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
                     >
                       <option value="existing-practitioners">Tylko Ćwiczący</option>
                       <option value="new-people">Nowe osoby</option>

@@ -492,6 +492,7 @@ export function PanelLayout() {
   const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const organizerProfile = store.organizers.find((item) => item.userId === currentUser?.id);
+  const trainerProfile = store.trainers.find((item) => item.userId === currentUser?.id);
   const sections = buildAuthenticatedNavigationSections(currentUser, store);
   const panelRootPaths = new Set(sections.flatMap((section) => section.items.map((item) => item.to)));
   const currentUserEmailOrPhone = currentUser?.email || currentUser?.phone || "Konto SMS";
@@ -502,7 +503,17 @@ export function PanelLayout() {
     state: location.state,
     rootPaths: panelRootPaths,
   });
+  const hasActiveOrganizerAccess = Boolean(
+    organizerProfile &&
+      (store.relations ?? []).some(
+        (relation) =>
+          relation.organizerId === organizerProfile.id && relation.status === "approved",
+      ),
+  );
   const hasOrganizerScope = canUseOrganizerFunctions(currentUser) && Boolean(organizerProfile);
+  const canCreateGroups =
+    (hasOrganizerScope && hasActiveOrganizerAccess) ||
+    (hasInheritedRole(currentUser, "trainer") && Boolean(trainerProfile));
   const organizerCanCreateOfficialTraining =
     hasOrganizerScope &&
     Boolean(organizerProfile) &&
@@ -514,7 +525,7 @@ export function PanelLayout() {
     trainerCanCreateOfficialTraining || organizerCanCreateOfficialTraining;
   const canCreateCommunityEvent = Boolean(currentUser);
   const headerCreateShortcut =
-    location.pathname === "/panel/grupy" && hasOrganizerScope
+    location.pathname === "/panel/grupy" && canCreateGroups
       ? {
           to: "/panel/grupy/utworz",
           mobileLabel: "Utwórz",

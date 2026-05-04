@@ -4908,21 +4908,6 @@ export function GroupsPage() {
     trainersById,
   ]);
   const canCreateGroups = canManageGroups && availableTrainers.length > 0;
-  const managedParticipantProfiles = useMemo(() => {
-    if (!canManageGroups) {
-      return [];
-    }
-
-    return (store.participantProfiles ?? [])
-      .filter(
-        (profile) =>
-          (organizerProfile &&
-            (profile.createdByOrganizerId === organizerProfile.id ||
-              profile.managerOrganizerIds?.includes(organizerProfile.id))) ||
-          (trainerProfile && profile.managerTrainerIds?.includes(trainerProfile.id)),
-        )
-      .sort((left, right) => left.displayName.localeCompare(right.displayName, "pl"));
-  }, [canManageGroups, organizerProfile, store.participantProfiles, trainerProfile]);
   const selectedMemberProfile = useMemo(
     () =>
       memberForm.participantProfileId
@@ -4930,17 +4915,7 @@ export function GroupsPage() {
         : null,
     [memberForm.participantProfileId, participantProfilesById],
   );
-  const memberProfileOptions = useMemo(() => {
-    if (!selectedMemberProfile) {
-      return managedParticipantProfiles;
-    }
-
-    return managedParticipantProfiles.some((profile) => profile.id === selectedMemberProfile.id)
-      ? managedParticipantProfiles
-      : [selectedMemberProfile, ...managedParticipantProfiles];
-  }, [managedParticipantProfiles, selectedMemberProfile]);
-  const shouldShowMemberDetails =
-    Boolean(selectedMemberProfile) || hasCompleteParticipantPhone(memberForm.phone);
+  const shouldShowMemberDetails = Boolean(selectedMemberProfile);
   const selectedGroupIsManagedByCurrentUser = Boolean(
     selectedGroup && managedGroups.some((group) => group.id === selectedGroup.id),
   );
@@ -5451,31 +5426,10 @@ export function GroupsPage() {
         ...previous,
         participantProfileId: "",
         phone: nextPhone,
-        displayName: previous.participantProfileId ? "" : previous.displayName,
-        referralSource: previous.participantProfileId ? "" : previous.referralSource,
+        displayName: "",
+        referralSource: "",
       };
     });
-  }
-
-  function handleMemberProfileSelect(event: ChangeEvent<HTMLSelectElement>) {
-    const nextProfileId = event.target.value;
-    if (!nextProfileId) {
-      setMemberForm((previous) => ({
-        ...previous,
-        participantProfileId: "",
-        displayName: "",
-        phone: "",
-        referralSource: "",
-      }));
-      return;
-    }
-
-    const selectedProfile = participantProfilesById.get(nextProfileId);
-    if (!selectedProfile) {
-      return;
-    }
-
-    setMemberForm((previous) => applyParticipantProfileToGroupMemberForm(previous, selectedProfile));
   }
 
   async function handleAddMember(event: FormEvent<HTMLFormElement>) {
@@ -5486,13 +5440,13 @@ export function GroupsPage() {
       return;
     }
 
-    if (!selectedMemberProfile && !hasCompleteParticipantPhone(memberForm.phone)) {
-      toast.error("Wpisz pełny numer telefonu uczestnika albo wybierz istniejący profil.");
+    if (!hasCompleteParticipantPhone(memberForm.phone)) {
+      toast.error("Wpisz pełny numer telefonu uczestnika.");
       return;
     }
 
-    if (!selectedMemberProfile && !memberForm.displayName.trim()) {
-      toast.error("Podaj imię i nazwisko nowego uczestnika.");
+    if (!selectedMemberProfile) {
+      toast.error("Nie znaleziono uczestnika z tym numerem telefonu w bazie.");
       return;
     }
 
@@ -5506,11 +5460,11 @@ export function GroupsPage() {
           : false;
       await addGroupMember({
         groupId: selectedGroup.id,
-        participantProfileId: memberForm.participantProfileId || undefined,
-        displayName: selectedMemberProfile ? undefined : memberForm.displayName,
+        participantProfileId: selectedMemberProfile.id,
+        displayName: undefined,
         phone: memberForm.phone,
         notes: memberForm.notes,
-        referralSource: selectedMemberProfile ? undefined : memberForm.referralSource,
+        referralSource: undefined,
         priority: memberForm.priority,
         syncFutureEvents: shouldSyncFutureEvents,
       });
@@ -6123,7 +6077,7 @@ export function GroupsPage() {
               selectedGroupIsManagedByCurrentUser &&
               selectedGroup.status === "active" ? (
                 <form onSubmit={handleAddMember} className="mt-6 grid min-w-0 gap-4 lg:grid-cols-2">
-                  <div className="grid min-w-0 gap-4 lg:col-span-2 lg:grid-cols-2">
+                  <div className="grid min-w-0 gap-4 lg:col-span-2">
                     <label className="grid min-w-0 gap-2">
                       <span className="text-sm font-semibold text-brand-navy">Wpisz nr tel osoby</span>
                       <input
@@ -6133,24 +6087,16 @@ export function GroupsPage() {
                         className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
                       />
                     </label>
-                    <label className="grid min-w-0 gap-2">
-                      <span className="text-sm font-semibold text-brand-navy">Wybierz z listy</span>
-                      <select
-                        value={memberForm.participantProfileId}
-                        onChange={handleMemberProfileSelect}
-                        className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none"
-                      >
-                        <option value="">Wybierz uczestnika</option>
-                        {memberProfileOptions.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {profile.displayName} · {profile.phone} · {getParticipantConfirmationLabel(profile)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
                   </div>
                   {shouldShowMemberDetails ? (
                     <>
+                      <div className="rounded-2xl border border-brand-line bg-brand-shell/70 px-4 py-3 text-sm text-brand-muted lg:col-span-2">
+                        <span className="font-semibold text-brand-navy">
+                          {selectedMemberProfile.displayName}
+                        </span>{" "}
+                        · {selectedMemberProfile.phone} ·{" "}
+                        {getParticipantConfirmationLabel(selectedMemberProfile)}
+                      </div>
                       <label className="grid min-w-0 gap-2">
                         <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
                         <input
@@ -6181,20 +6127,6 @@ export function GroupsPage() {
                           <option value="regularni">Regularni</option>
                           <option value="rezerwowi">Rezerwowi</option>
                         </select>
-                      </label>
-                      <label className="grid min-w-0 gap-2 lg:col-span-2">
-                        <span className="text-sm font-semibold text-brand-navy">Źródło / polecenie</span>
-                        <input
-                          value={memberForm.referralSource}
-                          onChange={(event) =>
-                            setMemberForm((previous) => ({
-                              ...previous,
-                              referralSource: event.target.value,
-                            }))
-                          }
-                          disabled={Boolean(selectedMemberProfile)}
-                          className="min-w-0 w-full rounded-2xl border border-brand-line bg-brand-shell px-4 py-3 text-brand-navy outline-none disabled:cursor-not-allowed"
-                        />
                       </label>
                       <label className="grid min-w-0 gap-2 lg:col-span-2">
                         <span className="text-sm font-semibold text-brand-navy">Notatki</span>

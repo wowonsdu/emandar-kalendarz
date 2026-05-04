@@ -6090,13 +6090,6 @@ export function GroupsPage() {
                   </div>
                   {shouldShowMemberDetails ? (
                     <>
-                      <div className="rounded-2xl border border-brand-line bg-brand-shell/70 px-4 py-3 text-sm text-brand-muted lg:col-span-2">
-                        <span className="font-semibold text-brand-navy">
-                          {selectedMemberProfile.displayName}
-                        </span>{" "}
-                        · {selectedMemberProfile.phone} ·{" "}
-                        {getParticipantConfirmationLabel(selectedMemberProfile)}
-                      </div>
                       <label className="grid min-w-0 gap-2">
                         <span className="text-sm font-semibold text-brand-navy">Imię i nazwisko</span>
                         <input

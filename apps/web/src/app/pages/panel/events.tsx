@@ -13,6 +13,8 @@ import {
   Bell,
   CalendarDays,
   ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
   Check,
   ImagePlus,
   Phone,
@@ -4910,20 +4912,35 @@ export function EventsPage() {
     className = "px-4 py-4",
   ) {
     const isActive = eventSort?.key === key;
-    const directionLabel = eventSort?.direction === "desc" ? "malejąco" : "rosnąco";
+    const SortIcon = isActive
+      ? eventSort.direction === "desc"
+        ? ChevronDown
+        : ChevronUp
+      : ChevronsUpDown;
+    const directionLabel = isActive
+      ? eventSort.direction === "desc"
+        ? "malejąco"
+        : "rosnąco"
+      : "bez wybranego sortowania";
 
     return (
       <th className={className}>
         <button
           type="button"
           onClick={() => toggleEventSort(key)}
-          className="flex w-full flex-col items-start gap-1 text-left uppercase tracking-[0.18em] transition-colors hover:text-brand-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky"
-          aria-label={`Sortuj po kolumnie ${label}`}
+          className={cn(
+            "inline-flex w-full items-center gap-1.5 text-left uppercase tracking-[0.18em] transition-colors hover:text-brand-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky",
+            className.includes("text-center") ? "justify-center" : "justify-start",
+          )}
+          aria-label={`Sortuj po kolumnie ${label}, ${directionLabel}`}
         >
           <span>{label}</span>
-          <span className="text-[10px] font-semibold normal-case tracking-normal text-brand-sky-deep">
-            {isActive ? directionLabel : "sortuj"}
-          </span>
+          <SortIcon
+            aria-hidden="true"
+            size={14}
+            strokeWidth={2.4}
+            className={isActive ? "text-brand-sky-deep" : "text-brand-muted"}
+          />
         </button>
       </th>
     );
@@ -4945,7 +4962,7 @@ export function EventsPage() {
         </div>
       ) : null}
 
-      {shouldShowScopeSwitch ? (
+      {shouldShowScopeSwitch && isCommunitySection ? (
         <div className="flex justify-start">
           <EventScopeSwitch
             activeScope={eventScope}
@@ -5862,17 +5879,32 @@ export function EventsPage() {
         </div>
       ) : !isCreatorView ? (
         <div className="space-y-4">
-          {!isCommunitySection && baseListedEvents.length > 0 ? (
-            <label className="grid gap-2 lg:max-w-md">
-              <span className="text-sm font-semibold text-brand-navy">Szukaj szkolenia</span>
-              <input
-                type="search"
-                value={eventSearchQuery}
-                onChange={(event) => setEventSearchQuery(event.target.value)}
-                placeholder="Szkolenie, grupa, trener lub organizator"
-                className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
-              />
-            </label>
+          {!isCommunitySection && (shouldShowScopeSwitch || baseListedEvents.length > 0) ? (
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              {shouldShowScopeSwitch ? (
+                <EventScopeSwitch
+                  activeScope={eventScope}
+                  joinedLabel="Uczestniczę"
+                  ownedLabel="Organizuję"
+                  onChange={setEventScope}
+                />
+              ) : (
+                <div />
+              )}
+
+              {baseListedEvents.length > 0 ? (
+                <label className="grid w-full gap-2 lg:max-w-md">
+                  <span className="text-sm font-semibold text-brand-navy">Szukaj szkolenia</span>
+                  <input
+                    type="search"
+                    value={eventSearchQuery}
+                    onChange={(event) => setEventSearchQuery(event.target.value)}
+                    placeholder="Szkolenie, grupa, trener lub organizator"
+                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
+                  />
+                </label>
+              ) : null}
+            </div>
           ) : null}
 
           {listedEvents.length === 0 && (

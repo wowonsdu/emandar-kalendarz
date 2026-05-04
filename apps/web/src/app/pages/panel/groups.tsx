@@ -13,6 +13,8 @@ import {
   Bell,
   CalendarDays,
   ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
   Check,
   ImagePlus,
   Phone,
@@ -5158,20 +5160,35 @@ export function GroupsPage() {
     className = "px-4 py-4",
   ) {
     const isActive = groupSort?.key === key;
-    const directionLabel = groupSort?.direction === "desc" ? "malejąco" : "rosnąco";
+    const SortIcon = isActive
+      ? groupSort.direction === "desc"
+        ? ChevronDown
+        : ChevronUp
+      : ChevronsUpDown;
+    const directionLabel = isActive
+      ? groupSort.direction === "desc"
+        ? "malejąco"
+        : "rosnąco"
+      : "bez wybranego sortowania";
 
     return (
       <th className={className}>
         <button
           type="button"
           onClick={() => toggleGroupSort(key)}
-          className="flex w-full flex-col items-start gap-1 text-left uppercase tracking-[0.18em] transition-colors hover:text-brand-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky"
-          aria-label={`Sortuj po kolumnie ${label}`}
+          className={cn(
+            "inline-flex w-full items-center gap-1.5 text-left uppercase tracking-[0.18em] transition-colors hover:text-brand-navy focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-sky",
+            className.includes("text-center") ? "justify-center" : "justify-start",
+          )}
+          aria-label={`Sortuj po kolumnie ${label}, ${directionLabel}`}
         >
           <span>{label}</span>
-          <span className="text-[10px] font-semibold normal-case tracking-normal text-brand-sky-deep">
-            {isActive ? directionLabel : "sortuj"}
-          </span>
+          <SortIcon
+            aria-hidden="true"
+            size={14}
+            strokeWidth={2.4}
+            className={isActive ? "text-brand-sky-deep" : "text-brand-muted"}
+          />
         </button>
       </th>
     );
@@ -5520,17 +5537,6 @@ export function GroupsPage() {
         ) : undefined
       }
     >
-      {!isGroupDetailView && !isCreateGroupRoute && hasManagedGroupScope ? (
-        <div className="flex justify-start">
-          <EventScopeSwitch
-            activeScope={groupScope}
-            joinedLabel="Uczestniczę"
-            ownedLabel="Organizuję"
-            onChange={setGroupScope}
-          />
-        </div>
-      ) : null}
-
       {isCreateGroupFormVisible ? (
         <article className="rounded-[2rem] border border-brand-line bg-white p-6 shadow-soft">
           <form onSubmit={handleSaveGroup} className="grid gap-4 lg:grid-cols-2">
@@ -5707,16 +5713,29 @@ export function GroupsPage() {
             />
           ) : (
             <>
-              <label className="grid gap-2 lg:max-w-md">
-                <span className="text-sm font-semibold text-brand-navy">Szukaj grupy</span>
-                <input
-                  type="search"
-                  value={groupSearchQuery}
-                  onChange={(event) => setGroupSearchQuery(event.target.value)}
-                  placeholder="Nazwa, trener lub organizator"
-                  className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
-                />
-              </label>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                {hasManagedGroupScope ? (
+                  <EventScopeSwitch
+                    activeScope={groupScope}
+                    joinedLabel="Uczestniczę"
+                    ownedLabel="Organizuję"
+                    onChange={setGroupScope}
+                  />
+                ) : (
+                  <div />
+                )}
+
+                <label className="grid w-full gap-2 lg:max-w-md">
+                  <span className="text-sm font-semibold text-brand-navy">Szukaj grupy</span>
+                  <input
+                    type="search"
+                    value={groupSearchQuery}
+                    onChange={(event) => setGroupSearchQuery(event.target.value)}
+                    placeholder="Nazwa, trener lub organizator"
+                    className="rounded-2xl border border-brand-line bg-white px-4 py-3 text-brand-navy shadow-soft outline-none transition-colors placeholder:text-brand-muted focus:border-brand-sky"
+                  />
+                </label>
+              </div>
 
               {sortedVisibleGroups.length === 0 ? (
                 <EmptyPanelState

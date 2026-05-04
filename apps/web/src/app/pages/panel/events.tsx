@@ -17,6 +17,7 @@ import {
   ChevronsUpDown,
   Check,
   ImagePlus,
+  Minus,
   Phone,
   Plus,
   RefreshCcw,
@@ -132,6 +133,10 @@ import type {
   TrainingEventScheduleDay,
   TrainingEventStatus,
 } from "@/domain/types";
+import {
+  getInclusiveDateRangeDayCount,
+  getScheduleEndDateInputValue,
+} from "./schedule-date-inputs";
 
 function formatDate(date: string) {
   return new Intl.DateTimeFormat("pl-PL", {
@@ -5338,114 +5343,203 @@ export function EventsPage() {
                 )}
               </label>
 
-              <label className="grid gap-2 xl:col-span-2">
-                <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
-                <input
-                  value={trainerEventForm.tags}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      tags: event.target.value,
-                    }))
-                  }
-                  placeholder="np. ognisko, pożywienie, nocleg, samodzielna kuchnia"
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-                <span className="text-sm text-brand-muted">
-                  Oddziel tagi przecinkami. Pokażą się publicznie jako chmura tagów.
-                </span>
-              </label>
+              <div className="grid gap-4 xl:col-span-2 xl:grid-cols-2">
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Tagi wydarzenia</span>
+                  <input
+                    value={trainerEventForm.tags}
+                    onChange={(event) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        tags: event.target.value,
+                      }))
+                    }
+                    placeholder="np. ognisko, pożywienie, nocleg, samodzielna kuchnia"
+                    className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                  <span className="text-sm text-brand-muted">
+                    Oddziel tagi przecinkami. Pokażą się publicznie jako chmura tagów.
+                  </span>
+                </label>
 
-              <div className="grid gap-2 xl:col-span-2">
-                {isCommunitySection && (
-                  <EventGalleryField
-                    images={trainerEventForm.eventImages}
-                    useEventImageAsCover={trainerEventForm.useEventImageAsCover}
-                    uploading={uploadingCreatorImages}
-                    disabled={creatingEvent}
-                    onUpload={async (files) => {
-                      const availableSlots = Math.max(0, 8 - trainerEventForm.eventImages.length);
-                      const filesToUpload = files.slice(0, availableSlots);
-
-                      if (filesToUpload.length === 0) {
-                        toast.error("Do wydarzenia możesz dodać maksymalnie 8 zdjęć.");
-                        return;
-                      }
-
-                      setUploadingCreatorImages(true);
-
-                      try {
-                        const uploadedImages = await uploadCommunityEventImages(filesToUpload);
+                <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">Limit miejsc</span>
+                    <input
+                      min={1}
+                      type="number"
+                      value={trainerEventForm.capacity}
+                      onChange={(event) =>
                         setTrainerEventForm((previous) => ({
                           ...previous,
-                          eventImages: [...previous.eventImages, ...uploadedImages],
-                        }));
-                      } finally {
-                        setUploadingCreatorImages(false);
+                          capacity: event.target.value,
+                        }))
                       }
-                    }}
-                    onRemove={(imageId) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        eventImages: previous.eventImages.filter((image) => image.id !== imageId),
-                        useEventImageAsCover:
-                          previous.eventImages.filter((image) => image.id !== imageId).length > 0
-                            ? previous.useEventImageAsCover
-                            : false,
-                      }))
-                    }
-                    onToggleUseEventImageAsCover={(nextValue) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        useEventImageAsCover: nextValue && previous.eventImages.length > 0,
-                      }))
-                    }
-                    onMakePrimary={(imageId) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        eventImages: moveEventImageToFront(previous.eventImages, imageId),
-                      }))
-                    }
-                  />
-                )}
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    />
+                  </label>
+
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">
+                      Próg potwierdzenia wydarzenia
+                    </span>
+                    <input
+                      required
+                      min={1}
+                      type="number"
+                      value={trainerEventForm.minimumParticipants}
+                      onChange={(event) =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          minimumParticipants: event.target.value,
+                        }))
+                      }
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    />
+                  </label>
+
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">
+                      SMS potwierdzenia udziału
+                    </span>
+                    <input
+                      min={0}
+                      type="number"
+                      value={trainerEventForm.confirmationLeadTimeDays}
+                      onChange={(event) =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          confirmationLeadTimeDays: event.target.value,
+                        }))
+                      }
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    />
+                    <span className="text-sm text-brand-muted">
+                      Ile dni przed wydarzeniem wysłać SMS.
+                      {selectedOfficialGroup
+                        ? " Domyślnie z ustawień grupy."
+                        : ""}
+                    </span>
+                  </label>
+
+                  <label className="grid min-w-0 gap-2">
+                    <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
+                    <select
+                      value={trainerEventForm.joinAudience}
+                      onChange={(event) =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          joinAudience: event.target.value as TrainingEventFormState["joinAudience"],
+                        }))
+                      }
+                      className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                    >
+                      <option value="existing-practitioners">Tylko Ćwiczący</option>
+                      <option value="new-people">Nowe osoby</option>
+                    </select>
+                  </label>
+                </div>
               </div>
 
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Pierwszy dzień szkolenia</span>
-                <input
-                  ref={scheduleStartInputRef}
-                  required
-                  type="date"
-                  value={trainerEventForm.firstDayDate}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      firstDayDate: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
+              <div className="grid gap-4 xl:col-span-2 md:grid-cols-3">
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Data od</span>
+                  <input
+                    ref={scheduleStartInputRef}
+                    required
+                    type="date"
+                    value={trainerEventForm.firstDayDate}
+                    onChange={(event) =>
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        firstDayDate: event.target.value,
+                      }))
+                    }
+                    className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                </label>
 
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
-                <input
-                  min={1}
-                  type="number"
-                  value={trainerEventForm.scheduleDays.length}
-                  onChange={(event) => {
-                    const nextDayCount = Math.max(1, Number(event.target.value) || 1);
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      scheduleDays: resizeScheduleDayDrafts(
-                        nextDayCount,
-                        previous.scheduleDays,
-                      ),
-                    }));
-                  }}
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Data do</span>
+                  <input
+                    required
+                    type="date"
+                    value={getScheduleEndDateInputValue(
+                      trainerEventForm.firstDayDate,
+                      trainerEventForm.scheduleDays.length,
+                    )}
+                    onChange={(event) => {
+                      const nextDayCount = getInclusiveDateRangeDayCount(
+                        trainerEventForm.firstDayDate,
+                        event.target.value,
+                      );
+                      setTrainerEventForm((previous) => ({
+                        ...previous,
+                        scheduleDays: resizeScheduleDayDrafts(
+                          nextDayCount,
+                          previous.scheduleDays,
+                        ),
+                      }));
+                    }}
+                    className="w-full min-w-0 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
+                  />
+                </label>
+
+                <label className="grid min-w-0 gap-2">
+                  <span className="text-sm font-semibold text-brand-navy">Liczba dni szkolenia</span>
+                  <div className="grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] rounded-2xl border border-brand-line bg-brand-shell">
+                    <button
+                      type="button"
+                      aria-label="Zmniejsz liczbę dni"
+                      disabled={trainerEventForm.scheduleDays.length <= 1}
+                      onClick={() =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          scheduleDays: resizeScheduleDayDrafts(
+                            Math.max(1, previous.scheduleDays.length - 1),
+                            previous.scheduleDays,
+                          ),
+                        }))
+                      }
+                      className="inline-flex items-center justify-center rounded-l-2xl text-brand-navy transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Minus aria-hidden="true" size={16} />
+                    </button>
+                    <input
+                      min={1}
+                      type="number"
+                      value={trainerEventForm.scheduleDays.length}
+                      onChange={(event) => {
+                        const nextDayCount = Math.max(1, Number(event.target.value) || 1);
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          scheduleDays: resizeScheduleDayDrafts(
+                            nextDayCount,
+                            previous.scheduleDays,
+                          ),
+                        }));
+                      }}
+                      className="w-full min-w-0 border-x border-brand-line bg-transparent px-3 py-3.5 text-center text-brand-navy outline-none"
+                    />
+                    <button
+                      type="button"
+                      aria-label="Zwiększ liczbę dni"
+                      onClick={() =>
+                        setTrainerEventForm((previous) => ({
+                          ...previous,
+                          scheduleDays: resizeScheduleDayDrafts(
+                            previous.scheduleDays.length + 1,
+                            previous.scheduleDays,
+                          ),
+                        }))
+                      }
+                      className="inline-flex items-center justify-center rounded-r-2xl text-brand-navy transition-colors hover:bg-white"
+                    >
+                      <Plus aria-hidden="true" size={16} />
+                    </button>
+                  </div>
+                </label>
+              </div>
 
               <div className="grid gap-4 xl:col-span-2 xl:grid-cols-4">
                 {trainerEventForm.scheduleDays.map((day, index) => {
@@ -5514,93 +5608,8 @@ export function EventsPage() {
                 })}
               </div>
 
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">Limit miejsc</span>
-                <input
-                  min={1}
-                  type="number"
-                  value={trainerEventForm.capacity}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      capacity: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">
-                  Próg potwierdzenia wydarzenia
-                </span>
-                <input
-                  required
-                  min={1}
-                  type="number"
-                  value={trainerEventForm.minimumParticipants}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      minimumParticipants: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              <label className="grid gap-2">
-                <span className="text-sm font-semibold text-brand-navy">
-                  SMS potwierdzenia udziału
-                </span>
-                <input
-                  min={0}
-                  type="number"
-                  value={trainerEventForm.confirmationLeadTimeDays}
-                  onChange={(event) =>
-                    setTrainerEventForm((previous) => ({
-                      ...previous,
-                      confirmationLeadTimeDays: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                />
-              </label>
-
-              {!isCommunitySection ? (
-                <label className="grid gap-2">
-                  <span className="text-sm font-semibold text-brand-navy">Mogą dołączyć</span>
-                  <select
-                    value={trainerEventForm.joinAudience}
-                    onChange={(event) =>
-                      setTrainerEventForm((previous) => ({
-                        ...previous,
-                        joinAudience: event.target.value as TrainingEventFormState["joinAudience"],
-                      }))
-                    }
-                    className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy outline-none"
-                  >
-                    <option value="existing-practitioners">Tylko Ćwiczący</option>
-                    <option value="new-people">Nowe osoby</option>
-                  </select>
-                </label>
-              ) : null}
-
-              {!isCommunitySection ? (
-                <div className="text-sm text-brand-muted xl:col-span-2">
-                  Ile dni przed wydarzeniem wysłać SMS z prośbą o potwierdzenie udziału.
-                  {selectedOfficialGroup
-                    ? " Domyślnie ta wartość startuje z ustawień grupy."
-                    : ""}
-                </div>
-              ) : null}
-
-              {isCommunitySection ? (
-                <div className="rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-sm text-brand-muted xl:col-span-2">
-                  Po zapisie wydarzenie trafi do moderacji admina. Publikacja następuje dopiero po akceptacji Dariusza albo roli admin.
-                </div>
-              ) : (
-                <label className="flex items-center gap-3 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy xl:col-span-2">
+              <div className="flex flex-col gap-4 xl:col-span-2 sm:flex-row sm:items-center sm:justify-between">
+                <label className="flex min-w-0 items-center gap-3 rounded-2xl border border-brand-line bg-brand-shell px-4 py-3.5 text-brand-navy">
                   <input
                     type="checkbox"
                     checked={trainerEventForm.isPublished}
@@ -5613,20 +5622,16 @@ export function EventsPage() {
                   />
                   <span className="text-sm font-semibold">Od razu opublikuj szkolenie</span>
                 </label>
-              )}
-            </div>
 
-            <button
-              type="submit"
-              disabled={creatingEvent}
-              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
-            >
-              {creatingEvent
-                ? "Zapisywanie..."
-                : isCommunitySection
-                  ? "Wyślij wydarzenie do moderacji"
-                  : "Dodaj szkolenie"}
-            </button>
+                <button
+                  type="submit"
+                  disabled={creatingEvent}
+                  className="inline-flex items-center justify-center gap-2 rounded-full bg-brand-navy px-6 py-3.5 text-sm font-semibold text-white shadow-soft disabled:opacity-60"
+                >
+                  {creatingEvent ? "Zapisywanie..." : "Dodaj szkolenie"}
+                </button>
+              </div>
+            </div>
           </form>
         )
       ) : !isCreatorView && isOfficialJoinedView ? (
